@@ -100,7 +100,7 @@ export function summary(): string {
 
 // ---------------------------------------------------------------- drawing
 
-function ago(ts: number): string {
+export function ago(ts: number): string {
   const s = Date.now() / 1000 - ts;
   if (s < 60) return "just now";
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
