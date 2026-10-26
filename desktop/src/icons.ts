@@ -3,13 +3,13 @@
 import {
   ArrowUp, Bell, Bot, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, FilePen, FileText, Folder, FolderSearch,
   Globe, Lightbulb, ListTodo, Monitor, Moon, PanelLeft, Paperclip, RotateCcw, Search, Settings, Sparkles, Square, SquarePen,
-  Terminal, Trash2, Volume2, Wrench, X, Layers, Plus, Ellipsis, Activity, Pause, Play, Archive, Pencil, createElement,
+  Terminal, Trash2, Volume2, Wrench, X, Layers, Plus, Ellipsis, Activity, Pause, Play, Archive, Pencil, MessageSquare, createElement,
 } from "lucide";
 
 export const ICONS = {
   ArrowUp, Bell, Bot, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, FilePen, FileText, Folder, FolderSearch,
   Globe, Layers, Lightbulb, ListTodo, Monitor, Moon, PanelLeft, Paperclip, RotateCcw, Search, Settings, Sparkles, Square, SquarePen,
-  Terminal, Trash2, Volume2, Wrench, X, Plus, Ellipsis, Activity, Pause, Play, Archive, Pencil,
+  Terminal, Trash2, Volume2, Wrench, X, Plus, Ellipsis, Activity, Pause, Play, Archive, Pencil, MessageSquare,
 };
 export type IconName = keyof typeof ICONS;
 

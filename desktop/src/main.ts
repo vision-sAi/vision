@@ -11,7 +11,7 @@ import { Update, check } from "@tauri-apps/plugin-updater";
 import * as agents from "./agents";
 import * as scouts from "./scouts";
 import { buddy } from "./buddy";
-import { icon, placeIcons } from "./icons";
+import { IconName, icon, placeIcons } from "./icons";
 import { closeSetup, firstRun, setupInit, step, subscriptions } from "./setup";
 import {
   Agent, Json, Msg, agentOf, drawMsg, el, markdown, planOf, setPictureLoader, setPictureViewer, splitAttachments, toolOf,
@@ -381,7 +381,23 @@ function scheduleDraw() {
   requestAnimationFrame(() => { drawPending = false; drawTranscript(false); });
 }
 
+let shownKey = ""; // what the main pane shows, so a change of chat or page can fade in
+
+/** Fade in whichever page just came up: a chat, the home page or the board. */
+function fadeIfNew() {
+  const key = `${view}/${active ?? ""}/${draft ? "draft" : ""}`;
+  if (key === shownKey) return;
+  shownKey = key;
+  for (const id of ["transcript", "welcome", "agents"]) {
+    const box = $(id);
+    box.classList.remove("opening");
+    void box.offsetWidth; // so the animation starts again
+    box.classList.add("opening");
+  }
+}
+
 function drawAll() {
+  fadeIfNew();
   drawSidebar();
   drawHeader();
   drawView();
@@ -595,11 +611,10 @@ function greeting(): string {
   return h < 5 ? "Up late" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
 }
 
-const STARTERS = [
-  "Review what changed in this folder today",
-  "Help me plan something",
-  "Explain how something works",
-  "Find and fix a bug",
+const STARTERS: [IconName, string, string][] = [
+  ["FileText", "Review today's changes", "Review what changed in this folder today"],
+  ["Lightbulb", "Plan something", "Help me plan something"],
+  ["Search", "Find a bug", "Find and fix a bug"],
 ];
 
 /** The new-chat page: a greeting, the composer in the middle, and a few ways to start. */
@@ -613,17 +628,39 @@ function drawWelcome() {
   if (!on && composer.parentElement !== $("dock")) $("dock").append(composer);
   if (!on) return;
   $("greeting").textContent = greeting();
-  $("welcome-sub").textContent = `Vision on ${machine || hostOf(paired?.url) || "this computer"}${draft?.folder ? ` · ${draft.folder}` : ""}`;
   const chips = $("chips");
   chips.replaceChildren();
-  for (const text of STARTERS) {
-    const b = el("button", "chip", text);
+  for (const [glyph, label, text] of STARTERS) {
+    const b = el("button", "chip");
+    b.append(icon(glyph, 14), el("span", "", label));
     b.onclick = () => { const i = $<HTMLTextAreaElement>("input"); i.value = text; grow(i); i.focus(); };
     chips.append(b);
   }
+  scouts.drawHome($("home-scouts"));
+  drawRecent();
+}
+
+/** The home page's last few chats, to pick one back up. */
+function drawRecent() {
+  const box = $("home-recent");
+  box.replaceChildren();
+  const live = scouts.live();
+  const recent = [...chats.values()]
+    .filter((c) => c.title && !(c.project && live.some((p) => p.id === c.project)))
+    .sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0)).slice(0, 3);
+  if (!recent.length) return;
+  const list = el("div", "home-recent");
+  for (const c of recent) {
+    const row = el("button", "home-chat");
+    row.append(icon("MessageSquare", 15), el("span", "home-chat-title", c.title), el("span", "dim small", agents.ago(c.updated ?? 0)));
+    row.onclick = () => select(c.chat);
+    list.append(row);
+  }
+  box.append(el("div", "home-label", "Pick up where you left off"), list);
 }
 
 const rendered = new WeakMap<Msg, HTMLElement>(); // finished messages drawn once, reused while a reply streams
+const drawnCount = new Map<string, number>(); // chat → how many messages it showed last time; any past that ease in
 
 function drawTranscript(jump: boolean) {
   const box = $("transcript");
@@ -641,7 +678,9 @@ function drawTranscript(jump: boolean) {
     retry: retryFrom, readAloud: readAloudOn ? readAloud : undefined,
     stopShell: () => active && send({ type: "shell_stop", chat: active }),
   };
-  for (const m of list) {
+  const before = active ? drawnCount.get(active) : undefined;
+  if (active) drawnCount.set(active, list.length);
+  list.forEach((m, i) => {
     const live = m.streaming || m.shellRunning;
     let node = live ? undefined : rendered.get(m);
     const owner = scout ?? (active ? scouts.live().find((p) => p.chat === active) : undefined);
@@ -651,8 +690,12 @@ function drawTranscript(jump: boolean) {
       node = drawMsg(m, actions);
       if (!live) rendered.set(m, node);
     }
+    if (before !== undefined && i >= before) {
+      node.classList.add("enter");
+      node.addEventListener("animationend", () => node!.classList.remove("enter"), { once: true });
+    }
     box.append(node);
-  }
+  });
   drawQueued();
   if (pinned) box.scrollTop = box.scrollHeight;
 }
@@ -772,10 +815,10 @@ function drawDock() {
   const c = active ? chats.get(active) : undefined;
   const busy = !!c?.busy;
   $("stop").hidden = !busy;
-  const hint = shellOn && c && c.source !== "terminal" ? " (! runs a command)" : "";
+  drawSendReady();
   const scout = view === "scout" ? scouts.project(scouts.current) : undefined;
   $<HTMLTextAreaElement>("input").placeholder = draft ? "What should Vision work on?" : busy ? "Queue a message"
-    : scout ? `Tell ${scouts.nameOf(scout)} what to do next…` : `Message Vision${hint}`;
+    : scout ? `Tell ${scouts.nameOf(scout)} what to do next…` : "Message Vision";
   $("folder-text").textContent = draft ? draft.folder || "Folder" : c?.folder || "";
   $("folder").hidden = !draft && !c?.folder;
   $("folder").classList.toggle("fixed", !draft);
@@ -809,6 +852,7 @@ function drawAttachments() {
     chip.append(x);
     box.append(chip);
   }
+  drawSendReady();
 }
 
 let toastTimer = 0;
@@ -1331,7 +1375,14 @@ function drawShellMode() {
   $("send").title = on ? "Run on the computer (Return)" : "Send (Return)";
 }
 
+/** The send button greys out while there's nothing to send. */
+function drawSendReady() {
+  const empty = !$<HTMLTextAreaElement>("input").value.trim() && !attachments.length;
+  $("composer").classList.toggle("empty", empty);
+}
+
 function grow(t: HTMLTextAreaElement) {
+  drawSendReady();
   t.style.height = "auto";
   t.style.height = Math.min(t.scrollHeight, 240) + "px";
 }

@@ -321,24 +321,84 @@ function seconds(ms?: number) {
   return ms < 60000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
 }
 
-/** The reply's text cut at each card's `at`, with the cards between the pieces. */
+/** What a run of steps did, in a few words: "Read 2 files, searched once, ran a command". */
+function stepsSummary(tools: Tool[], agents: Agent[]): string {
+  const kinds: [string, (n: number) => string][] = [];
+  const tally = new Map<string, number>();
+  const add = (k: string) => tally.set(k, (tally.get(k) ?? 0) + 1);
+  for (const t of tools) {
+    add(/^(Read)$/.test(t.name) ? "read" : /^(Grep|Glob|LS)$/.test(t.name) ? "search"
+      : /Edit|Write/.test(t.name) ? "edit" : t.name === "Bash" || /shell|exec|command/i.test(t.name) ? "run"
+      : /^Web/.test(t.name) ? "web" : "tool");
+  }
+  for (let i = 0; i < agents.length; i++) add("agent");
+  const times = (n: number) => (n === 1 ? "once" : n === 2 ? "twice" : `${n} times`);
+  const plural = (n: number, one: string, many: string) => (n === 1 ? one : `${n} ${many}`);
+  kinds.push(["read", (n) => `read ${plural(n, "a file", "files")}`], ["search", (n) => `searched ${times(n)}`],
+    ["edit", (n) => `edited ${plural(n, "a file", "files")}`], ["run", (n) => `ran ${plural(n, "a command", "commands")}`],
+    ["web", (n) => `looked at ${plural(n, "a page", "pages")}`], ["agent", (n) => `sent ${plural(n, "an agent", "agents")}`],
+    ["tool", (n) => `used ${plural(n, "a tool", "tools")}`]);
+  const words = kinds.filter(([k]) => tally.has(k)).map(([k, say]) => say(tally.get(k)!)).join(", ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Two or more steps in a row: one quiet line saying what they did, opening onto the steps themselves. */
+function stepsGroup(items: { tool?: Tool; agent?: Agent }[]): HTMLElement {
+  const tools = items.flatMap((i) => (i.tool ? [i.tool] : []));
+  const agents = items.flatMap((i) => (i.agent ? [i.agent] : []));
+  const id = "group:" + (items[0].tool?.id ?? items[0].agent?.id);
+  const running = tools.some((t) => !t.done) || agents.some((a) => !a.done);
+  const failed = tools.some((t) => t.isError) || agents.some((a) => a.failed);
+  const box = el("div", "steps" + (expanded.has(id) ? " open" : ""));
+  const head = el("button", "steps-head");
+  const last = items[items.length - 1];
+  const now = running && last.tool ? `${lookOf(last.tool.name)[1]} ${last.tool.detail}` : "";
+  head.append(el("span", "steps-text", now || stepsSummary(tools, agents)));
+  const diff = diffCount(tools.flatMap((t) => t.diff));
+  if (diff) head.append(diff);
+  head.append(stateMark(!running, failed), icon("ChevronRight", 14));
+  const list = el("div", "steps-list");
+  const fill = () => { if (!list.childElementCount) list.append(...items.map((i) => (i.tool ? toolCard(i.tool) : agentCard(i.agent!)))); };
+  if (expanded.has(id)) fill();
+  head.onclick = () => {
+    if (expanded.delete(id)) box.classList.remove("open");
+    else { expanded.add(id); fill(); box.classList.add("open"); }
+  };
+  box.append(head, list);
+  return box;
+}
+
+/** The reply's text cut at each card's `at`, with the steps between the pieces: a run of two or more as one
+ * group, a plan always on its own. */
 function replyBody(m: Msg): HTMLElement[] {
   const chars = Array.from(m.text);
   const cards = [
-    ...m.tools.map((t) => ({ at: t.at ?? chars.length, node: () => toolCard(t) })),
-    ...m.agents.map((a) => ({ at: a.at ?? chars.length, node: () => agentCard(a) })),
+    ...m.tools.map((t) => ({ at: t.at ?? chars.length, tool: t as Tool | undefined, agent: undefined as Agent | undefined })),
+    ...m.agents.map((a) => ({ at: a.at ?? chars.length, tool: undefined as Tool | undefined, agent: a as Agent | undefined })),
   ].sort((x, y) => x.at - y.at);
   const out: HTMLElement[] = [];
   let from = 0;
-  let group: HTMLElement | null = null;
+  let run: typeof cards = [];
+  const flush = () => {
+    if (!run.length) return;
+    const box = el("div", "cards");
+    box.append(run.length > 1 ? stepsGroup(run) : run[0].tool ? toolCard(run[0].tool) : agentCard(run[0].agent!));
+    out.push(box);
+    run = [];
+  };
   for (const c of cards) {
     const at = Math.min(Math.max(c.at, from), chars.length);
     const piece = chars.slice(from, at).join("");
-    if (piece.trim()) { out.push(markdown(piece)); group = null; }
+    if (piece.trim()) { flush(); out.push(markdown(piece)); }
     from = at;
-    if (!group) { group = el("div", "cards"); out.push(group); }
-    group.append(c.node());
+    if (c.tool && planOf(c.tool)) {
+      flush();
+      const box = el("div", "cards");
+      box.append(toolCard(c.tool));
+      out.push(box);
+    } else run.push(c);
   }
+  flush();
   const rest = chars.slice(from).join("");
   if (rest.trim()) out.push(markdown(rest));
   return out;

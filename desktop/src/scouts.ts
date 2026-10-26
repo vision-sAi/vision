@@ -178,6 +178,32 @@ export function drawSidebar(nav: HTMLElement, query: string, onPage: boolean) {
   }
 }
 
+/** The home page's row of scouts: a card each, the ones waiting on you first, and one to send another. */
+export function drawHome(box: HTMLElement) {
+  box.replaceChildren();
+  const all = live().sort((a, b) => (needCount(b) ? 1 : 0) - (needCount(a) ? 1 : 0) || nameOf(a).localeCompare(nameOf(b)));
+  if (!all.length) return;
+  const grid = el("div", "home-scouts");
+  for (const p of all) {
+    const mood = moodOf(p);
+    const n = needCount(p);
+    const card = el("button", "home-scout" + (n ? " needs" : ""));
+    const text = el("span", "home-scout-text");
+    text.append(el("b", "", nameOf(p)), el("span", "home-scout-line", statusLine(p).split(" · ").pop() ?? ""));
+    card.append(keptBuddy("home", p, mood, 34, { still: !["needs_you", "still_waiting", "found_it", "worried", "focused"].includes(mood) }), text);
+    if (n) card.append(el("span", "pill ask", String(n)));
+    card.title = [nameOf(p), p.goal].filter(Boolean).join(" · ");
+    card.onclick = () => host.open(p.id);
+    grid.append(card);
+  }
+  const head = el("div", "home-label");
+  const add = el("button", "home-add");
+  add.append(icon("Plus", 13), el("span", "", "New scout"));
+  add.onclick = () => openNew();
+  head.append(el("span", "", "Your scouts"), add);
+  box.append(head, grid);
+}
+
 // ---------------------------------------------------------------- the scout's page
 
 /** The page's header: the buddy, its name and goal, and the chips for its leash, folder and model. */

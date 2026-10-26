@@ -143,7 +143,9 @@
     chat: { ...base },
 
     cards: { ...base, steps: [
-      { wait: 300, run: () => document.querySelectorAll(".card-head").forEach((h, i) => i > 1 && h.click()) },
+      { wait: 300, check: "a run of steps reads as one line", fn: () => [...document.querySelectorAll(".steps-text")].map((e) => e.textContent).join(" | ") === "Read a file, searched once, sent an agent | Edited a file, ran a command" },
+      { run: () => document.querySelectorAll(".steps-head").forEach((h) => h.click()) },
+      { wait: 100, run: () => document.querySelectorAll(".card-head").forEach((h, i) => i > 1 && h.click()) },
       { check: "an edit opens as a diff", fn: () => !!document.querySelector(".card.open .diff-row.add") },
       { check: "a command shows its output", fn: () => document.querySelector(".card.open .card-out")?.textContent.includes("50 passed") },
       { run: () => document.querySelector("#transcript").scrollTop = 120 },
@@ -153,6 +155,8 @@
       { wait: 300, click: ".side-row[data-action=new_chat]" },
       { wait: 200, check: "a new chat shows the welcome page", fn: () => !document.querySelector("#welcome").hidden },
       { check: "the composer sits in the middle", fn: () => document.querySelector("#welcome-slot #composer") !== null },
+      { check: "home shows the scouts, the one waiting on you first", fn: () => document.querySelectorAll(".home-scout").length === 4 && document.querySelector(".home-scout").classList.contains("needs") },
+      { check: "and the last few chats", fn: () => document.querySelectorAll(".home-chat").length === 3 },
       { type: ["#input", "Tidy up the README"] },
       { key: ["#input", "Enter"] },
       { wait: 50, check: "the first send opens a chat in the picked folder", fn: () => sentOf("new")[0]?.workdir === "/home/me" },
