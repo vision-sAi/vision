@@ -828,6 +828,7 @@ class Chat:
             "agents": list(self.agents.values()) if self.busy else [],
             "tools": list(self.tools.values()) if self.busy else [],
             "project": self.project,
+            "pinned": self.hub.is_pinned(self.id),
             "created": self.created,
             "updated": self.updated,
         }
@@ -1402,6 +1403,7 @@ class LinkedChat:
             "source": self.source,
             "title": self.title or s.get("title", ""),
             "history_id": self.history_id,
+            "pinned": self.hub.is_pinned(self.id),
             "busy": self.busy,
             "agents": list(self.agents.values()) if self.busy else [],
             "tools": list(self.tools.values()) if self.busy else [],
@@ -1664,6 +1666,7 @@ class Hub:
         from vision.projects import ProjectStore
 
         self.projects = ProjectStore()
+        self.pinned: set[str] = load_pinned()
         self._project_opening: dict[str, asyncio.Future] = {}  # project id → its chat on the way (one per project)
         self.threads: dict = {}  # project id → its ProjectThreads (runs.py), made when first needed
         self._moods: dict[str, str] = {}  # project id → the mood its scout was last shown in
@@ -1831,7 +1834,23 @@ class Hub:
         if isinstance(chat, Chat) and chat.journal:
             chat.journal.release()
         self.chats.pop(chat.id, None)
+        if chat.id in self.pinned:
+            self.pin(chat.id, False, announce=False)  # a closed chat is gone from every list: its pin goes with it
         # No replacement: the phone shows an empty screen and opens a chat with its next message.
+
+    # -- pinned chats: kept at the top of every app's list, the same on each
+    def is_pinned(self, chat_id: str) -> bool:
+        return chat_id in self.pinned
+
+    def pin(self, chat_id: str, on: bool, announce: bool = True) -> None:
+        with self._lock:
+            if on == (chat_id in self.pinned):
+                return
+            (self.pinned.add if on else self.pinned.discard)(chat_id)
+            save_pinned(self.pinned)
+        chat = self.chats.get(chat_id)
+        if announce and chat is not None:
+            self.post(chat.summary())
 
     # -- terminal chats (link.py): found on disk, listed while their process lives
     LINK_POLL = 2.0
@@ -2931,6 +2950,8 @@ class Hub:
             await asyncio.to_thread(chat.cancel)
             self.close_chat(chat, already_cancelled=True)
             self.post({"type": "chat_closed", "chat": chat.id})
+        elif kind == "pin":
+            self.pin(chat.id, bool(msg.get("pinned", True)))
         elif kind == "model":
             if chat.busy:
                 await ws.send_json({"type": "error", "text": "Vision is still replying; switch models once it has finished."})
@@ -4190,6 +4211,25 @@ def pairing_info(cfg: Config, host: str | None, port: int | None, public_url: st
     return {"host": host, "port": port, "local": local, "url": url, "token": token, "name": name,
             "payload": pairing_payload(url, token, local, name)}
 
+
+PINNED = STATE_DIR / "pinned.json"  # the chats pinned to the top of the list, by id (Hub.pin)
+
+
+def load_pinned() -> set[str]:
+    try:
+        return {str(c) for c in json.loads(PINNED.read_text())}
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
+def save_pinned(pinned: set[str]) -> None:
+    try:
+        PINNED.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PINNED.with_suffix(".tmp")
+        tmp.write_text(json.dumps(sorted(pinned)))
+        os.replace(tmp, PINNED)
+    except OSError:
+        pass  # a pin that doesn't survive a restart is no reason to fail the tap
 
 RESTART_MARKER = STATE_DIR / "restart.json"  # a graceful restart is under way (see Hub.maybe_restart)
 

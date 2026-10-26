@@ -445,6 +445,29 @@ final class FakeServerTests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
     }
 
+    /// A pinned chat sits under Pinned above the others, and a long press pins another (the machine keeps it).
+    func testAChatIsPinnedToTheTopOfTheDrawer() throws {
+        try call("_scene", ["chats": [["chat": "c1", "title": "Groceries", "busy": false, "history_id": "h1", "pinned": true, "updated": 1,
+                                       "folder": "~/code/vision"],
+                                      ["chat": "c2", "title": "Tax return", "busy": false, "history_id": "h2", "updated": 2]],
+                            "history": ["c1": [], "c2": []]])
+        let app = launch()
+        app.buttons["Chats"].tap()
+        let pinned = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Groceries")).firstMatch
+        let other = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Tax return")).firstMatch
+        XCTAssertTrue(pinned.waitForExistence(timeout: 10))
+        XCTAssertTrue(text(app, containing: "Pinned").exists)
+        XCTAssertTrue(pinned.label.contains("~/code/vision"), "its row says where it works: \(pinned.label)")
+        XCTAssertLessThan(pinned.frame.minY, other.frame.minY, "pinned first, though the other moved last")
+        other.press(forDuration: 1.0)
+        let pin = app.buttons["Pin"]
+        XCTAssertTrue(pin.waitForExistence(timeout: 5))
+        pin.tap()
+        let sent = try frame { $0["type"] as? String == "pin" }
+        XCTAssertEqual(sent?["chat"] as? String, "c2")
+        XCTAssertEqual(sent?["pinned"] as? Bool, true)
+    }
+
     /// A chat tapped on Recent Chats opens that chat.
     func testARecentChatTappedOpensIt() throws {
         try call("_scene", ["chats": [["chat": "c1", "title": "First", "busy": false, "history_id": "h1"],

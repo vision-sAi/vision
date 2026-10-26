@@ -972,6 +972,13 @@ final class VisionClient: ObservableObject {
         sendFrame(["type": "close"], chat: id)
     }
 
+    /// Pin a chat to the top of the list, or unpin it. The machine keeps it, so every app shows the same; the
+    /// row moves at once and the machine's `chat` frame confirms it.
+    func setPinned(_ id: String, _ on: Bool) {
+        if let i = chats.firstIndex(where: { $0.id == id }) { chats[i].pinned = on }
+        sendFrame(["type": "pin", "pinned": on], chat: id)
+    }
+
     /// The chat on screen, if the machine still lists it.
     var activeChat: ChatInfo? { chats.first { $0.id == activeChatID } }
 

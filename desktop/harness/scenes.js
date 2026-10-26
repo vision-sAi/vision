@@ -14,7 +14,7 @@
     chat("c2", "Weekend plans in Austin", 3000, { busy: true, model: "Sonnet 5.5", folder: "~" }),
     chat("c3", "Frigate camera dropouts", D + 100, { source: "terminal", folder: "~" }),
     chat("c4", "Draft the TestFlight notes", 3 * D, { waiting: true }),
-    chat("c5", "Compare NAS drives", 12 * D, { folder: "~" }),
+    chat("c5", "Compare NAS drives", 12 * D, { folder: "~", pinned: true }),
     chat("c6", "Homelab backup plan", 50 * D, { folder: "~" }),
     chat("sc1", "Vision desktop app", 120, { project: "p1" }),
   ];
@@ -140,7 +140,13 @@
   ];
 
   window.SCENES = {
-    chat: { ...base },
+    chat: { ...base, steps: [
+      { wait: 300, check: "a pinned chat heads the list", fn: () => document.querySelector("#chats .group:not(.scouts-head)")?.textContent === "Pinned" && document.querySelector("#chats .group:not(.scouts-head) + .chat-item .chat-name")?.textContent === "Compare NAS drives" },
+      { check: "a chat's row says the folder it works in", fn: () => [...document.querySelectorAll("#chats .chat-item")].find((i) => i.textContent.includes("Fix the flaky"))?.querySelector(".chat-folder")?.textContent === "~/code/vision" },
+      { run: () => [...document.querySelectorAll("#chats .chat-item")].find((i) => i.textContent.includes("Weekend plans"))?.querySelector(".pin").click() },
+      { wait: 50, check: "pinning another tells the server", fn: () => sentOf("pin").some((f) => f.chat === "c2" && f.pinned === true) },
+      { check: "and it joins the pinned group", fn: () => { const names = []; let n = [...document.querySelectorAll("#chats .group")].find((g) => g.textContent === "Pinned")?.nextElementSibling; while (n && n.classList.contains("chat-item")) { names.push(n.querySelector(".chat-name").textContent); n = n.nextElementSibling; } return names.sort().join() === "Compare NAS drives,Weekend plans in Austin"; } },
+    ] },
 
     cards: { ...base, steps: [
       { wait: 300, run: () => document.querySelectorAll(".card-head").forEach((h, i) => i > 1 && h.click()) },
