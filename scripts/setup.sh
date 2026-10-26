@@ -14,7 +14,9 @@
 #              Macs get --mac and Intel Macs --cpu.
 #   --serve    `vision serve`, for the Vision Remote iPhone app
 #   --all      voice, serve and weather
-#   --link     symlink bin/vision into ~/.local/bin
+#   --link     symlink bin/vision into ~/.local/bin, and put that on your shell's PATH if it isn't
+#              (one line in ~/.zshrc, ~/.bashrc, ~/.bash_profile on macOS, or fish's conf.d;
+#              VISION_NO_MODIFY_PATH=1 leaves your profile alone)
 #   --yes      don't ask: take the detected voice build and go ahead with the downloads
 #   --no-doctor  skip the `vision doctor` check at the end (the installer and `vision voice setup` pass it)
 set -euo pipefail
@@ -23,7 +25,42 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 voice=0 serve=0 all=0 link=0 yes=0 doctor=1 backend=""
 
 say() { echo "vision setup: $*"; }
-usage() { sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+# Put ~/.local/bin on the PATH of the user's login shell, once, in the profile that shell reads: zsh reads
+# ~/.zshrc everywhere, but macOS Terminal starts bash as a login shell, which skips ~/.bashrc. The line is
+# guarded, so a profile that also sets it (Ubuntu's ~/.profile) doesn't put the folder on PATH twice.
+# VISION_USER_PATH is the PATH from before install.sh put ~/.local/bin on its own.
+add_to_path() {
+    local bin="$HOME/.local/bin" sh="${SHELL##*/}" rc="" shown
+    case ":${VISION_USER_PATH:-$PATH}:" in *":$bin:"*) return 0 ;; esac
+    if [ -z "${VISION_NO_MODIFY_PATH:-}" ]; then
+        case "$sh" in
+            zsh) rc="${ZDOTDIR:-$HOME}/.zshrc" ;;
+            bash) if [ "$(uname -s)" = Darwin ]; then rc="$HOME/.bash_profile"; else rc="$HOME/.bashrc"; fi ;;
+            fish) rc="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/vision.fish" ;;
+        esac
+    fi
+    if [ -z "$rc" ]; then
+        say "~/.local/bin is not on your PATH; add it in your shell profile"
+        return 0
+    fi
+    case "$rc" in "$HOME"/*) shown="~${rc#"$HOME"}" ;; *) shown="$rc" ;; esac
+    if [ -f "$rc" ] && grep -q '\.local/bin' "$rc"; then
+        say "~/.local/bin is on your PATH in $shown; open a new terminal to use vision"
+        return 0
+    fi
+    mkdir -p "$(dirname "$rc")"
+    {
+        printf '\n# Added by Vision: its command lives in ~/.local/bin\n'
+        if [ "$sh" = fish ]; then
+            printf 'fish_add_path -g ~/.local/bin\n'
+        else
+            printf '%s\n' 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac'
+        fi
+    } >>"$rc"
+    say "added ~/.local/bin to your PATH in $shown; open a new terminal (or run: source $shown) to use vision"
+}
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -140,7 +177,7 @@ if [ "$link" = 1 ]; then
     mkdir -p "$HOME/.local/bin"
     ln -sf "$root/bin/vision" "$HOME/.local/bin/vision"
     say "linked $HOME/.local/bin/vision"
-    case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) say "~/.local/bin is not on your PATH; add it in your shell profile" ;; esac
+    add_to_path
 fi
 
 [ "$doctor" = 0 ] && exit 0
@@ -149,3 +186,5 @@ say "checking the install (vision doctor$(command -v claude >/dev/null && echo '
 
 start=$([ "$link" = 1 ] && echo vision || echo "$root/bin/vision")
 say "done. Start a chat with:  $start"
+[ "$link" = 0 ] && ! command -v vision >/dev/null && say "run this again with --link to start it as just: vision"
+exit 0
