@@ -134,6 +134,10 @@ A chat started on the phone works in the directory `vision serve` runs in (or `[
 folder was picked for it: the drawer's folder button lists the recent directories and lets you walk the
 machine's (`GET /folders?path=`), and the chat is opened with `new {workdir}`. Each chat's summary says
 where it works.
+A chat can be pinned to the top of the list: a long press and **Pin** on the phone, the pin button on a
+row in the desktop app's sidebar (`pin {chat, pinned}`). The server keeps the pins in
+`~/.local/state/vision/pinned.json` and says `pinned` in each chat's summary, so every app shows the
+same; closing a chat drops its pin.
 Banked limit resets and Grok's allowance on the usage page come from undocumented endpoints that Vision
 calls with the logins Claude Code and Grok saved on disk; `read_cli_logins = false` under `[brain]` keeps
 Vision out of those files.

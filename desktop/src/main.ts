@@ -432,17 +432,25 @@ function drawSidebar() {
   const all = [...chats.values()]
     .filter((c) => !scoutChats.has(c.chat) && !(c.project && live.some((p) => p.id === c.project)))
     .filter((c) => !query || `${c.title ?? ""} ${c.folder ?? ""}`.toLowerCase().includes(query))
-    .sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0));
+    .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || (b.updated ?? 0) - (a.updated ?? 0));
   let heading = "";
   for (const c of all) {
-    const group = groupOf(c.updated ?? 0);
+    const group = c.pinned ? "Pinned" : groupOf(c.updated ?? 0);
     if (group !== heading) { nav.append(el("div", "group", group)); heading = group; }
     const item = el("div", "chat-item" + (c.chat === active && view === "chat" ? " active" : ""));
     item.title = [c.title, c.model, c.folder].filter(Boolean).join(" · ");
-    item.append(el("span", "chat-name", c.title || "New chat"));
+    const text = el("span", "chat-text");
+    text.append(el("span", "chat-name", c.title || "New chat"));
+    if (c.folder) text.append(el("span", "chat-folder", c.folder));
+    item.append(text);
     if (c.waiting) item.append(el("span", "dot ask"));
     else if (c.busy) item.append(el("span", "dot busy"));
     else if (c.source === "terminal") item.append(el("span", "badge", "terminal"));
+    const pin = el("button", "icon-btn pin" + (c.pinned ? " on" : ""));
+    pin.append(icon(c.pinned ? "PinOff" : "Pin", 13));
+    pin.title = c.pinned ? "Unpin" : "Pin to the top";
+    pin.onclick = (e) => { e.stopPropagation(); setPinned(c.chat, !c.pinned); };
+    item.append(pin);
     const close = el("button", "icon-btn close");
     close.append(icon("X", 14));
     close.title = c.source === "terminal" ? "Quit this chat in its terminal" : "Close this chat";
@@ -454,6 +462,13 @@ function drawSidebar() {
   if (!all.length) nav.append(el("div", "empty-list", query ? "Nothing matches." : "No chats yet."));
   for (const b of document.querySelectorAll<HTMLElement>(".side-row[data-action=new_chat]")) b.classList.toggle("active", !!draft && view === "chat");
   for (const b of document.querySelectorAll<HTMLElement>(".side-row[data-action=agents]")) b.classList.toggle("active", view === "agents");
+}
+
+/** Pin a chat to the top of the list, or unpin it: the server keeps it, so the phone shows the same. */
+function setPinned(chat: string, on: boolean) {
+  const c = chats.get(chat);
+  if (c) { c.pinned = on; drawSidebar(); }
+  send({ type: "pin", chat, pinned: on });
 }
 
 function projectName(p: Json): string {

@@ -576,6 +576,7 @@ struct ChatInfo: Identifiable, Equatable {
     var shellRunning = false   // a shell-mode command is running in this chat's folder: the stop button stops it
     var suggestion = ""        // the message the machine guesses comes next (vision/suggest.py): the empty composer's grey text
     var project = ""           // the project this is the chat of ("" for an ordinary chat, or from an older Vision)
+    var pinned = false         // pinned to the top of the list, the same on every app (the machine keeps it)
     var created: Double
     var updated: Double
 
@@ -607,6 +608,7 @@ struct ChatInfo: Identifiable, Equatable {
         suggestion = ev["suggestion"] as? String ?? ""
         shellRunning = ev["shell_running"] as? Bool ?? false
         project = ev["project"] as? String ?? ""
+        pinned = ev["pinned"] as? Bool ?? false
         created = ev["created"] as? Double ?? 0
         updated = ev["updated"] as? Double ?? 0
     }

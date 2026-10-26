@@ -32,11 +32,33 @@ struct ChatsView: View {
         if let onClose { onClose() } else { dismiss() }
     }
 
-    private var rows: [ChatInfo] {
+    private var listed: [ChatInfo] {
         // A project's chat lives on the Projects page; an archived project's chat (no longer listed) comes back here.
         let projectChats = Set(client.projects.map(\.chat))
         return client.chats.filter { !closed.contains($0.id) && !projectChats.contains($0.id) }
             .sorted { ($0.busy ? 1 : 0, $0.updated) > ($1.busy ? 1 : 0, $1.updated) }
+    }
+
+    /// Pinned chats, above the rest (the machine keeps the pins, so the desktop app shows the same).
+    private var pinnedRows: [ChatInfo] { listed.filter(\.pinned) }
+    private var rows: [ChatInfo] { listed.filter { !$0.pinned } }
+
+    private func chatRow(_ chat: ChatInfo) -> some View {
+        Button {
+            flash("chat:" + chat.id) { open(chat) }
+        } label: {
+            row(chat)
+        }
+        .buttonStyle(DrawerRowStyle(selected: !projectsShown && chat.id == client.active?.id, flashed: flashed == "chat:" + chat.id))
+        // Long-press lifts a preview of the chat with its actions, as in the ChatGPT app; a tap on the
+        // preview opens the chat. Laid over the row, it takes the row's plain taps too.
+        .overlay(ChatRowMenu(client: client, chat: chat) {
+            flash("chat:" + chat.id) { open(chat) }
+        } open: { open(chat) } closing: { fading = chat.id } close: { closeChat(chat.id) })
+        .opacity(fading == chat.id ? 0 : 1)
+        .listRowInsets(EdgeInsets(top: 1, leading: 12, bottom: 1, trailing: 12))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
     }
 
     var body: some View {
@@ -55,9 +77,17 @@ struct ChatsView: View {
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
 
+            if !pinnedRows.isEmpty {
+                Group { sectionTitle("Pinned") }
+                    .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                ForEach(pinnedRows) { chat in chatRow(chat) }
+            }
+
             Group {
-                sectionTitle("Chats")
-                if rows.isEmpty {
+                if !rows.isEmpty || pinnedRows.isEmpty { sectionTitle("Chats") }
+                if listed.isEmpty {
                     Text("No chats open")
                         .themeFont(.body)
                         .foregroundStyle(.secondary)
@@ -69,23 +99,7 @@ struct ChatsView: View {
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
 
-            ForEach(rows) { chat in
-                Button {
-                    flash("chat:" + chat.id) { open(chat) }
-                } label: {
-                    row(chat)
-                }
-                .buttonStyle(DrawerRowStyle(selected: !projectsShown && chat.id == client.active?.id, flashed: flashed == "chat:" + chat.id))
-                // Long-press lifts a preview of the chat with its actions, as in the ChatGPT app; a tap on the
-                // preview opens the chat. Laid over the row, it takes the row's plain taps too.
-                .overlay(ChatRowMenu(client: client, chat: chat) {
-                    flash("chat:" + chat.id) { open(chat) }
-                } open: { open(chat) } closing: { fading = chat.id } close: { closeChat(chat.id) })
-                .opacity(fading == chat.id ? 0 : 1)
-                .listRowInsets(EdgeInsets(top: 1, leading: 12, bottom: 1, trailing: 12))
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-            }
+            ForEach(rows) { chat in chatRow(chat) }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -403,7 +417,11 @@ private struct ChatRowMenu: UIViewRepresentable {
                 return host
             } actionProvider: { _ in
                 let quit = row.chat.isTerminal
+                let pinned = row.chat.pinned
                 return UIMenu(children: [
+                    UIAction(title: pinned ? "Unpin" : "Pin", image: UIImage(systemName: pinned ? "pin.slash" : "pin")) { _ in
+                        row.client.setPinned(row.chat.id, !pinned)
+                    },
                     UIAction(title: quit ? "Quit" : "Close", image: UIImage(systemName: quit ? "power" : "xmark"),
                              attributes: [.destructive, .keepsMenuPresented]) { [weak self] _ in
                         self?.startClose()

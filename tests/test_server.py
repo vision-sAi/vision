@@ -1335,3 +1335,30 @@ class UnqueueTests(unittest.TestCase):
             chat.unqueue.return_value = False
             self._handle(chat, {"type": "unqueue", "text": "look", "images": [str(photo)]}, Path(d))
             self.assertTrue(photo.exists())
+
+
+class PinTests(unittest.TestCase):
+    """A pinned chat says so in its summary on every app, stays pinned across a restart, and loses its pin when closed."""
+
+    def test_a_pin_is_shared_kept_and_dropped_with_the_chat(self):
+        import asyncio
+        from pathlib import Path
+        from unittest.mock import AsyncMock, Mock
+        from vision.config import Config
+
+        cfg = Config()
+        with tempfile.TemporaryDirectory() as d, patch.object(server, "PINNED", Path(d) / "pinned.json"), \
+             patch("vision.brain.create_brain", side_effect=lambda c, **kw: _StubBrain(c)):
+            hub = server.Hub(cfg, _StubBrain(cfg.brain), "tok", log=lambda *_: None, open_initial=False)
+            chat = hub.open_chat()
+            posted = []
+            hub.post = posted.append
+            self.assertFalse(chat.summary()["pinned"])
+            asyncio.run(hub.handle(Mock(send_json=AsyncMock()), {"type": "pin", "chat": chat.id, "pinned": True}))
+            self.assertTrue(chat.summary()["pinned"])
+            self.assertTrue(posted[-1]["pinned"], "every app hears of it")
+            again = server.Hub(cfg, _StubBrain(cfg.brain), "tok", log=lambda *_: None, open_initial=False)
+            self.assertTrue(again.is_pinned(chat.id), "kept across a restart")
+            hub.close_chat(chat)
+            self.assertFalse(hub.is_pinned(chat.id))
+            self.assertEqual(server.load_pinned(), set())
