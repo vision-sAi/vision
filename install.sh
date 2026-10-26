@@ -4,13 +4,14 @@
 #   curl -fsSL https://raw.githubusercontent.com/vision-sAi/vision/master/install.sh | sh
 #
 # It fetches Vision into ~/.local/share/vision/app, makes its own Python environment there (with uv, which
-# it installs first if you don't have it), and links the `vision` command into ~/.local/bin. Nothing is
-# installed system-wide and nothing needs sudo. This is the text chat, a few MB; `vision` asks about your
-# providers and the voice the first time it runs.
+# it installs first if you don't have it), and links the `vision` command into ~/.local/bin, adding that to
+# your shell's PATH if it isn't there. Nothing is installed system-wide and nothing needs sudo. This is the
+# text chat, a few MB; `vision` asks about your providers and the voice the first time it runs.
 #
 #   VISION_HOME     where to put it (default ~/.local/share/vision/app)
 #   VISION_BRANCH   the branch to install (default master)
-#   VISION_TARBALL  a .tar.gz of the source to install instead of fetching from GitHub
+#   VISION_TARBALL  a .tar.gz of the source to install instead of fetching from GitHub (a URL; file:// works)
+#   VISION_NO_MODIFY_PATH=1  don't touch your shell profile
 set -eu
 
 repo="${VISION_REPO:-https://github.com/vision-sAi/vision}"
@@ -61,29 +62,17 @@ ok "Vision is in $dest"
 # its environment and the `vision` command
 say "  Setting up its Python environment…"
 log="$(mktemp)"
-if ! bash "$dest/scripts/setup.sh" --link --yes --no-doctor >"$log" 2>&1; then
+if ! VISION_USER_PATH="$orig_path" bash "$dest/scripts/setup.sh" --link --yes --no-doctor >"$log" 2>&1; then
     cat "$log" >&2
     rm -f "$log"
     die "Setup failed. The lines above say why; run this again once it's fixed."
 fi
+path_note="$(grep 'local/bin.*PATH' "$log" | tail -1 | sed 's/^vision setup: //')"
 rm -f "$log"
 ok "vision command in $bin"
 
 say ""
-case ":$orig_path:" in *":$bin:"*) on_path=1 ;; *) on_path=0 ;; esac
-if [ "$on_path" = 1 ]; then
-    printf '\033[1mDone.\033[0m Start it with:  \033[1;36mvision\033[0m\n'
-else
-    case "${SHELL:-}" in
-        */zsh) rc="~/.zshrc" ;;
-        */fish) rc="" ;;
-        *) rc="~/.bashrc" ;;
-    esac
-    printf '\033[1mDone.\033[0m One more thing: %s is not on your PATH yet. Run this, then open a new terminal:\n\n' "$bin"
-    if [ -n "$rc" ]; then
-        say "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> $rc"
-    else
-        say "  fish_add_path ~/.local/bin"
-    fi
-    printf '\nThen start it with:  \033[1;36mvision\033[0m\n'
-fi
+printf '\033[1mDone.\033[0m Start it with:  \033[1;36mvision\033[0m\n'
+# setup.sh's word on the PATH: added to a profile (open a new terminal), or left for you to add
+[ -n "$path_note" ] && say "$path_note"
+exit 0
