@@ -1,0 +1,6 @@
+// Who signs the app. Placeholders: copy Local.xcconfig.example to Local.xcconfig (gitignored) and put
+// your Apple team and bundle id prefix there.
+DEVELOPMENT_TEAM =
+BUNDLE_ID_PREFIX = com.example
+
+#include? "Local.xcconfig"

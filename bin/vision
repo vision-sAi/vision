@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Vision launcher for a source checkout: runs the checkout's virtualenv python, wherever it lives.
+# Symlink it onto your PATH (ln -s "$PWD/bin/vision" ~/.local/bin/vision), or copy it and set VISION_HOME.
+self="$(readlink -f "${BASH_SOURCE[0]}")"
+home="${VISION_HOME:-$(dirname "$(dirname "$self")")}"
+if [ ! -x "$home/.venv/bin/python" ]; then
+  echo "vision: no virtualenv at $home/.venv; set VISION_HOME to your Vision checkout" >&2
+  exit 1
+fi
+exec "$home/.venv/bin/python" -P -m vision "$@"  # -P: never import a `vision` folder from the current directory

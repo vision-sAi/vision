@@ -1,0 +1,78 @@
+name: desktop release
+
+# A `desktop-v<version>` tag builds the desktop app for macOS (one universal app for Apple Silicon and
+# Intel) and Linux (deb, rpm, AppImage) into a draft GitHub Release, with the updater's latest.json and
+# signatures. Publishing the draft is what ships it: installed apps see it on their next check.
+#
+# The Mac app is not signed with an Apple Developer ID, so macOS asks once before the first open. Updates are
+# signed with the updater key when its secrets are there (desktop/README.md, "Releasing"):
+#   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   updates (without them, no latest.json)
+on:
+  push:
+    tags: ["desktop-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, name: macos, args: "--target universal-apple-darwin", targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
+          - { os: ubuntu-24.04, name: linux, args: "", targets: "" }
+    steps:
+      - uses: actions/checkout@v7
+      - name: The tag matches the app's version
+        working-directory: desktop
+        run: |
+          version="$(node scripts/version.mjs)"
+          [ "desktop-v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME, app version $version: run scripts/version.mjs"; exit 1; }
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - run: npm ci
+        working-directory: desktop
+
+      - name: Updater signing, when its secrets exist
+        env:
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          UPDATER_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$UPDATER_KEY" ]; then
+            { echo "TAURI_SIGNING_PRIVATE_KEY<<EOF"; echo "$UPDATER_KEY"; echo "EOF"; } >> "$GITHUB_ENV"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$UPDATER_PASSWORD" >> "$GITHUB_ENV"
+            echo "UPDATER_ARGS=--config src-tauri/tauri.updater.conf.json" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No updater key: this release won't reach installed apps by itself."
+          fi
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "Vision desktop ${{ github.ref_name }}"
+          releaseBody: |
+            **macOS** (Apple Silicon and Intel): the .dmg.
+            The first time, macOS says it can't check the app: open System Settings → Privacy & Security and click Open Anyway.
+            **Linux**: the .AppImage (updates itself), or the .rpm (Fedora) / .deb (Ubuntu, Debian).
+            Vision runs on a computer with `vision serve`; the app sets it up if this computer doesn't have it.
+          releaseDraft: true
+          args: ${{ matrix.args }} ${{ env.UPDATER_ARGS }}

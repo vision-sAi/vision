@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Vision",
+  "version": "0.1.0",
+  "identifier": "com.vision.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Vision",
+        "width": 1100,
+        "height": 760,
+        "minWidth": 640,
+        "minHeight": 420,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "Vision on the desktop"
+  },
+  "mainBinaryName": "vision-desktop",
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ3Q0MyODM3NDFEMzM5OTcKUldTWE9kTkJOeWpNUjVlRVZubjdWZkJDRjNScXExRnU1MWZvbWZyZlYzYnQ5eHkxVkQ0S3FnWDYK",
+      "endpoints": [
+        "https://github.com/vision-sAi/vision/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

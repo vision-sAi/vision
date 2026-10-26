@@ -1,0 +1,16 @@
+.venv*/
+__pycache__/
+*.pyc
+*.wav
+*.log
+models/
+*.egg-info/
+
+# Local design mocks and benchmark logs, kept out of the repo.
+design/
+docs/voice-latency*
+build/
+
+# Finder
+.DS_Store
+.wrangler/

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>Vision</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <div id="app" class="app" hidden>
+      <aside class="sidebar">
+        <div class="side-top" data-tauri-drag-region>
+          <div class="brand" data-tauri-drag-region>
+            <img src="/vision.png" alt="" class="mark" />
+            <span data-tauri-drag-region>Vision</span>
+          </div>
+          <button class="icon-btn" data-action="toggle_sidebar" data-icon="PanelLeft" title="Hide sidebar"></button>
+        </div>
+        <div class="side-actions">
+          <button class="side-row" data-action="new_chat"><span data-icon="SquarePen"></span>New chat</button>
+          <button class="side-row" data-action="agents"><span data-icon="Activity"></span>All activity<span id="agents-badge" class="pill" hidden></span></button>
+          <label class="search">
+            <span data-icon="Search"></span>
+            <input id="search" placeholder="Search chats" autocomplete="off" spellcheck="false" />
+          </label>
+        </div>
+        <nav id="chats" class="chats"></nav>
+        <button id="app-update" class="app-update" hidden></button>
+        <div class="side-foot">
+          <button id="computer" class="computer" title="Change computer">
+            <span data-icon="Monitor"></span>
+            <span class="computer-text">
+              <span id="machine" class="machine"></span>
+              <span id="conn-text" class="conn-text"></span>
+            </span>
+            <span id="conn" class="conn"></span>
+          </button>
+          <button class="icon-btn" data-action="settings" data-icon="Settings" title="Settings"></button>
+        </div>
+      </aside>
+
+      <main id="main" class="main">
+        <header class="chat-head" data-tauri-drag-region>
+          <div class="head-left">
+            <button class="icon-btn when-collapsed" data-action="toggle_sidebar" data-icon="PanelLeft" title="Show sidebar"></button>
+            <button class="icon-btn when-collapsed" data-action="new_chat" data-icon="SquarePen" title="New chat"></button>
+            <div class="title-wrap" data-tauri-drag-region>
+              <h1 id="chat-title" data-tauri-drag-region></h1>
+              <span id="chat-folder" class="dim small" data-tauri-drag-region></span>
+            </div>
+            <div id="scout-head" class="scout-head" hidden></div>
+          </div>
+        </header>
+
+        <div id="notice" class="notice" hidden></div>
+        <section id="transcript" class="transcript"></section>
+        <section id="agents" class="agents" hidden></section>
+
+        <section id="welcome" class="welcome" hidden>
+          <h2 id="greeting"></h2>
+          <p id="welcome-sub" class="dim"></p>
+          <div id="welcome-slot"></div>
+          <div id="chips" class="chips"></div>
+        </section>
+
+        <div id="dock" class="dock">
+          <div id="question" class="question" hidden></div>
+          <button id="suggestion" class="suggestion" hidden></button>
+          <form id="composer" class="composer">
+            <div id="attachments" class="attachments" hidden></div>
+            <textarea id="input" rows="1" placeholder="Message Vision"></textarea>
+            <div class="composer-bar">
+              <div class="bar-left">
+                <button type="button" id="attach" class="tool-btn" title="Attach files" data-icon="Paperclip"></button>
+                <button type="button" id="folder" class="chip-btn" title="The folder this chat works in">
+                  <span data-icon="Folder"></span><span id="folder-text"></span>
+                </button>
+                <div id="mode" class="segmented" title="Auto runs tools as it goes; Plan proposes a plan first">
+                  <button type="button" data-mode="auto">Auto</button>
+                  <button type="button" data-mode="plan">Plan</button>
+                </div>
+              </div>
+              <div class="bar-right">
+                <button type="button" id="model" class="chip-btn" title="Model and effort">
+                  <span id="model-text"></span><span data-icon="ChevronDown"></span>
+                </button>
+                <button type="button" id="stop" class="round stop" hidden title="Stop the reply (Esc)" data-icon="Square"></button>
+                <button type="submit" id="send" class="round send" title="Send (Return)" data-icon="ArrowUp"></button>
+              </div>
+            </div>
+            <input id="file" type="file" multiple hidden />
+          </form>
+        </div>
+        <div id="drop" class="drop" hidden><div><span data-icon="Paperclip"></span>Drop files to attach them</div></div>
+      </main>
+      <aside id="scout-rail" class="scout-rail" hidden></aside>
+    </div>
+
+    <!-- Connect to a computer: the whole window on first run, a sheet over the app otherwise. -->
+    <div id="pair" class="pair" hidden>
+      <form id="pair-form" class="pair-card">
+        <button type="button" id="pair-close" class="icon-btn pair-close" data-icon="X" title="Cancel" hidden></button>
+        <img src="/vision.png" alt="" class="pair-mark" />
+        <h2>Connect to a computer</h2>
+        <p class="dim">Vision runs on a computer with <code>vision serve</code>; this app is a window onto it.</p>
+        <button type="button" id="pair-local" class="choice" hidden>
+          <span data-icon="Monitor"></span>
+          <span><b>This computer</b><span class="dim small" id="pair-local-url"></span></span>
+        </button>
+        <div class="or dim small"><span>another computer</span></div>
+        <label>Address <input id="pair-url" placeholder="my-computer.example.ts.net or 192.168.1.20:8765" autocomplete="off" spellcheck="false" /></label>
+        <label>Key <input id="pair-token" type="password" placeholder="from ~/.config/vision/remote_token there" autocomplete="off" /></label>
+        <p class="dim small">Or paste the pairing code from <code>vision pair</code> into the address box.</p>
+        <button type="submit" class="primary">Connect</button>
+        <p id="pair-error" class="error" hidden></p>
+      </form>
+    </div>
+
+    <div id="settings" class="pair sheet" hidden><div id="settings-card" class="settings-card"></div></div>
+    <div id="setup" class="setup" hidden></div>
+    <div id="popover" class="popover" hidden></div>
+    <div id="viewer" class="viewer" hidden></div>
+    <div id="toast" class="toast" hidden></div>
+  </body>
+</html>

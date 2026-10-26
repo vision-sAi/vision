@@ -1,0 +1,135 @@
+# XcodeGen spec for the Vision Remote iOS app.  On the Mac:  brew install xcodegen && xcodegen && open VisionRemote.xcodeproj
+# (Or make a new "iOS App" project in Xcode, delete its ContentView.swift, and drag the VisionRemote/ folder in.)
+name: VisionRemote
+options:
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "15.0"
+  createIntermediateGroups: true
+configFiles:                           # team + bundle id prefix; override them in Local.xcconfig
+  Debug: Signing.xcconfig
+  Release: Signing.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+targets:
+  VisionRemote:
+    type: application
+    platform: iOS
+    sources:
+      - path: VisionRemote
+      - path: Shared
+    dependencies:
+      - target: VisionActivity                       # the Live Activities and widgets, embedded in the app
+      - target: VisionNotify                         # unseals a push before it is shown
+    info:
+      path: VisionRemote/Info.plist
+      properties:
+        CFBundleDisplayName: Vision
+        CFBundleShortVersionString: "0.2.1"
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIRequiresFullScreen: true                       # portrait only; App Store validation wants this said outright
+        UIBackgroundModes: [audio]                       # replies keep playing when the screen locks
+        NSSupportsLiveActivities: true                   # live voice sits in the Dynamic Island
+        NSMicrophoneUsageDescription: Vision listens to you through the microphone during a voice conversation.
+        NSPhotoLibraryUsageDescription: Vision shows your recent photos and videos so you can attach them to a message.
+        NSCameraUsageDescription: Take a photo to send to Vision, or scan the pairing QR code shown by `vision serve`.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true                  # plain http:// to the machine on Wi-Fi while testing
+        ITSAppUsesNonExemptEncryption: false
+        CADisableMinimumFrameDurationOnPhone: true       # ProMotion: let our own animations run at 120 Hz
+        UIAppFonts: [Hearth-Regular.otf, Hearth-Medium.otf, Hearth-SemiBold.otf, Hearth-Bold.otf]   # our typeface, see Hearth.swift
+        VisionKeychainGroup: $(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).VisionRemote.push   # where PushKey keeps the notification key
+        CFBundleURLTypes:                                # vision://… : where a widget's tap lands (GlanceLink)
+          - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER)
+            CFBundleURLSchemes: [vision]
+        VisionAppGroup: group.$(BUNDLE_ID_PREFIX).VisionRemote   # where PushKey leaves a copy for the threads' card
+    entitlements:
+      path: VisionRemote/VisionRemote.entitlements
+      properties:
+        aps-environment: development   # reminders and scheduled replies as notifications; signing swaps in production for distribution builds
+        com.apple.security.application-groups:   # the key's copy, for VisionActivity
+          - group.$(BUNDLE_ID_PREFIX).VisionRemote
+        keychain-access-groups:        # the notification key, shared with VisionNotify; the pairing, with VisionActivity's widgets
+          - $(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).VisionRemote.push
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).VisionRemote
+  VisionNotify:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: VisionNotify
+      - path: Shared/PushKey.swift
+    info:
+      path: VisionNotify/Info.plist
+      properties:
+        CFBundleDisplayName: Vision
+        CFBundleShortVersionString: "0.2.1"
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        VisionKeychainGroup: $(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).VisionRemote.push
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    entitlements:
+      path: VisionNotify/VisionNotify.entitlements
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).VisionRemote.push
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).VisionRemote.VisionNotify
+  VisionActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: VisionActivity
+      - path: Shared
+      - path: VisionRemote/Pip.swift                 # the island draws Pip too
+    info:
+      path: VisionActivity/Info.plist
+      properties:
+        CFBundleDisplayName: Vision
+        CFBundleShortVersionString: "0.2.1"
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        VisionKeychainGroup: $(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).VisionRemote.push   # the app's pairing (SharedPairing)
+        VisionAppGroup: group.$(BUNDLE_ID_PREFIX).VisionRemote
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: VisionActivity/VisionActivity.entitlements
+      properties:
+        keychain-access-groups:        # the widgets read the app's pairing from here
+          - $(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).VisionRemote.push
+        com.apple.security.application-groups:   # the push key's copy, to open the card's sealed names
+          - group.$(BUNDLE_ID_PREFIX).VisionRemote   # (a card draws with no keychain at all)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).VisionRemote.VisionActivity
+  VisionRemoteUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: VisionRemoteUITests
+    dependencies:
+      - target: VisionRemote
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).VisionRemoteUITests
+schemes:
+  VisionRemote:
+    build:
+      targets:
+        VisionRemote: all
+    test:
+      targets:
+        - VisionRemoteUITests
