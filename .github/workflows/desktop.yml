@@ -1,6 +1,7 @@
 name: desktop
 
-# The desktop app (desktop/) built for Linux and macOS; the installers come back as artifacts.
+# The desktop app (desktop/) built for Linux and macOS. Pull requests check that it compiles (a debug
+# build, no installers); master and manual runs build the installers and return them as artifacts.
 on:
   push:
     branches: [master]
@@ -11,6 +12,11 @@ on:
 
 permissions:
   contents: read
+
+# A new push to a pull request cancels its run still going; master runs all finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -43,8 +49,12 @@ jobs:
           workspaces: desktop/src-tauri
       - run: npm ci
       - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - run: npx tauri build
-      - uses: actions/upload-artifact@v7
+      - if: github.event_name == 'pull_request'
+        run: npx tauri build --debug --no-bundle
+      - if: github.event_name != 'pull_request'
+        run: npx tauri build
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
         with:
           name: vision-desktop-${{ matrix.name }}
           path: desktop/src-tauri/target/release/bundle/
