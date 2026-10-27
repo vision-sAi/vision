@@ -31,7 +31,7 @@ Then, in `desktop/`:
 
     npm install
     npm run tauri dev      # a window that reloads as you edit
-    npx tauri build        # installers in src-tauri/target/release/bundle/
+    npm run tauri build    # installers in src-tauri/target/release/bundle/
 
 `python ios/fake_server.py --port 8799` stands in for `vision serve` with no model behind it: pair with
 `http://127.0.0.1:8799` and any key, then `POST /_scene` and `POST /_push` frames to it (see its docstring).
