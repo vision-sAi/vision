@@ -4,9 +4,11 @@ name: desktop release
 # Intel) and Linux (deb, rpm, AppImage) into a draft GitHub Release, with the updater's latest.json and
 # signatures. Publishing the draft is what ships it: installed apps see it on their next check.
 #
-# The Mac app is not signed with an Apple Developer ID, so macOS asks once before the first open. Updates are
-# signed with the updater key when its secrets are there (desktop/README.md, "Releasing"):
+# Updates are signed with the updater key, and the Mac app with a Developer ID and notarized, when their
+# secrets are there (desktop/README.md, "Releasing"):
 #   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   updates (without them, no latest.json)
+#   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+#   APPLE_API_ISSUER, APPLE_API_KEY, APPLE_API_KEY_P8               the Mac app (without them, unsigned)
 on:
   push:
     tags: ["desktop-v*"]
@@ -62,6 +64,29 @@ jobs:
             echo "::warning::No updater key: this release won't reach installed apps by itself."
           fi
 
+      - name: Mac signing and notarization, when their secrets exist
+        if: runner.os == 'macOS'
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          API_KEY: ${{ secrets.APPLE_API_KEY }}
+          API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          if [ -n "$CERT" ] && [ -n "$IDENTITY" ] && [ -n "$API_KEY_P8" ]; then
+            key="$RUNNER_TEMP/AuthKey_$API_KEY.p8"
+            printf '%s\n' "$API_KEY_P8" > "$key"
+            { echo "APPLE_CERTIFICATE<<EOF"; echo "$CERT"; echo "EOF"; } >> "$GITHUB_ENV"
+            echo "APPLE_CERTIFICATE_PASSWORD=$CERT_PASSWORD" >> "$GITHUB_ENV"
+            echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+            echo "APPLE_API_ISSUER=$API_ISSUER" >> "$GITHUB_ENV"
+            echo "APPLE_API_KEY=$API_KEY" >> "$GITHUB_ENV"
+            echo "APPLE_API_KEY_PATH=$key" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No Apple signing secrets: the Mac app is unsigned and macOS asks before its first open."
+          fi
+
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -71,7 +96,6 @@ jobs:
           releaseName: "Vision desktop ${{ github.ref_name }}"
           releaseBody: |
             **macOS** (Apple Silicon and Intel): the .dmg.
-            The first time, macOS says it can't check the app: open System Settings → Privacy & Security and click Open Anyway.
             **Linux**: the .AppImage (updates itself), or the .rpm (Fedora) / .deb (Ubuntu, Debian).
             Vision runs on a computer with `vision serve`; the app sets it up if this computer doesn't have it.
           releaseDraft: true
