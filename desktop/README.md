@@ -65,8 +65,17 @@ variables › Actions, which needs admin on the repo). Without them the run warn
 | `TAURI_SIGNING_PRIVATE_KEY` | The updater's private key (`npx tauri signer generate`). Its public half is `plugins.updater.pubkey` in `tauri.conf.json`; lose the private key and installed apps can never update again, so keep a copy somewhere safe. |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password. |
 
-The Mac app isn't signed with an Apple Developer ID, so macOS makes people allow it once, in System Settings ›
-Privacy & Security, on first open. Updates after that install without asking.
+The Mac app is signed with a Developer ID and notarized when these secrets are there too; without them it
+is built unsigned and macOS makes people allow it once, in System Settings › Privacy & Security:
+
+| Secret | What it is |
+| --- | --- |
+| `APPLE_CERTIFICATE` | The Developer ID Application certificate and its private key, exported from Keychain Access as a `.p12`, then `base64 -i cert.p12`. |
+| `APPLE_CERTIFICATE_PASSWORD` | The password the `.p12` was exported with. |
+| `APPLE_SIGNING_IDENTITY` | The certificate's name, as `security find-identity -v -p codesigning` prints it. |
+| `APPLE_API_ISSUER` | Issuer ID of an App Store Connect API key (Users and Access › Integrations), for notarization. |
+| `APPLE_API_KEY` | That key's ID. |
+| `APPLE_API_KEY_P8` | The contents of its `AuthKey_<id>.p8`. |
 
 ## How it is put together
 
