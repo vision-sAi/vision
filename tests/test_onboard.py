@@ -292,7 +292,7 @@ class ServiceUnitTests(unittest.TestCase):
                 os.makedirs(d)
             for d in (ours, dev):
                 Path(d, "claude").write_text(brain._SHIM, encoding="utf-8")
-            Path(real, "claude").write_text("#!/bin/sh\n", encoding="utf-8")
+            Path(real, "claude").write_bytes(b"\xcf\xfa\xed\xfe\x07\x00")  # a Mach-O binary, not text
             path = os.pathsep.join([ours, dev, real, "/usr/bin"])
             self.assertEqual(brain.without_shims(path), os.pathsep.join([real, "/usr/bin"]))
 
