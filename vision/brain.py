@@ -221,8 +221,8 @@ def _holds_shims(d: str) -> bool:
     """Whether a folder holds Vision's fake provider CLIs: this Vision's, or another's (a dev copy's)."""
     for name in [p.cli for p in _REGISTRY.values() if p.cli]:
         try:
-            with open(os.path.join(d, name), encoding="utf-8") as f:
-                if "# Installed by Vision." in f.read(512):
+            with open(os.path.join(d, name), "rb") as f:  # bytes: the real `claude` is a binary
+                if b"# Installed by Vision." in f.read(512):
                     return True
         except OSError:
             continue
