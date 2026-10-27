@@ -1,6 +1,6 @@
 [package]
 name = "vision-desktop"
-version = "0.2.1"
+version = "0.2.2"
 description = "Vision on the desktop: a window onto `vision serve`"
 edition = "2024"
 
