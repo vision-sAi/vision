@@ -1,7 +1,7 @@
 name: desktop
 
-# The desktop app (desktop/) built for Linux and macOS. Pull requests check that it compiles (a debug
-# build, no installers); master and manual runs build the installers and return them as artifacts.
+# The desktop app (desktop/) on Linux and macOS. Pull requests run the Rust tests and build the web
+# side; master and manual runs build the installers too and return them as artifacts.
 on:
   push:
     branches: [master]
@@ -50,7 +50,7 @@ jobs:
       - run: npm ci
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - if: github.event_name == 'pull_request'
-        run: npx tauri build --debug --no-bundle
+        run: npm run build
       - if: github.event_name != 'pull_request'
         run: npx tauri build
       - if: github.event_name != 'pull_request'
