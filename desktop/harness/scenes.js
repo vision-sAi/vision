@@ -255,6 +255,7 @@
 
     agents: { ...base, http: AGENT_HTTP, asleep: [{ from: now - 9 * 3600, to: now - 2 * 3600 }], steps: [
       { wait: 300, click: ".side-row[data-action=agents]" },
+      { wait: 200, check: "the board's columns each carry their colour", fn: () => [...document.querySelectorAll(".lane")].map((l) => [...l.classList].find((c) => c.startsWith("tone-")) ?? "wide").join() === "tone-ask,tone-ready,tone-busy,tone-idle,wide" },
       { wait: 200, check: "the board groups threads by what they need", fn: () => [...document.querySelectorAll(".lane-head h3")].map((h) => h.textContent).join(",") === "Needs you,Ready for review,Working,Idle,Scheduled" },
       { check: "the sidebar badge counts what needs you", fn: () => document.querySelector("#agents-badge").textContent === "1" },
       { check: "a recent sleep is explained", fn: () => !!document.querySelector(".sleep-banner") },
@@ -337,11 +338,12 @@
     ] },
 
     scouts: { ...base, http: SCOUT_HTTP, steps: [
+      { wait: 300, check: "a scout waiting on you says so in amber", fn: () => document.querySelector(".chat-item.scout .scout-line")?.classList.contains("tone-ask") },
       { wait: 300, check: "the sidebar lists scouts with what they're doing", fn: () => document.querySelector(".chat-item.scout .scout-line")?.textContent.endsWith("3 need you") },
       { check: "a scout's own chat isn't listed with the chats", fn: () => ![...document.querySelectorAll(".chat-item:not(.scout) .chat-name")].some((n) => n.textContent === "Vision desktop app") },
       { check: "the Scouts heading counts who needs you", fn: () => document.querySelector(".scouts-head b")?.textContent === "1 needs you" },
       openAtlas,
-      { wait: 300, check: "a scout's page shows its name and goal", fn: () => document.querySelector(".scout-titles h1")?.textContent === "Atlas" && !!document.querySelector(".scout-goal")?.textContent },
+      { wait: 300, check: "a scout's page shows its name and goal", fn: () => document.querySelector(".scout-titles .scout-name")?.textContent === "Atlas" && document.querySelector(".scout-leash")?.textContent === "Check-ins" && !!document.querySelector(".scout-goal")?.textContent },
       { check: "the rail has its four sections", fn: () => [...document.querySelectorAll(".rail-head h3")].map((h) => h.textContent).join(",") === "Needs you,Activity,Leash,Remembers" },
       { check: "a thread report shows as a card", fn: () => document.querySelectorAll(".report-card .report-list li").length === 3 },
       { check: "what needs you is listed", fn: () => document.querySelectorAll(".need-card:not(.approval-card)").length === 2 },
@@ -429,7 +431,7 @@
       { type: [".scout-goal-input", "Watch my homelab and tell me when something looks off"] },
       { wait: 100, check: "the preview follows the picks", fn: () => document.querySelector(".scout-preview .buddy svg").innerHTML.includes("hsla(340,") },
       { run: () => document.querySelector(".scout-foot .primary").click() },
-      { wait: 200, check: "Send scout opens its page", fn: () => document.querySelector(".scout-titles h1")?.textContent === "Pip" },
+      { wait: 200, check: "Send scout opens its page", fn: () => document.querySelector(".scout-titles .scout-name")?.textContent === "Pip" },
       { check: "with its check-ins set", fn: () => window.__http.some((r) => r.path === "projects/p9/checkins" && r.body?.repeat === "daily" && r.body?.time === "08:00") },
       { run: () => document.querySelector(".chat-item.new-scout").click() },
       { wait: 150, run: () => { document.querySelector(".scout-goal-input").value = "Keep the dependencies up to date, one tidy PR at a time"; document.querySelector(".trait[data-trait=sprout]").click(); } },
@@ -439,6 +441,6 @@
       { wait: 300, check: "with no scouts the sidebar offers the first", fn: () => document.querySelector(".first-scout b")?.textContent === "Send your first scout" },
     ] },
 
-    collapsed: { ...base, steps: [{ wait: 300, click: ".side-top [data-action=toggle_sidebar]" }] },
+    collapsed: { ...base, steps: [{ wait: 300, click: ".side-top [data-action=toggle_sidebar]" }, { wait: 400, check: "the sidebar folds away", fn: () => document.querySelector(".main").getBoundingClientRect().left < 20 }] },
   };
 })();

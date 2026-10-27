@@ -81,17 +81,17 @@ function needCount(p: Json): number {
   return (t.waiting_on_you ?? 0) + (t.ready_for_review ?? 0) + (p.approvals?.length ?? 0);
 }
 
-/** The sidebar's line under a scout's name. */
-export function statusLine(p: Json): string {
-  const full = String(p.title || p.goal || "").split("\n")[0];
-  const goal = full.length <= 24 ? full : full.slice(0, 24).replace(/\s+\S*$/, "") + "…"; // so the state still shows
+/** What a scout is up to, in a word or two, and its colour: `ask` (amber) when something waits on you,
+ * `busy` (violet) while it works, `done` (green) after it found or landed something, `failed`, or `quiet`. */
+export function stateOf(p: Json): [string, string] {
   const n = needCount(p);
-  const state = n ? `${n} need${n === 1 ? "s" : ""} you`
-    : ({ worried: "something failed", focused: "working", curious: "reading up", proud: "landed something", found_it: "found it",
-        waking: "waking up", out_cold: "paused while asleep" } as Record<string, string>)[moodOf(p)]
-      ?? (p.status === "paused" ? "paused" : p.leash === "on_call" ? "on call"
-        : p.checkin?.schedule?.next_run ? nextWords(p.checkin.schedule.next_run) : "resting");
-  return [goal, state].filter(Boolean).join(" · ");
+  if (n) return [`${n} need${n === 1 ? "s" : ""} you`, "ask"];
+  const mood = moodOf(p);
+  const word = ({ worried: "something failed", focused: "working", curious: "reading up", proud: "landed something", found_it: "found it",
+    waking: "waking up", out_cold: "paused while asleep" } as Record<string, string>)[mood];
+  if (word) return [word, mood === "worried" ? "failed" : ["proud", "found_it"].includes(mood) ? "done" : mood === "out_cold" ? "quiet" : "busy"];
+  return [p.status === "paused" ? "paused" : p.leash === "on_call" ? "on call"
+    : p.checkin?.schedule?.next_run ? nextWords(p.checkin.schedule.next_run) : "resting", "quiet"];
 }
 
 // ---------------------------------------------------------------- events from main.ts
@@ -164,7 +164,8 @@ export function drawSidebar(nav: HTMLElement, query: string, onPage: boolean) {
     const quiet = !on && !["needs_you", "still_waiting", "found_it", "worried"].includes(mood);
     const item = el("div", "chat-item scout" + (on ? " active" : ""));
     const text = el("span", "scout-text");
-    text.append(el("span", "chat-name", nameOf(p)), el("span", "scout-line", statusLine(p)));
+    const [state, tone] = stateOf(p);
+    text.append(el("span", "chat-name", nameOf(p)), el("span", `scout-line tone-${tone}`, state));
     item.append(keptBuddy("side", p, mood, 26, { still: quiet }), text);
     item.title = [nameOf(p), p.goal, p.folder].filter(Boolean).join(" · ");
     item.onclick = () => host.open(p.id);
@@ -189,7 +190,7 @@ export function drawHome(box: HTMLElement) {
     const n = needCount(p);
     const card = el("button", "home-scout" + (n ? " needs" : ""));
     const text = el("span", "home-scout-text");
-    text.append(el("b", "", nameOf(p)), el("span", "home-scout-line", statusLine(p).split(" · ").pop() ?? ""));
+    text.append(el("b", "", nameOf(p)), el("span", "home-scout-line", stateOf(p)[0]));
     card.append(keptBuddy("home", p, mood, 34, { still: !["needs_you", "still_waiting", "found_it", "worried", "focused"].includes(mood) }), text);
     if (n) card.append(el("span", "pill ask", String(n)));
     card.title = [nameOf(p), p.goal].filter(Boolean).join(" · ");
@@ -209,19 +210,16 @@ export function drawHome(box: HTMLElement) {
 /** The page's header: the buddy, its name and goal, and the chips for its leash, folder and model. */
 export function drawHead(box: HTMLElement, p: Json) {
   box.replaceChildren();
-  box.append(keptBuddy("head", p, moodOf(p), 56, { pokeable: true }));
+  box.append(keptBuddy("head", p, moodOf(p), 40, { pokeable: true }));
   const text = el("div", "scout-titles");
-  const name = el("h1", "", nameOf(p));
+  const name = el("h1");
+  const leash = el("span", "scout-leash" + (p.status === "paused" ? " paused" : ""), p.status === "paused" ? "Paused" : leashWords(p));
+  leash.title = "Its leash: change it on the right";
+  name.append(el("span", "scout-name", nameOf(p)), leash);
   const goal = el("p", "scout-goal", p.goal ?? "");
-  goal.title = p.goal ?? "";
-  const chips = el("div", "scout-chips");
-  const leash = el("span", "chip-tag leash");
-  leash.append(el("span", "dot " + (p.status === "paused" ? "idle" : "busy-still")), document.createTextNode(p.status === "paused" ? "Paused" : leashWords(p)));
-  chips.append(leash);
-  if (p.folder) { const f = el("span", "chip-tag"); f.append(icon("Folder", 12), document.createTextNode(p.folder)); chips.append(f); }
   const chat = host.chatOf(p);
-  if (chat?.model) chips.append(el("span", "chip-tag", [chat.model, chat.effort].filter(Boolean).join(" · ")));
-  text.append(name, goal, chips);
+  goal.title = [p.goal, p.folder, chat?.model && [chat.model, chat.effort].filter(Boolean).join(" · ")].filter(Boolean).join("\n");
+  text.append(name, goal);
   const more = el("button", "icon-btn bordered");
   more.append(icon("Ellipsis", 16));
   more.title = "More";

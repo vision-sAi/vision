@@ -1170,9 +1170,7 @@ function applyAppearance(a: Json = system) {
   const pinned = localStorage.getItem("appearance");
   const scheme = pinned === "light" || pinned === "dark" ? pinned : a.scheme;
   if (scheme) root.dataset.theme = scheme; else delete root.dataset.theme;
-  const macAccent = a.os === "macos" && CSS.supports("color", "-apple-system-control-accent");
-  const accent = a.accent || (macAccent ? "-apple-system-control-accent" : "");
-  if (accent) root.style.setProperty("--accent", accent); else root.style.removeProperty("--accent");
+  // Violet is Vision's own colour: the system accent (a.accent) is not taken over it.
 }
 
 function toggleSidebar() {

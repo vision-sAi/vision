@@ -187,22 +187,24 @@ export function draw(box: HTMLElement) {
   if (banner) lanes.append(banner);
 
   const all = [...threads.values()].filter((t) => t.state !== "resolved").sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0));
-  const lane = (title: string, list: Json[], hint = "") => {
-    if (!list.length) return;
-    const section = el("section", "lane");
+  // Four columns, always in the same places once anything runs; the dot by each title says its kind.
+  const lane = (title: string, tone: string, list: Json[], empty: string) => {
+    const section = el("section", `lane tone-${tone}`);
     const head = el("div", "lane-head");
     head.append(el("h3", "", title), el("span", "lane-count", String(list.length)));
-    if (hint) head.append(el("span", "dim small", hint));
     section.append(head);
     const grid = el("div", "thread-grid");
     for (const t of list) grid.append(threadCard(t));
+    if (!list.length) grid.append(el("p", "dim small lane-empty", empty));
     section.append(grid);
     lanes.append(section);
   };
-  lane("Needs you", all.filter((t) => NEEDS.includes(t.state)));
-  lane("Ready for review", all.filter((t) => REVIEW.includes(t.state)));
-  lane("Working", all.filter((t) => WORKING.includes(t.state) || (t.queued && !NEEDS.includes(t.state) && !REVIEW.includes(t.state))));
-  lane("Idle", all.filter((t) => t.state === "idle" && !t.queued), "finished, nothing to land");
+  if (all.length) {
+    lane("Needs you", "ask", all.filter((t) => NEEDS.includes(t.state)), "Nothing waiting on you.");
+    lane("Ready for review", "ready", all.filter((t) => REVIEW.includes(t.state)), "Nothing to look at yet.");
+    lane("Working", "busy", all.filter((t) => WORKING.includes(t.state) || (t.queued && !NEEDS.includes(t.state) && !REVIEW.includes(t.state))), "Nothing running.");
+    lane("Idle", "idle", all.filter((t) => t.state === "idle" && !t.queued), "Finished, with nothing to land.");
+  }
 
   if (!all.length) {
     const empty = el("div", "board-empty");
@@ -237,8 +239,9 @@ function threadCard(t: Json): HTMLElement {
   const k = key(t.project, t.id);
   const [label, tone] = stateOf(t);
   const card = el("button", `thread-card tone-${tone}` + (selected === k ? " selected" : ""));
-  const top = el("div", "thread-top");
-  top.append(el("span", `pill ${tone}`, label), el("span", "thread-when dim small", ago(t.updated ?? 0)));
+  const top = el("div", "thread-top");  // its column says the state; the card says when
+  top.append(el("span", "thread-when dim small", ago(t.updated ?? 0)));
+  card.title = label;
   const project = host.projects().find((p) => p.id === t.project);
   const where = el("div", "thread-project dim small");
   where.append(icon("Layers", 12), document.createTextNode(project ? host.projectName(project) : t.project));
@@ -248,7 +251,7 @@ function threadCard(t: Json): HTMLElement {
 }
 
 function scheduledSection(): HTMLElement {
-  const section = el("section", "lane");
+  const section = el("section", "lane wide");
   const head = el("div", "lane-head");
   head.append(el("h3", "", "Scheduled"), el("span", "lane-count", String(scheduled.length)));
   section.append(head);
