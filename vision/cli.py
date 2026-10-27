@@ -4317,6 +4317,10 @@ def serve(
         other = running_server()
         return other if other and other.get("port") == (port or cfg.remote.port) and other["pid"] != os.getpid() else None
 
+    if os.environ.get(service.ENV):  # a unit written before install cleaned its PATH may still carry the shims
+        from vision.brain import without_shims
+
+        os.environ["PATH"] = without_shims(os.environ.get("PATH", ""))
     other = taken()  # looked at before the token is touched: --new-token must not strand a server that is up
     if other and os.environ.get(service.ENV):  # as the service: not a failure to retry, it takes over after
         console.print(f"vision serve is already running (pid {other['pid']}); the service takes over when it stops.")

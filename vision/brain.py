@@ -10,8 +10,10 @@ import json
 import os
 import queue
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -191,19 +193,47 @@ exit 1
 """
 
 
+def _vision_shim() -> str:
+    """`vision` for the model's shell: the Python running this turn, so a dev serve's turns run the dev
+    checkout's `vision remind`/`schedule` rather than whichever install comes first on PATH."""
+    return f"#!/bin/sh\n# Installed by Vision: runs the same Vision as the turn that called it.\nexec {shlex.quote(sys.executable)} -m vision \"$@\"\n"
+
+
 def _shim_dir() -> str:
-    """Directory holding fake `claude`, `codex` and `grok` commands; created/refreshed on demand ("" if it cannot be)."""
+    """Directory holding fake `claude`, `codex` and `grok` commands and the turn's own `vision`;
+    created/refreshed on demand ("" if it cannot be)."""
     d = DATA_DIR / "shims"
     try:
         d.mkdir(parents=True, exist_ok=True)
-        for name in [p.cli for p in _REGISTRY.values() if p.cli]:  # every provider CLI, blocked inside a turn
+        shims = {p.cli: _SHIM for p in _REGISTRY.values() if p.cli}  # every provider CLI, blocked inside a turn
+        shims["vision"] = _vision_shim()
+        for name, text in shims.items():
             f = d / name
-            if not f.exists() or f.read_text(encoding="utf-8") != _SHIM:
-                f.write_text(_SHIM, encoding="utf-8")
+            if not f.exists() or f.read_text(encoding="utf-8") != text:
+                f.write_text(text, encoding="utf-8")
             f.chmod(0o755)
     except OSError:
         return ""
     return str(d)
+
+
+def _holds_shims(d: str) -> bool:
+    """Whether a folder holds Vision's fake provider CLIs: this Vision's, or another's (a dev copy's)."""
+    for name in [p.cli for p in _REGISTRY.values() if p.cli]:
+        try:
+            with open(os.path.join(d, name), encoding="utf-8") as f:
+                if "# Installed by Vision." in f.read(512):
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def without_shims(path: str) -> str:
+    """PATH with Vision's shim folders taken out. A PATH saved or used outside a turn (the background
+    service's, written by `vision service install` from a shell that may itself be inside a turn) must
+    find the real `claude`, or every chat the service runs is blocked."""
+    return os.pathsep.join(d for d in path.split(os.pathsep) if d and not _holds_shims(d))
 
 
 def brain_env(provider: str, chat: str = "") -> dict[str, str]:

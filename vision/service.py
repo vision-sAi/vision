@@ -186,7 +186,9 @@ def install() -> Path:
     k = kind()
     if k is None:
         raise ServiceError("no user service manager here (systemd on Linux, launchd on macOS); run `vision serve` in a terminal instead")
-    path, env_path = unit_path(), os.environ.get("PATH", "")
+    from vision.brain import without_shims
+
+    path, env_path = unit_path(), without_shims(os.environ.get("PATH", ""))  # installed from inside a turn, too
     path.parent.mkdir(parents=True, exist_ok=True)
     if k == "systemd":
         path.write_text(systemd_unit(command(), env_path), encoding="utf-8")
