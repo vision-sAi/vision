@@ -279,6 +279,33 @@ class ServiceUnitTests(unittest.TestCase):
         self.assertIn("WantedBy=default.target", unit)
         self.assertIn('Environment="VISION_SERVICE=1"\n', unit)  # serve waits for one already up, then takes over
 
+    def test_the_service_never_keeps_visions_shims_on_its_path(self):
+        # Installed from a shell inside a Vision turn, the PATH starts with the shims that block `claude`;
+        # saved as is, every chat the service runs would be blocked. Another Vision's (a dev copy's) too.
+        import tempfile
+
+        from vision import brain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ours, dev, real = (os.path.join(tmp, d) for d in ("vision/shims", "vision-dev/vision/shims", "bin"))
+            for d in (ours, dev, real):
+                os.makedirs(d)
+            for d in (ours, dev):
+                Path(d, "claude").write_text(brain._SHIM, encoding="utf-8")
+            Path(real, "claude").write_text("#!/bin/sh\n", encoding="utf-8")
+            path = os.pathsep.join([ours, dev, real, "/usr/bin"])
+            self.assertEqual(brain.without_shims(path), os.pathsep.join([real, "/usr/bin"]))
+
+            plist = Path(tmp, "agent.plist")
+            with patch.dict(os.environ, {"PATH": path}), patch.object(service, "kind", return_value="launchd"), \
+                    patch.object(service, "unit_path", return_value=plist), patch.object(service, "_run"), \
+                    patch.object(service, "STATE_DIR", Path(tmp, "state")):
+                service.install()
+            import plistlib
+
+            saved = plistlib.loads(plist.read_bytes())["EnvironmentVariables"]["PATH"]
+            self.assertEqual(saved, os.pathsep.join([real, "/usr/bin"]))
+
     def test_the_service_waits_for_a_server_already_up_and_then_goes_on(self):
         answers, naps = [True, True, False], []
         service.wait_while(lambda: answers.pop(0), poll=2, sleep=naps.append)
