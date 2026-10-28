@@ -445,6 +445,28 @@ final class FakeServerTests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
     }
 
+    /// The drawer's search finds what was said in a chat, not only titles, and a hit opens that chat.
+    func testSearchFindsWhatWasSaidInAChat() throws {
+        try call("_scene", ["chats": [["chat": "c1", "title": "Groceries", "busy": false, "history_id": "h1", "updated": 2],
+                                      ["chat": "c2", "title": "Homelab backup plan", "busy": false, "history_id": "h2", "updated": 1]],
+                            "history": ["c1": [["role": "user", "text": "milk and eggs"]],
+                                        "c2": [["role": "user", "text": "what should the backup plan be?"],
+                                               ["role": "assistant", "text": "A weekly copy to the offsite box with restic."]]]])
+        let app = launch()
+        app.buttons["Chats"].tap()
+        let field = app.textFields["searchChats"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        field.tap()
+        field.typeText("restic")
+        let hit = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "offsite box")).firstMatch
+        XCTAssertTrue(hit.waitForExistence(timeout: 5), "In messages lists the chat with the line that matched")
+        XCTAssertTrue(text(app, containing: "In messages").exists)
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Groceries")).firstMatch.exists, "titles filter too")
+        XCTAssertNotNil(try frame { $0["type"] as? String == "_search" && $0["q"] as? String == "restic" })
+        hit.tap()
+        XCTAssertTrue(text(app, containing: "with restic").waitForExistence(timeout: 5), "the hit opens its chat")
+    }
+
     /// A pinned chat sits under Pinned above the others, and a long press pins another (the machine keeps it).
     func testAChatIsPinnedToTheTopOfTheDrawer() throws {
         try call("_scene", ["chats": [["chat": "c1", "title": "Groceries", "busy": false, "history_id": "h1", "pinned": true, "updated": 1,

@@ -16,6 +16,11 @@ struct ChatsView: View {
     /// fades, before the machine confirms; it comes back if the machine hasn't closed it in 10 s.
     @State private var fading: String?
     @State private var closed: Set<String> = []
+    /// The search field's words: titles filter as they're typed, and a moment later the machine is asked what was
+    /// said (GET /search), listed under In messages.
+    @State private var query = ""
+    @State private var hits: [SearchHit] = []
+    @FocusState private var searchFocused: Bool
     /// The main screen is the Projects screen rather than a chat: its row is lit.
     var projectsShown = false
     /// Put the Projects screen in the chat's place (true), or the chat back (false: a chat or a new one picked here).
@@ -39,9 +44,19 @@ struct ChatsView: View {
             .sorted { ($0.busy ? 1 : 0, $0.updated) > ($1.busy ? 1 : 0, $1.updated) }
     }
 
+    private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
+    private var titled: [ChatInfo] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty ? listed : listed.filter { $0.title.localizedCaseInsensitiveContains(q) || $0.folder.localizedCaseInsensitiveContains(q) }
+    }
     /// Pinned chats, above the rest (the machine keeps the pins, so the desktop app shows the same).
-    private var pinnedRows: [ChatInfo] { listed.filter(\.pinned) }
-    private var rows: [ChatInfo] { listed.filter { !$0.pinned } }
+    private var pinnedRows: [ChatInfo] { titled.filter(\.pinned) }
+    private var rows: [ChatInfo] { titled.filter { !$0.pinned } }
+    /// The machine's hits that a title match above doesn't already show (a scout's chat counts too).
+    private var messageHits: [SearchHit] {
+        let shown = Set(titled.map(\.id))
+        return searching ? hits.filter { hit in hit.role != "title" && !shown.contains(hit.chat) && client.chats.contains { $0.id == hit.chat } } : []
+    }
 
     private func chatRow(_ chat: ChatInfo) -> some View {
         Button {
@@ -67,11 +82,15 @@ struct ChatsView: View {
                 header
                     .padding(.top, 8)
                     .padding(.bottom, 10)
-                projectsRow
-                navRow("Library", icon: "books.vertical", sheet: .library)
-                navRow("Scheduled", icon: "clock", sheet: .scheduled)
-                navRow("Earlier conversations", icon: "bubble.left.and.text.bubble.right", sheet: .sessions)
-                navRow("Usage", icon: "gauge.with.dots.needle.67percent", sheet: .usage)
+                searchField
+                    .padding(.bottom, 6)
+                if !searching {
+                    projectsRow
+                    navRow("Library", icon: "books.vertical", sheet: .library)
+                    navRow("Scheduled", icon: "clock", sheet: .scheduled)
+                    navRow("Earlier conversations", icon: "bubble.left.and.text.bubble.right", sheet: .sessions)
+                    navRow("Usage", icon: "gauge.with.dots.needle.67percent", sheet: .usage)
+                }
             }
             .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
             .listRowBackground(Color.clear)
@@ -86,8 +105,14 @@ struct ChatsView: View {
             }
 
             Group {
-                if !rows.isEmpty || pinnedRows.isEmpty { sectionTitle("Chats") }
-                if listed.isEmpty {
+                if !rows.isEmpty || (pinnedRows.isEmpty && !searching) { sectionTitle("Chats") }
+                if searching && titled.isEmpty && messageHits.isEmpty {
+                    Text("Nothing matches")
+                        .themeFont(.body)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                } else if listed.isEmpty {
                     Text("No chats open")
                         .themeFont(.body)
                         .foregroundStyle(.secondary)
@@ -100,6 +125,22 @@ struct ChatsView: View {
             .listRowSeparator(.hidden)
 
             ForEach(rows) { chat in chatRow(chat) }
+
+            if !messageHits.isEmpty {
+                Group { sectionTitle("In messages") }
+                    .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                ForEach(messageHits) { hit in hitRow(hit) }
+            }
+        }
+        .task(id: query) {
+            let q = query.trimmingCharacters(in: .whitespaces)
+            guard q.count >= 2 else { hits = []; return }
+            try? await Task.sleep(for: .milliseconds(250))   // a pause in typing, not every letter
+            guard !Task.isCancelled else { return }
+            let found = await client.searchChats(q)
+            if !Task.isCancelled { hits = found }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -204,6 +245,73 @@ struct ChatsView: View {
             .padding(.bottom, 4)
             .padding(.horizontal, 12)
             .accessibilityAddTraits(.isHeader)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search chats", text: $query)
+                .themeFont(.body)
+                .focused($searchFocused)
+                .submitLabel(.search)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .accessibilityIdentifier("searchChats")
+            if !query.isEmpty {
+                Button { query = ""; searchFocused = false } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 38)
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 4)
+    }
+
+    /// One chat found by what was said in it: its name, and the line that matched with the words picked out.
+    private func hitRow(_ hit: SearchHit) -> some View {
+        let scout = client.projects.first { $0.chat == hit.chat }
+        let name = scout?.name ?? (client.chats.first { $0.id == hit.chat }?.title).flatMap { $0.isEmpty ? nil : $0 } ?? (hit.title.isEmpty ? "Chat" : hit.title)
+        return Button {
+            flash("hit:" + hit.chat) { openHit(hit) }
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(name).themeFont(size: 17).foregroundStyle(.primary).lineLimit(1)
+                Text(marked(hit.snippet)).themeFont(.footnote).foregroundStyle(.secondary).lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(DrawerRowStyle(selected: false, flashed: flashed == "hit:" + hit.chat))
+        .accessibilityLabel("\(name), \(hit.snippet)")
+        .listRowInsets(EdgeInsets(top: 1, leading: 12, bottom: 1, trailing: 12))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+    }
+
+    /// The snippet with every searched word in bold and the accent colour.
+    private func marked(_ text: String) -> AttributedString {
+        var out = AttributedString(text)
+        let lower = text.lowercased()
+        for word in query.lowercased().split(separator: " ").map(String.init) where !word.isEmpty {
+            var from = lower.startIndex
+            while let r = lower.range(of: word, range: from..<lower.endIndex) {
+                if let a = AttributedString.Index(r.lowerBound, within: out), let b = AttributedString.Index(r.upperBound, within: out) {
+                    out[a..<b].inlinePresentationIntent = .stronglyEmphasized
+                    out[a..<b].foregroundColor = theme.accent ?? Color.accentColor
+                }
+                from = r.upperBound
+            }
+        }
+        return out
+    }
+
+    private func openHit(_ hit: SearchHit) {
+        client.findInChat = query.trimmingCharacters(in: .whitespaces)
+        if let chat = client.chats.first(where: { $0.id == hit.chat }) { open(chat) }
     }
 
     private func open(_ chat: ChatInfo) {

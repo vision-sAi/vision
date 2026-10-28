@@ -175,6 +175,8 @@ struct ChatView: View {
     @State private var openGeneration = 0
     /// Earliest messages not drawn yet while a chat comes on screen (see `stageIn`).
     @State private var heldBack = 0
+    /// The message a search hit opened the chat at, lit for a moment (see jumpToFound).
+    @State private var found: Message.ID?
     /// A chat just opened is still filling in above the fold (its history landing, pictures arriving): the scroll
     /// holds its bottom still, in the same layout pass, until a drag, the keyboard or a new turn takes over.
     @State private var settling = false
@@ -576,6 +578,7 @@ struct ChatView: View {
                     }
                     ForEach(earlierMessages) { message in
                         MessageBubble(message: message, client: client).id(message.id)
+                            .background { FoundFlash(on: found == message.id) }
                     }
                     // Claude-app style: the sent message scrolls to the top and the reply streams into the space
                     // under it.  The turn is a screen-tall frame rather than a measured spacer, so the reply growing
@@ -589,6 +592,7 @@ struct ChatView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             ForEach(pinnedMessages) { message in
                                 MessageBubble(message: message, client: client).id(message.id)
+                                    .background { FoundFlash(on: found == message.id) }
                             }
                             // The end of what's written, not of the turn's screen-tall frame: the jump arrow aims here.
                             Color.clear.frame(height: 0).id("end")
@@ -676,6 +680,8 @@ struct ChatView: View {
                 if opening { scrollToBottom(proxy, animated: false) }
             }
             .onChange(of: client.activeChatID) { _, _ in openAtBottom(proxy) }
+            // A hit in the chat already on screen: no opening to wait for.
+            .onChange(of: client.findInChat) { _, words in if !words.isEmpty && !opening { jumpToFound(proxy) } }
             .onChange(of: client.busy) { _, busy in
                 call.busyChanged(busy)
                 if !busy { following = false }
@@ -703,11 +709,28 @@ struct ChatView: View {
         scrollToBottom(proxy, animated: false)
         DispatchQueue.main.async { scrollToBottom(proxy, animated: false); Perf.end("Open chat", drawn) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            if openGeneration == generation { opening = false }
+            if openGeneration == generation { opening = false; jumpToFound(proxy) }
         }
         // Pictures fetched from the machine can land well after that, over a slow connection especially.
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
             if openGeneration == generation { settling = false }
+        }
+    }
+
+    /// Opened from a search hit (`client.findInChat`): the newest message holding every word is scrolled to the
+    /// middle and lit for a moment, once its chat has settled at the bottom. Not on the phone (it holds the last 60
+    /// rows), the chat just stays at its bottom.
+    private func jumpToFound(_ proxy: ScrollViewProxy) {
+        let words = client.findInChat.lowercased().split(separator: " ").map(String.init)
+        client.findInChat = ""
+        guard !words.isEmpty, let hit = shown.last(where: { m in words.allSatisfy { m.text.lowercased().contains($0) } }) else { return }
+        heldBack = 0
+        settling = false
+        following = false
+        DispatchQueue.main.async {
+            withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(hit.id, anchor: .center) }
+            found = hit.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { if found == hit.id { found = nil } }
         }
     }
 
@@ -1821,3 +1844,18 @@ private struct GlancesPreview: View {
     }
 }
 #endif
+
+
+/// Behind a message a search hit opened the chat at: a soft accent glow that fades.
+private struct FoundFlash: View {
+    let on: Bool
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 14)
+            .fill((theme.accent ?? Color.accentColor).opacity(on ? 0.18 : 0))
+            .padding(-6)
+            .animation(.easeOut(duration: on ? 0.2 : 1.2), value: on)
+            .allowsHitTesting(false)
+    }
+}

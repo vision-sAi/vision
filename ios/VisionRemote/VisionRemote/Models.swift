@@ -616,6 +616,17 @@ struct ChatInfo: Identifiable, Equatable {
 
 /// A project on the machine: a goal, a folder and instructions around one chat (vision/projects.py).
 /// Its chat opens from the drawer's Projects page, not the list of chats.
+/// A chat where every word searched for turned up in one message (GET /search): that message, cut around
+/// the first hit. `role` is "title" when only the chat's title matched.
+struct SearchHit: Decodable, Identifiable, Equatable {
+    let chat: String
+    let title: String
+    let project: String
+    let role: String
+    let snippet: String
+    var id: String { chat }
+}
+
 struct ProjectInfo: Identifiable, Equatable {
     let id: String
     var title: String

@@ -972,6 +972,15 @@ final class VisionClient: ObservableObject {
         sendFrame(["type": "close"], chat: id)
     }
 
+    /// What was said in the open chats (GET /search): an older Vision has no such route, and nothing comes back.
+    func searchChats(_ query: String) async -> [SearchHit] {
+        guard let req = try? request("search", query: ["q": query]), let data = try? await perform(req) else { return [] }
+        return (try? JSONDecoder().decode([SearchHit].self, from: data)) ?? []
+    }
+
+    /// The words a search hit was opened for: the chat scrolls its newest message holding them into view, once.
+    @Published var findInChat = ""
+
     /// Pin a chat to the top of the list, or unpin it. The machine keeps it, so every app shows the same; the
     /// row moves at once and the machine's `chat` frame confirms it.
     func setPinned(_ id: String, _ on: Bool) {

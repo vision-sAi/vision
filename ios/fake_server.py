@@ -139,6 +139,23 @@ async def history(chat: str = "", limit: int = 60) -> list[dict]:
     return scene["history"].get(chat, [])
 
 
+@app.get("/search")
+async def search(q: str = "", limit: int = 30) -> list[dict]:
+    """vision/server.py Hub.search over the scene: chats whose message holds every word, newest message's text."""
+    words = q.lower().split()
+    frames.append({"type": "_search", "q": q})
+    if len(q.strip()) < 2 or not words:
+        return []
+    hits = []
+    for c in scene["chats"]:
+        rows = scene["history"].get(c["chat"], [])
+        row = next((r for r in reversed(rows) if all(w in str(r.get("text", "")).lower() for w in words)), None)
+        if row:
+            hits.append({"chat": c["chat"], "title": c.get("title", ""), "project": c.get("project", ""),
+                         "role": row.get("role", ""), "snippet": " ".join(str(row["text"]).split())[:140]})
+    return hits[:limit]
+
+
 @app.get("/providers")
 async def providers() -> dict:
     return {"providers": []}
