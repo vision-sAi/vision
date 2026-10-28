@@ -1362,3 +1362,35 @@ class PinTests(unittest.TestCase):
             hub.close_chat(chat)
             self.assertFalse(hub.is_pinned(chat.id))
             self.assertEqual(server.load_pinned(), set())
+
+
+class SearchTests(unittest.TestCase):
+    """GET /search: what was said in the open chats, one hit per chat, newest first, with a snippet."""
+
+    def test_every_word_must_turn_up_in_one_message_and_the_newest_mention_is_shown(self):
+        from types import SimpleNamespace
+
+        hub = SimpleNamespace(chats={
+            "a": SimpleNamespace(id="a", title="Router trouble", updated=1, project="", history=lambda n: [
+                {"role": "user", "text": "the Router keeps dropping wifi"},
+                {"role": "assistant", "text": "Reboot the router; the wifi firmware is old."}]),
+            "b": SimpleNamespace(id="b", title="Groceries", updated=2, project="p1", history=lambda n: [
+                {"role": "user", "text": "milk, eggs, a new router?"}]),
+            "c": SimpleNamespace(id="c", title="Taxes", updated=3, project="", history=lambda n: []),
+        })
+        search = server.Hub.search.__get__(hub)
+        hits = search("router WIFI")
+        self.assertEqual([h["chat"] for h in hits], ["a"], "both words in one message")
+        self.assertEqual((hits[0]["role"], hits[0]["snippet"]), ("assistant", "Reboot the router; the wifi firmware is old."))
+        self.assertEqual([h["chat"] for h in search("router")], ["b", "a"], "newest chat first")
+        self.assertEqual(search("taxes")[0]["role"], "title", "a title counts")
+        self.assertEqual(search("x"), [], "too short to search")
+        self.assertEqual(search("router", limit=1)[0]["project"], "p1")
+
+    def test_a_snippet_is_cut_around_the_first_hit_at_whole_words(self):
+        text = " ".join(f"word{i}" for i in range(60)) + " the needle is here " + " ".join(f"tail{i}" for i in range(60))
+        cut = server.snippet(text, "needle", width=80)
+        self.assertIn("needle", cut)
+        self.assertTrue(cut.startswith("…word") and cut.endswith("…"), cut)
+        self.assertLessEqual(len(cut), 82)
+        self.assertEqual(server.snippet("short\n  one", "one"), "short one")

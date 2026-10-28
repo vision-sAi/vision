@@ -444,6 +444,28 @@
       { wait: 300, check: "with no scouts the sidebar offers the first", fn: () => document.querySelector(".first-scout b")?.textContent === "Send your first scout" },
     ] },
 
+    // Search finds what was said, not only titles: a hit opens its chat at the message.
+    search: { ...base,
+      history: { ...HISTORY, c6: [
+        { role: "user", text: "what should the backup plan be for the NAS?" },
+        { role: "assistant", text: "Snapshots every night on the NAS itself, and a weekly copy of the important shares to the offsite box over Tailscale with restic." },
+        { role: "user", text: "ok, and how long do we keep them" },
+        { role: "assistant", text: "Thirty nightly snapshots and twelve weekly copies is plenty for a homelab." },
+      ] },
+      http: { "GET search": (q) => q.q === "restic" ? [
+        { chat: "c6", title: "Homelab backup plan", project: "", role: "assistant",
+          snippet: "…and a weekly copy of the important shares to the offsite box over Tailscale with restic." },
+      ] : [] },
+      steps: [
+        { wait: 300, type: ["#search", "restic"] },
+        { wait: 500, check: "search finds what was said in a chat, not just its title", fn: () => document.querySelector(".chat-item.hit .chat-name")?.textContent === "Homelab backup plan" },
+        { check: "the matching words are picked out", fn: () => document.querySelector(".hit-line mark")?.textContent === "restic" },
+        { check: "the server was asked", fn: () => window.__http.some((h) => h.path === "search" && h.query?.q === "restic") },
+        { click: ".chat-item.hit" },
+        { wait: 400, check: "a hit opens its chat at that message", fn: () => document.querySelector("#chat-title").textContent === "Homelab backup plan" && document.querySelector(".msg.found")?.textContent.includes("restic") },
+        { run: () => { const s = document.querySelector("#search"); s.value = "restic"; s.dispatchEvent(new Event("input", { bubbles: true })); } },
+      ] },
+
     collapsed: { ...base, steps: [{ wait: 300, click: ".side-top [data-action=toggle_sidebar]" }, { wait: 400, check: "the sidebar folds away", fn: () => document.querySelector(".main").getBoundingClientRect().left < 20 }] },
   };
 })();

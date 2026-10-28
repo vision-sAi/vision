@@ -138,6 +138,9 @@ A chat can be pinned to the top of the list: a long press and **Pin** on the pho
 row in the desktop app's sidebar (`pin {chat, pinned}`). The server keeps the pins in
 `~/.local/state/vision/pinned.json` and says `pinned` in each chat's summary, so every app shows the
 same; closing a chat drops its pin.
+The desktop app's search box looks inside the open chats too, not only their titles: under the titles
+that match, **In messages** lists each chat where every word turned up in one message, with that line,
+and a click opens the chat there (`GET /search?q=`; scout chats count).
 Banked limit resets and Grok's allowance on the usage page come from undocumented endpoints that Vision
 calls with the logins Claude Code and Grok saved on disk; `read_cli_logins = false` under `[brain]` keeps
 Vision out of those files.

@@ -459,9 +459,75 @@ function drawSidebar() {
     item.onclick = () => select(c.chat);
     nav.append(item);
   }
-  if (!all.length) nav.append(el("div", "empty-list", query ? "Nothing matches." : "No chats yet."));
+  const said = query ? messageHits(query, new Set(all.map((c) => c.chat))) : [];
+  if (said.length) {
+    nav.append(el("div", "group", "In messages"));
+    for (const h of said) nav.append(hitRow(h, query));
+  }
+  if (!all.length && !said.length) nav.append(el("div", "empty-list", !query ? "No chats yet." : found.query === query ? "Nothing matches." : "Searching…"));
   for (const b of document.querySelectorAll<HTMLElement>(".side-row[data-action=new_chat]")) b.classList.toggle("active", !!draft && view === "chat");
   for (const b of document.querySelectorAll<HTMLElement>(".side-row[data-action=agents]")) b.classList.toggle("active", view === "agents");
+}
+
+// ---------------------------------------------------------------- search inside chats
+
+let found: { query: string; hits: Json[] } = { query: "", hits: [] }; // the server's answer for the box's words
+let searchTimer = 0;
+let findInChat = "";  // a hit was opened: the words to bring into view once its transcript is drawn
+
+/** The search box changed: titles filter at once, and a moment later the server is asked what was said. */
+function onSearch() {
+  drawSidebar();
+  clearTimeout(searchTimer);
+  const query = $<HTMLInputElement>("search").value.trim().toLowerCase();
+  if (query.length < 2) { found = { query: "", hits: [] }; return; }
+  searchTimer = window.setTimeout(async () => {
+    try {
+      const hits: Json[] = await http("GET", "search", { q: query });
+      if ($<HTMLInputElement>("search").value.trim().toLowerCase() === query) { found = { query, hits }; drawSidebar(); }
+    } catch { /* an older Vision has no /search: titles still filter */ }
+  }, 220);
+}
+
+/** The server's hits for `query` that a title match above doesn't already show. */
+function messageHits(query: string, shown: Set<string>): Json[] {
+  if (found.query !== query) return [];
+  return found.hits.filter((h) => h.role !== "title" && !shown.has(h.chat) && chats.has(h.chat));
+}
+
+/** One hit: the chat's title, and the line that matched with the words picked out. */
+function hitRow(h: Json, query: string): HTMLElement {
+  const c = chats.get(h.chat);
+  const p = scouts.live().find((x) => x.chat === h.chat);
+  const item = el("div", "chat-item hit" + (h.chat === active ? " active" : ""));
+  const text = el("span", "chat-text");
+  text.append(el("span", "chat-name", p ? scouts.nameOf(p) : c?.title || h.title || "Chat"));
+  const line = el("span", "hit-line");
+  const words = query.split(/\s+/).filter(Boolean).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const parts = String(h.snippet ?? "").split(new RegExp(`(${words.join("|")})`, "ig"));
+  parts.forEach((part, i) => line.append(i % 2 ? el("mark", "", part) : document.createTextNode(part)));
+  text.append(line);
+  item.append(text);
+  item.title = h.snippet ?? "";
+  item.onclick = () => {
+    findInChat = query;
+    if (p) openScout(p.id); else select(h.chat);
+  };
+  return item;
+}
+
+/** After a hit is opened: the newest message holding the words scrolls into view and flashes. */
+function bringFoundIntoView() {
+  if (!findInChat) return;
+  const words = findInChat.split(/\s+/).filter(Boolean);
+  const msgs = [...$("transcript").querySelectorAll<HTMLElement>(".msg, .report-card, .checkin-card")];
+  const hit = msgs.reverse().find((m) => { const t = (m.textContent ?? "").toLowerCase(); return words.every((w) => t.includes(w)); });
+  if (!hit) return;
+  findInChat = "";
+  hit.scrollIntoView({ block: "center" });
+  hit.classList.remove("found");
+  void hit.offsetWidth;
+  hit.classList.add("found");
 }
 
 /** Pin a chat to the top of the list, or unpin it: the server keeps it, so the phone shows the same. */
@@ -717,6 +783,7 @@ function drawTranscript(jump: boolean) {
   });
   drawQueued();
   if (pinned) box.scrollTop = box.scrollHeight;
+  bringFoundIntoView();
 }
 
 /** Messages waiting for the running reply to finish, as the server lists them. */
@@ -1467,9 +1534,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     e.preventDefault();
     connect($<HTMLInputElement>("pair-url").value, $<HTMLInputElement>("pair-token").value, "");
   };
-  $("search").addEventListener("input", drawSidebar);
+  $("search").addEventListener("input", onSearch);
   $("search").addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { e.preventDefault(); ($("search") as HTMLInputElement).value = ""; drawSidebar(); $("input").focus(); }
+    if (e.key === "Escape") { e.preventDefault(); ($("search") as HTMLInputElement).value = ""; onSearch(); $("input").focus(); }
     if (e.key === "Enter") $("chats").querySelector<HTMLElement>(".chat-item")?.click();
   });
 
