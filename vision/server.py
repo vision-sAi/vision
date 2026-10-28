@@ -14,6 +14,7 @@ a phone → machine frame without one goes to the most recently active chat.
   phone → machine   message {chat, text, speak, voice, images?: [path…]} (photos, videos and files from /upload) · answer {chat, answers} · cancel {chat}
                    new {model?, effort?, workdir?, project?} (workdir: the folder the chat works in, as GET /folders lists them;
                      project: open that project's chat, or switch to it when it is already open) · close {chat} · resume {session_id, provider?} · model {chat, model, effort} · ping
+                   looking (the app came to the front: look for a newer Vision now, as connecting does)
                    mode {chat, mode} ("auto" or "plan", as /mode in the terminal; refused while the chat is replying)
                    hush {chat?} (a call hung up: no more speech for that chat's reply, every reply with no chat; the text carries on)
                    open_terminal {chat} (a terminal window here running `vision --join <chat>`; one per chat:
@@ -2210,6 +2211,7 @@ class Hub:
             "shell": True,  # runs the phone's shell-mode commands (`shell` frames): the app offers `!` only then
             "read_aloud": True,  # POST /speak/pieces: the app puts a read-aloud button under a reply only then
             "widgets": True,  # GET /widgets: the Home Screen widgets have something to ask
+            "looking": True,  # takes `looking` frames: an app sends one only then (an older Vision calls it unknown)
             "voice_on": self.cfg.voice.enabled,  # the voice switch; a `voice_power` frame when it changes
             "workdir": chats[0].workdir if chats else "",
             "asleep": self.sleep.recent() if getattr(self, "sleep", None) else [],  # suspends in the last day
@@ -2833,8 +2835,8 @@ class Hub:
             self._project_opening.pop(project["id"], None)
 
     def watch_updates(self) -> None:
-        """Ask the git remote now and every few hours whether a newer Vision is out, and tell the
-        phones as soon as the answer changes, not only on their next connect."""
+        """Ask the git remote now, every few minutes and whenever an app comes into view whether a newer
+        Vision is out, and tell the phones as soon as the answer changes, not only on their next connect."""
         def changed(check: selfupdate.Check) -> None:
             self.update_how = selfupdate.how() if check.available else None
             if check.available:
@@ -2877,6 +2879,9 @@ class Hub:
         kind = msg.get("type")
         if kind == "ping":
             await ws.send_json({"type": "pong"})
+            return
+        if kind == "looking":
+            selfupdate.nudge()
             return
         if kind == "new" and msg.get("project"):
             # A project's chat: the open one, or a new one in the project's folder.
@@ -4139,6 +4144,7 @@ def create_app(hub: Hub) -> FastAPI:
             hub.mirror_joined(mirror, websocket, int(pid) if pid.isdigit() else None)
         if who == "phone":
             hub.phones.add(websocket)
+            selfupdate.nudge()  # an app opening is when a newer Vision is worth knowing about
         hub.log(f"{who} connected ({len(hub.clients)} client{'s' if len(hub.clients) != 1 else ''})")
         try:
             await websocket.send_json(hub.hello())

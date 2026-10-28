@@ -33,6 +33,7 @@ let draft: Draft | null = null;
 let machine = "";
 let readAloudOn = false;                        // hello.read_aloud: POST /speak/pieces is there
 let shellOn = false;                            // hello.shell: the computer runs `!` commands
+let lookingOn = false;                          // hello.looking: the server takes `looking` frames
 let voiceOn = false;                            // hello.voice_on, then `voice_power` frames
 let serverVersion = "";
 let updateHow: string | null = null;            // hello.update: what to run, when a newer Vision is out
@@ -110,6 +111,7 @@ function handle(ev: Json) {
       machine = ev.name ?? "";
       readAloudOn = !!ev.read_aloud;
       shellOn = !!ev.shell;
+      lookingOn = !!ev.looking;
       voiceOn = !!ev.voice_on;
       serverVersion = ev.version ?? "";
       updateHow = ev.update ?? null;
@@ -1547,6 +1549,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     e.preventDefault();
     connect($<HTMLInputElement>("pair-url").value, $<HTMLInputElement>("pair-token").value, "");
   };
+  // Coming to the front: the server looks for a newer Vision now (it does on connect too), so a merge
+  // shows up as soon as the window is looked at. Quiet when it can't be sent: nothing is waiting on it.
+  window.addEventListener("focus", () => { if (lookingOn) invoke("send", { frame: { type: "looking" } }).catch(() => {}); });
   $("search").addEventListener("input", onSearch);
   $("search").addEventListener("keydown", (e) => {
     if (e.key === "Escape") { e.preventDefault(); ($("search") as HTMLInputElement).value = ""; onSearch(); $("input").focus(); }

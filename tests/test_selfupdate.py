@@ -211,6 +211,23 @@ class WatchTests(unittest.TestCase):
         # unknown and "none" at first say nothing; then the update, and its going
         self.assertEqual(said, [True, False])
 
+    def test_a_nudge_looks_now_but_not_twice_in_a_minute(self):
+        looked = []
+        with patch.object(selfupdate, "behind", side_effect=lambda: looked.append(time.time()) or False):
+            selfupdate.watch(lambda c: None, every=3600, retry=3600)
+            deadline = time.time() + 5
+            while not looked and time.time() < deadline:
+                time.sleep(0.01)
+            selfupdate.nudge()  # it looked a moment ago: nothing
+            time.sleep(0.2)
+            self.assertEqual(len(looked), 1)
+            with patch.object(selfupdate, "_check", selfupdate.Check(time.time() - selfupdate.NUDGE_GAP, False)):
+                selfupdate.nudge()
+                deadline = time.time() + 5
+                while len(looked) < 2 and time.time() < deadline:
+                    time.sleep(0.01)
+            self.assertEqual(len(looked), 2)
+
 
 class HelloTests(unittest.TestCase):
     """The phone hears the compatibility number, and about an update only from `vision serve`."""

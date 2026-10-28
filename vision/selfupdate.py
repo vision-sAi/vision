@@ -22,6 +22,8 @@ from pathlib import Path
 
 CHECK_TTL = 3600  # one look at the remote is good for this long (it is one small `git ls-remote`)
 RETRY = 30 * 60  # after a look that couldn't tell (offline at boot, say), `watch` tries again this soon
+WATCH_EVERY = 10 * 60  # how often `vision serve` looks on its own
+NUDGE_GAP = 60  # an app coming into view makes `watch` look now, unless it looked this recently
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -180,9 +182,21 @@ def peek_or_ask(on_answer=None) -> Check | None:
     return cached
 
 
-def watch(on_change, *, every: float = CHECK_TTL, retry: float = RETRY) -> threading.Thread:
+_wake = threading.Event()
+
+
+def nudge() -> None:
+    """Someone is looking (an app connected or came to the front): `watch` looks now, not at its next
+    turn, so a merge shows within seconds of opening the app. At most once per NUDGE_GAP."""
+    cached = last()
+    if cached is None or time.time() - cached.at >= NUDGE_GAP:
+        _wake.set()
+
+
+def watch(on_change, *, every: float = WATCH_EVERY, retry: float = RETRY) -> threading.Thread:
     """For `vision serve`: look now and every `every` seconds after (`retry` after a look that couldn't
-    tell), calling `on_change(check)` whenever the answer moves between update and none."""
+    tell), or sooner when nudged, calling `on_change(check)` whenever the answer moves between update
+    and none."""
     def loop():
         said = False
         while True:
@@ -190,7 +204,8 @@ def watch(on_change, *, every: float = CHECK_TTL, retry: float = RETRY) -> threa
             if fresh.available is not None and fresh.available != said:
                 said = fresh.available
                 on_change(fresh)
-            time.sleep(every if fresh.available is not None else retry)
+            _wake.wait(every if fresh.available is not None else retry)
+            _wake.clear()
 
     thread = threading.Thread(target=loop, daemon=True, name="selfupdate-watch")
     thread.start()
