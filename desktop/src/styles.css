@@ -346,18 +346,11 @@ svg.icon { width: 16px; height: 16px; stroke-width: 1.8; flex: none; }
 .home-chat-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------------------------------------------------------------- dock and composer */
-.dock { position: relative; flex: none; display: flex; flex-direction: column; align-items: center; padding: 0 28px 18px; }
+.dock { flex: none; display: flex; flex-direction: column; align-items: center; padding: 0 28px 18px; }
 .dock > * { width: 100%; max-width: 724px; }
 .dock .question { width: 100%; margin: 0 0 10px; }
-/* Floats over the transcript's bottom edge, so the chat doesn't move when it comes and goes. */
-.suggestion {
-  position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); z-index: 2; box-shadow: var(--shadow);
-  display: flex; align-items: center; gap: 7px; width: auto; max-width: min(724px, calc(100% - 56px)); margin-bottom: 8px;
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); background: var(--card); color: var(--dim); border-radius: 10px; padding: 5px 12px; font-size: 13px;
-}
-.suggestion span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.suggestion:hover { color: var(--text); border-color: var(--line-strong); }
-.suggestion svg.icon { color: var(--accent); }
+/* A suggested reply shows as the empty composer's placeholder; Tab types it in. */
+.composer textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .composer {
   display: flex; flex-direction: column; background: var(--card); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
   border-radius: 18px; padding: 12px 10px 8px 16px; box-shadow: var(--glow), var(--shadow); transition: border-color 0.15s, box-shadow 0.15s;
