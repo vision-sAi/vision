@@ -525,6 +525,7 @@ function bringFoundIntoView() {
   if (!hit) return;
   findInChat = "";
   hit.scrollIntoView({ block: "center" });
+  stuck = nearBottom($("transcript")); // or following the bottom would pull it straight back down
   hit.classList.remove("found");
   void hit.offsetWidth;
   hit.classList.add("found");
@@ -748,9 +749,16 @@ function drawRecent() {
 const rendered = new WeakMap<Msg, HTMLElement>(); // finished messages drawn once, reused while a reply streams
 const drawnCount = new Map<string, number>(); // chat → how many messages it showed last time; any past that ease in
 
+/** Whether the transcript is following the bottom: set by the reader's own scrolling, kept through anything that
+ * changes heights later (images loading, the composer growing, the question form opening). */
+let stuck = true;
+const nearBottom = (b: HTMLElement) => b.scrollHeight - b.scrollTop - b.clientHeight < 80;
+const follow = new ResizeObserver(() => { const b = $("transcript"); if (stuck) b.scrollTop = b.scrollHeight; });
+$("transcript").addEventListener("scroll", (e) => { stuck = nearBottom(e.currentTarget as HTMLElement); }, { passive: true });
+
 function drawTranscript(jump: boolean) {
   const box = $("transcript");
-  const pinned = jump || box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const pinned = jump || stuck;
   box.replaceChildren();
   const list = active ? transcripts.get(active) ?? [] : [];
   const scout = view === "scout" ? scouts.project(scouts.current) : undefined;
@@ -783,7 +791,11 @@ function drawTranscript(jump: boolean) {
     box.append(node);
   });
   drawQueued();
+  stuck = pinned;
   if (pinned) box.scrollTop = box.scrollHeight;
+  follow.disconnect();
+  follow.observe(box);
+  for (const n of box.children) follow.observe(n);
   bringFoundIntoView();
 }
 
@@ -803,6 +815,7 @@ function drawQueued() {
     wrap.append(m);
   }
   box.append(wrap);
+  follow.observe(wrap);
 }
 
 function drawQuestion() {
@@ -810,7 +823,7 @@ function drawQuestion() {
   const qs = active ? questions.get(active) : undefined;
   // The form takes room from the transcript: one that was following the reply keeps following it.
   const t = $("transcript");
-  const pinned = t.scrollHeight - t.scrollTop - t.clientHeight < 80;
+  const pinned = stuck;
   box.hidden = !qs?.length;
   box.replaceChildren();
   const plan = qs?.length === 1 && qs[0].header === "Plan" ? qs[0] : null;
@@ -1470,7 +1483,7 @@ function drawShellMode() {
 /** The send button greys out while there's nothing to send. */
 function drawSendReady() {
   const empty = !$<HTMLTextAreaElement>("input").value.trim() && !attachments.length;
-  $("composer").classList.toggle("empty", empty);
+  $("composer").classList.toggle("blank", empty);
 }
 
 function grow(t: HTMLTextAreaElement) {
