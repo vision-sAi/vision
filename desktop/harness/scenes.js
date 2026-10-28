@@ -466,6 +466,29 @@
         { run: () => { const s = document.querySelector("#search"); s.value = "restic"; s.dispatchEvent(new Event("input", { bubbles: true })); } },
       ] },
 
+    // Files from the file manager come as a native drop (paths); a screenshot pasted comes from the native clipboard.
+    drop: { ...base, clipboard: [{ name: "pasted image.png", path: "/home/me/.local/share/vision/uploads/x-pasted-image.png" }], steps: [
+      { wait: 300, run: () => window.__emit("tauri://drag-enter", { paths: ["/home/me/Pictures/chart.png"], position: { x: 600, y: 400 } }) },
+      { wait: 50, check: "dragging files over the window says where they'll go", fn: () => !document.querySelector("#drop").hidden },
+      { run: () => window.__emit("tauri://drag-drop", { paths: ["/home/me/Pictures/chart.png", "/home/me/notes.txt"], position: { x: 600, y: 400 } }) },
+      { wait: 300, check: "files dropped from the file manager are attached", fn: () => [...document.querySelectorAll(".attachment span")].map((s) => s.textContent).join() === "chart.png,notes.txt" && document.querySelector("#drop").hidden },
+      { check: "a dropped picture shows a preview", fn: () => !!document.querySelector(".attachment img") },
+      { run: () => {
+        const dt = new DataTransfer();
+        dt.setData("image/png", "x");  // a screenshot: a picture on the clipboard, no file the page can read
+        document.querySelector("#input").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+      } },
+      { wait: 300, check: "a pasted screenshot is attached", fn: () => [...document.querySelectorAll(".attachment span")].some((s) => s.textContent === "pasted image.png") },
+      { run: () => {
+        const dt = new DataTransfer();
+        dt.setData("text/plain", "just some words");
+        const ev = new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true });
+        document.querySelector("#input").dispatchEvent(ev);
+        window.__textPasteKept = !ev.defaultPrevented;
+      } },
+      { wait: 50, check: "plain text still pastes as text", fn: () => window.__textPasteKept === true && document.querySelectorAll(".attachment").length === 3 },
+    ] },
+
     collapsed: { ...base, steps: [{ wait: 300, click: ".side-top [data-action=toggle_sidebar]" }, { wait: 400, check: "the sidebar folds away", fn: () => document.querySelector(".main").getBoundingClientRect().left < 20 }] },
   };
 })();
