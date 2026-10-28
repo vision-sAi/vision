@@ -75,8 +75,9 @@ async function loadHistory(chat: string) {
     const c = chats.get(chat);
     if (c?.busy) list.push(...liveFrom(c));
     transcripts.set(chat, list);
-    if (chat === active) drawTranscript(true);
+    if (chat === active) { drawTranscript(true); findInChat = ""; } // a search hit stays wanted until the fresh history is drawn
   } catch (e) {
+    if (chat === active) findInChat = "";
     toast(`Couldn't load that chat: ${e}`);
   }
 }
@@ -523,8 +524,8 @@ function bringFoundIntoView() {
   const msgs = [...$("transcript").querySelectorAll<HTMLElement>(".msg, .report-card, .checkin-card")];
   const hit = msgs.reverse().find((m) => { const t = (m.textContent ?? "").toLowerCase(); return words.every((w) => t.includes(w)); });
   if (!hit) return;
-  findInChat = "";
   hit.scrollIntoView({ block: "center" });
+  stuck = nearBottom($("transcript")); // or following the bottom would pull it straight back down
   hit.classList.remove("found");
   void hit.offsetWidth;
   hit.classList.add("found");
@@ -748,9 +749,16 @@ function drawRecent() {
 const rendered = new WeakMap<Msg, HTMLElement>(); // finished messages drawn once, reused while a reply streams
 const drawnCount = new Map<string, number>(); // chat → how many messages it showed last time; any past that ease in
 
+/** Whether the transcript is following the bottom: set by the reader's own scrolling, kept through anything that
+ * changes heights later (images loading, the composer growing, the question form opening). */
+let stuck = true;
+const nearBottom = (b: HTMLElement) => b.scrollHeight - b.scrollTop - b.clientHeight < 80;
+const follow = new ResizeObserver(() => { const b = $("transcript"); if (stuck) b.scrollTop = b.scrollHeight; });
+$("transcript").addEventListener("scroll", (e) => { stuck = nearBottom(e.currentTarget as HTMLElement); }, { passive: true });
+
 function drawTranscript(jump: boolean) {
   const box = $("transcript");
-  const pinned = jump || box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const pinned = jump || stuck;
   box.replaceChildren();
   const list = active ? transcripts.get(active) ?? [] : [];
   const scout = view === "scout" ? scouts.project(scouts.current) : undefined;
@@ -783,7 +791,11 @@ function drawTranscript(jump: boolean) {
     box.append(node);
   });
   drawQueued();
+  stuck = pinned;
   if (pinned) box.scrollTop = box.scrollHeight;
+  follow.disconnect();
+  follow.observe(box);
+  for (const n of box.children) follow.observe(n);
   bringFoundIntoView();
 }
 
@@ -803,6 +815,7 @@ function drawQueued() {
     wrap.append(m);
   }
   box.append(wrap);
+  follow.observe(wrap);
 }
 
 function drawQuestion() {
@@ -810,7 +823,7 @@ function drawQuestion() {
   const qs = active ? questions.get(active) : undefined;
   // The form takes room from the transcript: one that was following the reply keeps following it.
   const t = $("transcript");
-  const pinned = t.scrollHeight - t.scrollTop - t.clientHeight < 80;
+  const pinned = stuck;
   box.hidden = !qs?.length;
   box.replaceChildren();
   const plan = qs?.length === 1 && qs[0].header === "Plan" ? qs[0] : null;
@@ -902,10 +915,10 @@ function drawDock() {
   const c = active ? chats.get(active) : undefined;
   const busy = !!c?.busy;
   $("stop").hidden = !busy;
-  drawSendReady();
   const scout = view === "scout" ? scouts.project(scouts.current) : undefined;
+  suggested = !draft && !busy ? c?.suggestion ?? "" : "";
   $<HTMLTextAreaElement>("input").placeholder = draft ? "What should Vision work on?" : busy ? "Queue a message"
-    : scout ? `Tell ${scouts.nameOf(scout)} what to do next…` : "Message Vision";
+    : suggested || (scout ? `Tell ${scouts.nameOf(scout)} what to do next…` : "Message Vision");
   $("folder-text").textContent = draft ? draft.folder || "Folder" : c?.folder || "";
   $("folder").hidden = !draft && !c?.folder;
   $("folder").classList.toggle("fixed", !draft);
@@ -915,11 +928,7 @@ function drawDock() {
   const mode = draft ? draft.mode : c?.mode ?? "auto";
   for (const b of $("mode").querySelectorAll<HTMLElement>("button")) b.classList.toggle("on", b.dataset.mode === mode);
   $("mode").hidden = !draft && !c;
-  const suggestion = !draft && !busy ? c?.suggestion ?? "" : "";
-  const s = $("suggestion");
-  s.hidden = !suggestion;
-  s.replaceChildren(icon("Sparkles", 14), el("span", "", suggestion));
-  s.onclick = () => { const i = $<HTMLTextAreaElement>("input"); i.value = suggestion; grow(i); i.focus(); };
+  drawSendReady();
   drawAttachments();
 }
 
@@ -1470,8 +1479,11 @@ function drawShellMode() {
 /** The send button greys out while there's nothing to send. */
 function drawSendReady() {
   const empty = !$<HTMLTextAreaElement>("input").value.trim() && !attachments.length;
-  $("composer").classList.toggle("empty", empty);
+  $("composer").classList.toggle("blank", empty);
 }
+
+/** The reply Vision suggests for the active chat: the empty composer's placeholder, typed in by Tab. */
+let suggested = "";
 
 function grow(t: HTMLTextAreaElement) {
   drawSendReady();
@@ -1545,6 +1557,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   const input = $<HTMLTextAreaElement>("input");
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
+    if (e.key === "Tab" && !e.shiftKey && suggested && !input.value) {
+      e.preventDefault();
+      input.value = suggested;
+      grow(input);
+      drawShellMode();
+    }
   });
   input.addEventListener("input", () => { grow(input); drawShellMode(); });
   input.addEventListener("paste", (e) => {
