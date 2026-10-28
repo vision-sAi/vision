@@ -484,11 +484,53 @@ fn shell(command: &str) -> std::process::Command {
     let sh = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
     let mut cmd = std::process::Command::new(sh);
     cmd.arg("-l").arg("-c").arg(command);
-    if let Some(home) = dirs::home_dir() {
-        let path = std::env::var("PATH").unwrap_or_default();
-        cmd.env("PATH", format!("{}:{path}", home.join(".local/bin").display()));
+    for (key, value) in child_env(std::env::vars(), dirs::home_dir().as_deref()) {
+        match value {
+            Some(v) => cmd.env(key, v),
+            None => cmd.env_remove(key),
+        };
     }
     cmd
+}
+
+/// What a command run from the app gets changed in its environment: `(name, Some(value))` to set,
+/// `(name, None)` to remove.
+///
+/// An AppImage's launcher points PYTHONHOME, PYTHONPATH, LD_LIBRARY_PATH, GTK's and GIO's variables and
+/// PATH into the AppImage's own mount (`APPDIR`), for the app. Passed on, they break what the app runs:
+/// Python looks for itself in the mount and dies before its first line (`vision upgrade` stopped with
+/// "<no Python frame>"). So a variable pointing only into the mount goes, a list keeps its other entries,
+/// and the launcher's PYTHONDONTWRITEBYTECODE goes with them. PATH also loses Vision's shims (they stop
+/// `claude` and the like inside a Vision turn, and an app started from one would inherit them) and starts
+/// with ~/.local/bin, where Vision installs itself.
+fn child_env(vars: impl Iterator<Item = (String, String)>, home: Option<&std::path::Path>) -> Vec<(String, Option<String>)> {
+    let vars: Vec<(String, String)> = vars.collect();
+    let get = |k: &str| vars.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let appdir = get("APPDIR").filter(|d| !d.is_empty()).map(|d| d.trim_end_matches('/').to_string());
+    let inside = |entry: &str| appdir.as_deref().is_some_and(|d| entry == d || entry.starts_with(&format!("{d}/")));
+    let mut out = Vec::new();
+    if appdir.is_some() {
+        for (name, value) in &vars {
+            if name == "PATH" || !value.contains(appdir.as_deref().unwrap_or_default()) {
+                continue;
+            }
+            let kept: Vec<&str> = value.split(':').filter(|e| !e.is_empty() && !inside(e)).collect();
+            let listed = value.contains(':') && !kept.is_empty() && name != "PYTHONHOME";
+            out.push((name.clone(), listed.then(|| kept.join(":"))));
+        }
+        out.push(("APPDIR".into(), None));
+        out.push(("PYTHONDONTWRITEBYTECODE".into(), None));
+    }
+    let path = get("PATH").unwrap_or_default();
+    let mut entries: Vec<String> = home.map(|h| h.join(".local/bin").display().to_string()).into_iter().collect();
+    for e in path.split(':') {
+        if e.is_empty() || inside(e) || e.trim_end_matches('/').ends_with("vision/shims") || entries.iter().any(|x| x == e) {
+            continue;
+        }
+        entries.push(e.to_string());
+    }
+    out.push(("PATH".into(), Some(entries.join(":"))));
+    out
 }
 
 fn quote(arg: &str) -> String {
@@ -694,6 +736,39 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn env(pairs: &[(&str, &str)]) -> Vec<(String, Option<String>)> {
+        child_env(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())), Some(std::path::Path::new("/home/me")))
+    }
+
+    #[test]
+    fn commands_from_an_appimage_get_none_of_its_environment() {
+        let m = "/tmp/.mount_VisionAB12";
+        let got = env(&[
+            ("APPDIR", m),
+            ("PYTHONHOME", &format!("{m}/usr/")),
+            ("PYTHONPATH", &format!("{m}/usr/share/pyshared/:")),
+            ("PYTHONDONTWRITEBYTECODE", "1"),
+            ("LD_LIBRARY_PATH", &format!("{m}/usr/lib/:{m}/usr/lib64")),
+            ("XDG_DATA_DIRS", &format!("{m}/usr/share:/usr/share")),
+            ("HOME", "/home/me"),
+            ("PATH", &format!("{m}/usr/bin/:/home/me/.local/share/vision/shims:/usr/bin:/home/me/.local/bin")),
+        ]);
+        let of = |k: &str| got.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(of("PYTHONHOME"), Some(None), "Python finds its own home again");
+        assert_eq!(of("PYTHONPATH"), Some(None));
+        assert_eq!(of("PYTHONDONTWRITEBYTECODE"), Some(None));
+        assert_eq!(of("LD_LIBRARY_PATH"), Some(None));
+        assert_eq!(of("XDG_DATA_DIRS"), Some(Some("/usr/share".into())), "a list keeps what isn't in the mount");
+        assert_eq!(of("HOME"), None, "the rest is left alone");
+        assert_eq!(of("PATH"), Some(Some("/home/me/.local/bin:/usr/bin".into())), "no mount, no shims, ~/.local/bin first");
+    }
+
+    #[test]
+    fn outside_an_appimage_only_path_changes() {
+        let got = env(&[("PYTHONHOME", "/opt/py"), ("PATH", "/usr/bin")]);
+        assert_eq!(got, vec![("PATH".to_string(), Some("/home/me/.local/bin:/usr/bin".to_string()))]);
+    }
 
     #[test]
     fn addresses_are_normalized_like_the_phone_does() {
