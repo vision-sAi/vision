@@ -200,12 +200,12 @@ def watch(on_change, *, every: float = WATCH_EVERY, retry: float = RETRY) -> thr
     def loop():
         said = False
         while True:
+            _wake.clear()  # this look answers every nudge so far
             fresh = check(max_age=0)
             if fresh.available is not None and fresh.available != said:
                 said = fresh.available
                 on_change(fresh)
             _wake.wait(every if fresh.available is not None else retry)
-            _wake.clear()
 
     thread = threading.Thread(target=loop, daemon=True, name="selfupdate-watch")
     thread.start()
