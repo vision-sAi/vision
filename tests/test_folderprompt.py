@@ -23,6 +23,33 @@ class FolderPromptTests(unittest.TestCase):
         self.patch.stop()
         self.tmp.cleanup()
 
+    def test_each_brain_gets_the_other_clis_instruction_file(self):
+        (self.repo / "CLAUDE.md").write_text("Commit subjects are plain sentences.\n")
+        (self.repo / "AGENTS.md").write_text("Run the tests before a PR.\n")
+        (self.repo / ".vision.md").write_text("Speak plainly.\n")
+        codex = folderprompt.for_brain(str(self.sub), BrainConfig(model="gpt-5.5"))
+        self.assertIn("Commit subjects are plain sentences.", codex, "Codex reads AGENTS.md itself, so it's handed CLAUDE.md")
+        self.assertNotIn("Run the tests before a PR.", codex)
+        self.assertIn("Speak plainly.", codex)
+        claude = folderprompt.for_brain(str(self.sub), BrainConfig(model="opus"))
+        self.assertIn("Run the tests before a PR.", claude)
+        self.assertNotIn("Commit subjects are plain sentences.", claude)
+        other = folderprompt.for_brain(str(self.sub), BrainConfig(model="grok-4"))
+        self.assertIn("Commit subjects", other)
+        self.assertIn("Run the tests", other, "a brain reading neither gets both")
+        self.assertEqual(folderprompt.summary(str(self.sub), BrainConfig(model="gpt-5.5")), "instructions: .vision.md + CLAUDE.md")
+
+    def test_a_linked_file_is_handed_over_once_and_not_at_all_when_read_under_its_own_name(self):
+        (self.repo / "CLAUDE.md").write_text("Same rules for everyone.\n")
+        (self.repo / "AGENTS.md").symlink_to(self.repo / "CLAUDE.md")
+        grok = folderprompt.for_brain(str(self.repo), BrainConfig(model="grok-4"))
+        self.assertEqual(grok.count("Same rules for everyone."), 1)
+        self.assertEqual(folderprompt.for_brain(str(self.repo), BrainConfig(model="gpt-5.5")), "", "Codex reads it as AGENTS.md")
+
+    def test_switching_the_feature_off_drops_the_cli_files_too(self):
+        (self.repo / "CLAUDE.md").write_text("rules\n")
+        self.assertEqual(folderprompt.for_brain(str(self.repo), BrainConfig(model="gpt-5.5", folder_instructions="")), "")
+
     def test_nearest_first_and_stops_at_the_repository_root(self):
         (self.home / ".vision.md").write_text("home-wide\n")  # above the repo root: not seen from inside it
         (self.repo / ".vision.md").write_text("repo-wide\n")
@@ -71,8 +98,8 @@ class FolderPromptTests(unittest.TestCase):
     def test_configured_name(self):
         (self.repo / "AGENTS.md").write_text("agents rules\n")
         cfg = BrainConfig(folder_instructions="AGENTS.md")
-        self.assertIn("agents rules", folderprompt.for_brain(str(self.sub), cfg))
-        self.assertEqual(folderprompt.for_brain(str(self.sub), BrainConfig()), "")
+        self.assertEqual(folderprompt.for_brain(str(self.sub), cfg).count("agents rules"), 1, "read once, not handed over again")
+        self.assertEqual(folderprompt.for_brain(str(self.sub), BrainConfig(model="gpt-5.5")), "", "Codex reads AGENTS.md itself")
 
     def test_system_prompt_and_worker_prompt_carry_the_section(self):
         from vision.delegation import worker_prompt

@@ -2889,13 +2889,18 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 note("folder instructions are off ([brain].folder_instructions is empty)")
                 return
             found = folderprompt.load(brain.workdir, name)
-            if not found:
+            other = folderprompt.cli_files(brain.workdir, brain.cfg)
+            if not found and not other:
                 note(f"no {name} in {short_path(brain.workdir)} or the folders above it (up to the repository root or home); "
                      "write one there and every brain reads it from the next reply on")
                 return
             parts = []
             for ins in found:  # nearest first, as /cd's note counts them
                 head = short_path(str(ins.path)) + (f" (cut at {folderprompt.MAX_CHARS} characters)" if ins.cut else "")
+                parts.append(f"[bold]{head}[/bold]\n{escape(ins.text)}")
+            for ins in other:  # another CLI's file: this brain's own CLI wouldn't read it
+                head = short_path(str(ins.path)) + " (handed over: this brain doesn't read it by itself)" + (
+                    f" (cut at {folderprompt.CLI_MAX_CHARS} characters)" if ins.cut else "")
                 parts.append(f"[bold]{head}[/bold]\n{escape(ins.text)}")
             note("\n\n".join(parts))
         elif cmd in ("diff", "rewind"):
@@ -3711,17 +3716,56 @@ def weather(
         raise SystemExit(f"weather: {e}")
 
 
+def _memory_import(source: str) -> None:
+    """`vision memory import [FILE|-]`: another assistant's notes about the user, offered as a tick list."""
+    from vision import memimport, memreview
+    from vision.ui import ask_questions
+
+    if source:
+        try:
+            text = sys.stdin.read() if source == "-" else Path(source).expanduser().read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            raise SystemExit(f"memory import: {e}")
+        sources = [memimport.Source(f"notes from {'stdin' if source == '-' else Path(source).name}", text)] if text.strip() else []
+    else:
+        sources = memimport.claude_sources()
+    if not sources:
+        print("nothing to import: no Claude Code notes found" if not source else "that file is empty")
+        return
+    console.print(f"[dim]reading {len(sources)} note{'s' if len(sources) != 1 else ''}:[/dim]")
+    for s in sources[:12]:
+        console.print(f"[dim]  {s.label}[/dim]")
+    if len(sources) > 12:
+        console.print(f"[dim]  …and {len(sources) - 12} more[/dim]")
+    cfg = _cfg(None, None, None, quiet=True)
+    with console.status("[dim]picking out what's worth keeping…[/dim]") as status:
+        props = memimport.proposals(cfg, sources, on_batch=lambda i, n: n > 1 and status.update(f"[dim]picking out what's worth keeping ({i} of {n})…[/dim]"))
+    if not props:
+        print("nothing new to bring in: Vision's memory already has it, or there was nothing durable")
+        return
+    saved = memreview.save(memimport.chosen(props, ask_questions(memimport.questions(props))))
+    for name, line in saved:
+        print(f"{name}: {line}")
+    print(memreview.summary(saved))
+
+
 @app.command()
 def memory(words: list[str] = typer.Argument(None, help="Words to look for, a topic name, `tidy` or `review`. Omit for the core and the topic list.")):
     """Vision's long-term memory: the core, one topic, or every line matching some words.
 
     `vision memory tidy` has the default model clean it up (merge repeats, drop what is stale or only
     describes code, regroup by project); a copy of the folder is kept first. `vision memory review`
-    reads the last conversation for facts worth keeping and lets you tick the ones to save."""
+    reads the last conversation for facts worth keeping and lets you tick the ones to save.
+    `vision memory import` brings in what Claude Code has noted about you (its CLAUDE.md and every
+    project's memory), so Codex, Grok and the rest know it too; `vision memory import FILE` (or `-` for
+    stdin) reads another assistant's notes instead, such as a claude.ai memory export."""
     from vision import memory as mem
 
     arg = " ".join(words or []).strip()
     names = {t[0] for t in mem.topics()}
+    if arg.split(" ", 1)[0].lower() == "import" and "import" not in names:
+        _memory_import(arg[len("import"):].strip())
+        return
     if arg.lower() == "review" and "review" not in names:
         from vision import memreview
         from vision.sessions import list_all_sessions, session_history
