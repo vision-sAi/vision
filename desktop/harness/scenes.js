@@ -230,10 +230,10 @@
       { role: "user", text: "what's wrong with this chart?\n\n[Attached image: /home/me/.local/share/vision/uploads/20261024-101500-a1b2c3.png]\n[Attached file: /home/me/.local/share/vision/uploads/20261024-101500-d4e5f6-sales.csv]" },
       { role: "assistant", text: "The y-axis starts at 40, so the dip looks far bigger than it is. Here it is redrawn from zero:\n\n![Sales from zero](/home/me/chart.png)\n\nThe drop is about 6%, not the cliff the original suggests.", duration_ms: 12100 },
     ] }, steps: [
-      { wait: 400, check: "a sent picture shows as a thumbnail", fn: () => !!document.querySelector(".sent-picture") },
+      { wait: 400, check: "a sent picture shows as a thumbnail", fn: () => document.querySelector(".sent-picture")?.naturalWidth > 0 },
       { check: "a sent file shows as a chip without its stamp", fn: () => document.querySelector(".file-chip")?.textContent === "sales.csv" },
       { check: "the attachment lines leave the bubble", fn: () => document.querySelector(".msg.user .bubble")?.textContent === "what's wrong with this chart?" },
-      { check: "a reply's local picture loads", fn: () => document.querySelector(".md .picture")?.src.startsWith("blob:") },
+      { check: "a reply's local picture loads and draws", fn: () => { const img = document.querySelector(".md .picture"); return img?.src.startsWith("blob:") && img.complete && img.naturalWidth > 0; } },
     ] },
 
     shell: { ...base, history: { ...HISTORY, c1: [...HISTORY.c1,
@@ -472,7 +472,7 @@
       { wait: 50, check: "dragging files over the window says where they'll go", fn: () => !document.querySelector("#drop").hidden },
       { run: () => window.__emit("tauri://drag-drop", { paths: ["/home/me/Pictures/chart.png", "/home/me/notes.txt"], position: { x: 600, y: 400 } }) },
       { wait: 300, check: "files dropped from the file manager are attached", fn: () => [...document.querySelectorAll(".attachment span")].map((s) => s.textContent).join() === "chart.png,notes.txt" && document.querySelector("#drop").hidden },
-      { check: "a dropped picture shows a preview", fn: () => !!document.querySelector(".attachment img") },
+      { check: "a dropped picture shows a preview", fn: () => document.querySelector(".attachment img")?.naturalWidth > 0 },
       { run: () => {
         const dt = new DataTransfer();
         dt.setData("image/png", "x");  // a screenshot: a picture on the clipboard, no file the page can read
