@@ -52,8 +52,8 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9 ]+", "", text.lower()).strip()
 
 
-def parse(answer: str | None) -> list[Proposal]:
-    """The model's reply as proposals: the JSON array in it (fenced or bare), bad entries dropped."""
+def parse(answer: str | None, limit: int = MAX_PROPOSALS) -> list[Proposal]:
+    """The model's reply as proposals: the JSON array in it (fenced or bare), bad entries dropped, at most `limit`."""
     if not answer:
         return []
     start, end = answer.find("["), answer.rfind("]")
@@ -83,7 +83,7 @@ def parse(answer: str | None) -> list[Proposal]:
         about = " ".join(str(item.get("about") or "").split())
         seen.add(_norm(fact))
         out.append(Proposal(fact, topic, about))
-    return out[:MAX_PROPOSALS]
+    return out[:limit]
 
 
 def fresh(props: list[Proposal], existing: list[str]) -> list[Proposal]:

@@ -88,6 +88,7 @@ class Provider:
     vision_runs_tools: bool = False  # Vision executes its tool calls (and tells it so), rather than its CLI
     keeps_partial_turns: bool = True  # False: its context is saved only after a complete turn
     session_in_directory: bool = False  # its conversations live in the directory they started in: resuming one elsewhere fails
+    reads_instructions: tuple[str, ...] = ()  # a folder's instruction files its CLI reads by itself (folderprompt hands it the rest)
     plan_tool: bool = False  # plan mode ends with an approval tool (ExitPlanMode), not a plan in prose
     fast_model: str = ""  # its fast mode runs only on this model
     default_model: str = ""  # what it means with no model named, when its list has it (else the list's first)
@@ -140,6 +141,7 @@ REGISTRY: dict[str, Provider] = {p.name: p for p in (
         has_usage=True, banked_resets=True, usage_from_text=True, conversation="vision.conversation:ClaudeConversation",
         plan_tool=True, fast_model="opus", default_model="opus", title_scanner="_scan_claude",
         session_in_directory=True,  # ~/.claude/projects/<directory>/<id>.jsonl; --resume looks only there (2.1.289)
+        reads_instructions=("CLAUDE.md",),
         # `-p` leaves out the task tools (TaskCreate, TaskUpdate…) on current models unless opted in
         # (2.1.306); with them the model keeps a checklist, drawn under the live line (vision.checklist).
         # Tool search would defer them behind ToolSearch, where the model never sees when to reach for them.
@@ -157,7 +159,7 @@ REGISTRY: dict[str, Provider] = {p.name: p for p in (
         "codex", "Codex", "Codex", "via Codex CLI · ChatGPT Subscription",
         "install the Codex CLI (npm i -g @openai/codex), then run `codex login`",
         "vision.codex:CodexBrain", "OpenAI Codex",
-        cli="codex", home_env="CODEX_HOME", npm_package="@openai/codex",
+        cli="codex", home_env="CODEX_HOME", npm_package="@openai/codex", reads_instructions=("AGENTS.md",),
         install_hint="npm i -g @openai/codex, then run `codex login`", models_args=("debug", "models"),
         install_cmd="npm i -g @openai/codex", login_cmd=("codex", "login"),
         has_usage=True, banked_resets=True, conversation="vision.codex_voice:CodexConversation",

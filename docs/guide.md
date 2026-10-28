@@ -164,7 +164,11 @@ and a subfolder's both apply, the nearest last; a worker started in that folder 
 fresh every turn, so an edit counts from the next reply, and `/cd` into a folder that has one says so.
 `/instructions` shows the files in effect and their text; `[brain].folder_instructions` names the file
 (`"AGENTS.md"` to share one with other tools, `""` to switch it off). A file longer than 8,000 characters
-is cut there.
+is cut there. The coding CLIs' own files follow the folder too, whichever brain is on: Claude Code reads a
+`CLAUDE.md` and Codex an `AGENTS.md` by themselves, so Vision hands each brain the ones its CLI doesn't (a
+Codex chat in a repo with a `CLAUDE.md` gets its rules, a Claude chat an `AGENTS.md`'s; Grok and the
+local models get both, a file linked to the other counts once, and these are cut at 24,000 characters).
+`/instructions` lists them as handed over.
 In a git repository Vision takes a checkpoint of the working tree before every reply (tracked and untracked
 files, ignored ones left out; nothing is committed and your index and HEAD stay where they are), so you can see
 and undo what the model did: `/diff` shows what changed since the last reply started (`/diff 3` since the
@@ -216,6 +220,12 @@ without a tick. `/review` runs it mid-chat and `vision memory review` over the l
 without opening one; `review = "off"` under `[memory]` stops the automatic one, and
 `review_timeout_s` (45) caps how long the call may hold the exit. A chat mid-reply, on a voice
 call, joined from the phone, or too short just leaves.
+`vision memory import` brings in what another assistant already knows about you, so a switch of brain
+doesn't start from nothing: it reads Claude Code's notes (`~/.claude/CLAUDE.md` and every project's
+memory folder under `~/.claude/projects/`; the index files are skipped), has one call pick out the
+durable facts Vision's memory doesn't hold yet, and offers them as the same tick list, a page of eight at
+a time. `vision memory import FILE` (or `-` for stdin) reads anything else instead, such as a claude.ai
+memory export or what ChatGPT says it knows about you.
 Changing between Claude, Codex and Grok with `/model` starts a fresh conversation because their native
 thread stores are separate; changing models within one provider keeps that provider's conversation.
 `--continue` resumes the most recent thread for whichever provider owns the selected model.
