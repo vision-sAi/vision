@@ -498,7 +498,8 @@ function drawNotice() {
   box.classList.toggle("urgent", urgent);
   box.append(icon(urgent ? "CircleAlert" : "Sparkles", 15), el("span", "notice-text", text));
   if (serverProtocol !== null && serverProtocol > PROTOCOL) { /* the app itself: nothing to run here yet */ }
-  else if (local) {
+  else if (local && (updateHow ?? "vision upgrade") === "vision upgrade") {
+    // only the installed Vision updates itself; a working checkout gets its git command shown instead
     const b = el("button", "chip-btn bordered", "Update");
     b.onclick = () => upgrade();
     box.append(b);
