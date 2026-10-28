@@ -2968,7 +2968,7 @@ class Hub:
             else:
                 chat.set_mode(mode)
         elif kind == "open_terminal":
-            # The phone asks for this chat in a terminal window here: `vision --join <chat>` (remote.py
+            # An app (the phone, the desktop) asks for this chat in a terminal window here: `vision --join <chat>` (remote.py
             # attaches it; this process keeps running the conversation, the window mirrors it).
             if chat.source == "terminal":
                 await ws.send_json({"type": "toast", "text": "That chat is already open in a terminal."})
@@ -2990,7 +2990,7 @@ class Hub:
                 self._opening.pop(chat.id, None)
                 await ws.send_json({"type": "error", "text": f"could not open a terminal: {e}"})
                 return
-            chat.log(f"opened in a terminal ({term}) from the phone")
+            chat.log(f"opened in a terminal ({term}) from an app")
             await ws.send_json({"type": "toast", "text": "Opened in a terminal on the computer."})
         else:
             await ws.send_json({"type": "error", "text": f"unknown frame type {kind!r}"})

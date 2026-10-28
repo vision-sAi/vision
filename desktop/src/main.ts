@@ -605,6 +605,7 @@ function drawBadge() {
 }
 
 function drawHeader() {
+  $("open-terminal").hidden = true;  // a chat's own button; the scout page and the board have their own header
   if (view === "scout") {
     const p = scouts.project(scouts.current);
     $("chat-title").textContent = p ? scouts.nameOf(p) : "";
@@ -619,6 +620,9 @@ function drawHeader() {
   const c = active ? chats.get(active) : undefined;
   $("chat-title").textContent = c ? c.title || "New chat" : "";
   $("chat-folder").textContent = c?.folder ?? "";
+  // As on the phone: the chat in a terminal window on its computer, `vision --join` (one already in a
+  // terminal has nowhere to go).
+  $("open-terminal").hidden = !c || !!draft || c.source === "terminal";
 }
 
 function greeting(): string {
@@ -1190,6 +1194,13 @@ function act(action: string) {
     case "toggle_sidebar": toggleSidebar(); break;
     case "model": openModels(); break;
     case "stop": if (active && chats.get(active)?.busy) send({ type: "cancel", chat: active }); break;
+    case "open_terminal": {
+      const c = active && !draft && view !== "agents" ? chats.get(active) : undefined;  // on a scout's page, its chat
+      if (!c) toast("Open a chat first.");
+      else if (c.source === "terminal") toast("That chat is already open in a terminal.");
+      else send({ type: "open_terminal", chat: c.chat });  // the server says how it went, as a toast
+      break;
+    }
     case "settings": openSettings(); break;
     case "agents": view = "agents"; scouts.setCurrent(null); drawAll(); agents.loadAll(); break;
     case "new_scout": scouts.openNew(); break;

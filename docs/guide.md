@@ -715,7 +715,9 @@ follows it (`vision/remote.py`). The server keeps running the conversation, what
 place shows in both, and the terminal's own chat drops out of the phone's list while it is joined.
 `/model` and `/effort` switch the chat on the server; `/new` or resuming another session leaves it
 (the phone chat carries on). Resuming a phone chat's session id the old way would give you a second
-copy of the conversation; joining gives you the same one.
+copy of the conversation; joining gives you the same one. The apps can do the joining for you: the
+terminal button on a chat (the phone's, or the desktop app's title bar and **Chat › Open in Terminal**,
+Ctrl+Shift+T) opens it in a terminal window on the computer with `vision --join` (`open_terminal`).
 
 ### Projects
 
