@@ -56,6 +56,8 @@ GET /folders?path= lists a folder's subfolders for the phone's new-chat picker (
 folder, with the recent ones); a chat's summary says where it works (`workdir`, and `folder` with ~).
 GET /history rows are {role, text, error?, agents?, tools?, duration_ms?}: a reply finished while this
 process has been up keeps how long its turn took (the phone's footer, like the terminal's).
+GET /search?q=&limit= finds what was said in the open chats: [{chat, title, project, role, snippet}], one per
+chat whose message (or title) holds every word of q, newest chat first, the snippet around the first hit.
 Projects (projects.py, runs.py): /projects (list, make or edit), /projects/adopt (POST {chat} or {session_id,
 provider?}: an open chat becomes a project's, as it is), /projects/{id} (one; DELETE archives),
 …/open, …/pause, …/resume, …/memory (GET, POST {fact}, DELETE …/memory/{n}), …/activity (GET ?limit=&since=:
@@ -1838,6 +1840,38 @@ class Hub:
             self.pin(chat.id, False, announce=False)  # a closed chat is gone from every list: its pin goes with it
         # No replacement: the phone shows an empty screen and opens a chat with its next message.
 
+    # -- search: what was said in the open chats, for an app's search box
+    SEARCH_LIMIT = 30
+
+    def search(self, query: str, limit: int = SEARCH_LIMIT) -> list[dict]:
+        """The open chats where every word of `query` turns up in one message (or in the title), newest
+        chat first, each with the message that matched as a snippet around its first hit. Scout and
+        project chats are searched too. Case is ignored; a chat with nothing matching is left out."""
+        words = [w for w in query.lower().split() if w][:8]
+        if not words or len(query.strip()) < 2:
+            return []
+        hits = []
+        for chat in sorted(list(self.chats.values()), key=lambda c: c.updated, reverse=True):
+            title = chat.title or ""
+            found = None
+            try:
+                rows = chat.history(200)
+            except Exception:  # noqa: BLE001  - a transcript that can't be read is not a search error
+                rows = []
+            for row in reversed(rows):  # the most recent mention first
+                text = str(row.get("text") or "")
+                low = text.lower()
+                if all(w in low for w in words):
+                    found = {"role": row.get("role") or "", "snippet": snippet(text, words[0])}
+                    break
+            if found is None and all(w in title.lower() for w in words):
+                found = {"role": "title", "snippet": ""}
+            if found:
+                hits.append({"chat": chat.id, "title": title, "project": getattr(chat, "project", "") or "", **found})
+                if len(hits) >= limit:
+                    break
+        return hits
+
     # -- pinned chats: kept at the top of every app's list, the same on each
     def is_pinned(self, chat_id: str) -> bool:
         return chat_id in self.pinned
@@ -3160,6 +3194,11 @@ def create_app(hub: Hub) -> FastAPI:
     async def chats() -> list[dict]:
         return hub.hello()["chats"]
 
+    @app.get("/search", dependencies=[Depends(bearer)])
+    async def search(q: str = "", limit: int = Hub.SEARCH_LIMIT) -> list[dict]:
+        # Reading a transcript can mean reading its session file: in the executor, not on the loop.
+        return await asyncio.get_running_loop().run_in_executor(None, hub.search, q, max(1, min(limit, 100)))
+
     @app.get("/history", dependencies=[Depends(bearer)])
     async def history(limit: int = 60, chat: str | None = None) -> list[dict]:
         c = chat_or_404(chat)
@@ -4210,6 +4249,21 @@ def pairing_info(cfg: Config, host: str | None, port: int | None, public_url: st
     name = machine_name()
     return {"host": host, "port": port, "local": local, "url": url, "token": token, "name": name,
             "payload": pairing_payload(url, token, local, name)}
+
+
+def snippet(text: str, word: str, width: int = 140) -> str:
+    """`text` on one line, cut to about `width` characters around the first `word` (lower case), with an
+    ellipsis where it was cut."""
+    flat = " ".join(text.split())
+    at = flat.lower().find(word)
+    if len(flat) <= width or at < 0:
+        return flat[:width] + ("…" if len(flat) > width else "")
+    start = max(0, at - width // 3)
+    end = min(len(flat), start + width)
+    start = max(0, end - width)
+    if start:
+        start = flat.find(" ", start) + 1 or start  # whole words at the cut
+    return ("…" if start else "") + flat[start:end].rstrip() + ("…" if end < len(flat) else "")
 
 
 PINNED = STATE_DIR / "pinned.json"  # the chats pinned to the top of the list, by id (Hub.pin)

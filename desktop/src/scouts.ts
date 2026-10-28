@@ -143,6 +143,7 @@ async function load(pid: string) {
 export function drawSidebar(nav: HTMLElement, query: string, onPage: boolean) {
   const all = live().filter((p) => !query || `${nameOf(p)} ${p.title ?? ""} ${p.goal ?? ""}`.toLowerCase().includes(query))
     .sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
+  if (query && !all.length) return;  // searching, and no scout matches: no heading over nothing
   const head = el("div", "group scouts-head");
   head.append(el("span", "", "Scouts"));
   const needs = all.filter((p) => needCount(p)).length;
