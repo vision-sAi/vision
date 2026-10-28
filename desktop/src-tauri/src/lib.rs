@@ -438,11 +438,12 @@ fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let board = item("agents", "All Activity", "CmdOrCtrl+Shift+A")?;
     let model = item("model", "Change Model…", "CmdOrCtrl+Shift+M")?;
     let stop = item("stop", "Stop Reply", "CmdOrCtrl+.")?;
+    let terminal = item("open_terminal", "Open in Terminal", "CmdOrCtrl+Shift+T")?;
 
     let mut file = SubmenuBuilder::new(app, "File").item(&new_chat).item(&new_scout).separator().item(&connect);
     let edit = SubmenuBuilder::new(app, "Edit").undo().redo().separator().cut().copy().paste().select_all().build()?;
     let view = SubmenuBuilder::new(app, "View").item(&board).item(&sidebar).item(&search).separator().fullscreen().build()?;
-    let chat = SubmenuBuilder::new(app, "Chat").item(&model).item(&stop).build()?;
+    let chat = SubmenuBuilder::new(app, "Chat").item(&model).item(&stop).separator().item(&terminal).build()?;
     let window = SubmenuBuilder::new(app, "Window").minimize().maximize().separator().close_window().build()?;
 
     if cfg!(target_os = "macos") {

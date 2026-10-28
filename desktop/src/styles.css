@@ -175,6 +175,7 @@ svg.icon { width: 16px; height: 16px; stroke-width: 1.8; flex: none; }
 }
 :root.collapsed .chat-head { padding-left: calc(10px + var(--lights)); }
 .head-left { display: flex; align-items: center; gap: 4px; min-width: 0; }
+#open-terminal { flex: none; }
 .title-wrap { display: flex; align-items: baseline; gap: 10px; min-width: 0; padding-left: 4px; }
 .chat-head h1 { margin: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #chat-folder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

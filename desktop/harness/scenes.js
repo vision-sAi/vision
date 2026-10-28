@@ -142,6 +142,9 @@
   window.SCENES = {
     chat: { ...base, steps: [
       { wait: 300, check: "a pinned chat heads the list", fn: () => document.querySelector("#chats .group:not(.scouts-head)")?.textContent === "Pinned" && document.querySelector("#chats .group:not(.scouts-head) + .chat-item .chat-name")?.textContent === "Compare NAS drives" },
+      { check: "a chat can be opened in a terminal from its title bar", fn: () => !document.querySelector("#open-terminal").hidden },
+      { run: () => document.querySelector("#open-terminal").click() },
+      { wait: 50, check: "which asks its computer to open it", fn: () => sentOf("open_terminal")[0]?.chat === "c1" },
       { check: "a chat's row says the folder it works in", fn: () => [...document.querySelectorAll("#chats .chat-item")].find((i) => i.textContent.includes("Fix the flaky"))?.querySelector(".chat-folder")?.textContent === "~/code/vision" },
       { run: () => [...document.querySelectorAll("#chats .chat-item")].find((i) => i.textContent.includes("Weekend plans"))?.querySelector(".pin").click() },
       { wait: 50, check: "pinning another tells the server", fn: () => sentOf("pin").some((f) => f.chat === "c2" && f.pinned === true) },
