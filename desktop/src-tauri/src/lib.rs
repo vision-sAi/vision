@@ -485,6 +485,10 @@ fn shell(command: &str) -> std::process::Command {
     let sh = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
     let mut cmd = std::process::Command::new(sh);
     cmd.arg("-l").arg("-c").arg(command);
+    // From home, not the app's own folder: inside an AppImage that is its mount, gone once it updates.
+    if let Some(home) = dirs::home_dir() {
+        cmd.current_dir(home);
+    }
     for (key, value) in child_env(std::env::vars(), dirs::home_dir().as_deref()) {
         match value {
             Some(v) => cmd.env(key, v),
@@ -500,7 +504,10 @@ fn shell(command: &str) -> std::process::Command {
 /// An AppImage's launcher points PYTHONHOME, PYTHONPATH, LD_LIBRARY_PATH, GTK's and GIO's variables and
 /// PATH into the AppImage's own mount (`APPDIR`), for the app. Passed on, they break what the app runs:
 /// Python looks for itself in the mount and dies before its first line (`vision upgrade` stopped with
-/// "<no Python frame>"). So a variable pointing only into the mount goes, a list keeps its other entries,
+/// "<no Python frame>"). An AppImage that updated itself starts the new one from the old, so the variables
+/// can point into an earlier mount too, still mounted while that copy runs: git then loaded its bundled
+/// OpenSSL and `vision upgrade` couldn't reach GitHub. So every AppImage mount counts (`<tmp>/.mount_*`, the
+/// folder APPDIR is in). A variable pointing only into mounts goes, a list keeps its other entries,
 /// and the launcher's PYTHONDONTWRITEBYTECODE goes with them. PATH also loses Vision's shims (they stop
 /// `claude` and the like inside a Vision turn, and an app started from one would inherit them) and starts
 /// with ~/.local/bin, where Vision installs itself.
@@ -508,11 +515,16 @@ fn child_env(vars: impl Iterator<Item = (String, String)>, home: Option<&std::pa
     let vars: Vec<(String, String)> = vars.collect();
     let get = |k: &str| vars.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
     let appdir = get("APPDIR").filter(|d| !d.is_empty()).map(|d| d.trim_end_matches('/').to_string());
-    let inside = |entry: &str| appdir.as_deref().is_some_and(|d| entry == d || entry.starts_with(&format!("{d}/")));
+    // Any AppImage's mount, this one's or an earlier copy's: `/tmp/.mount_VisionAB12` → `/tmp/.mount_`.
+    let mounts = appdir.as_deref().and_then(|d| d.rfind("/.mount_").map(|i| d[..i + "/.mount_".len()].to_string()));
+    let inside = |entry: &str| {
+        appdir.as_deref().is_some_and(|d| entry == d || entry.starts_with(&format!("{d}/")))
+            || mounts.as_deref().is_some_and(|m| entry.starts_with(m))
+    };
     let mut out = Vec::new();
     if appdir.is_some() {
         for (name, value) in &vars {
-            if name == "PATH" || !value.contains(appdir.as_deref().unwrap_or_default()) {
+            if name == "PATH" || !value.split(':').any(|e| inside(e)) {
                 continue;
             }
             let kept: Vec<&str> = value.split(':').filter(|e| !e.is_empty() && !inside(e)).collect();
@@ -763,6 +775,25 @@ mod tests {
         assert_eq!(of("XDG_DATA_DIRS"), Some(Some("/usr/share".into())), "a list keeps what isn't in the mount");
         assert_eq!(of("HOME"), None, "the rest is left alone");
         assert_eq!(of("PATH"), Some(Some("/home/me/.local/bin:/usr/bin".into())), "no mount, no shims, ~/.local/bin first");
+    }
+
+    #[test]
+    fn an_earlier_copys_mount_goes_too() {
+        let (now, old) = ("/tmp/.mount_VisionNOW1", "/tmp/.mount_VisionOLD2");
+        let got = env(&[
+            ("APPDIR", now),
+            ("LD_LIBRARY_PATH", &format!("{old}/usr/lib/:{old}/usr/lib64")),
+            ("PYTHONPATH", &format!("{old}/usr/share/pyshared/:{now}/usr/share/pyshared/")),
+            ("XDG_DATA_DIRS", &format!("/usr/share:{old}/usr/share:{now}/usr/share")),
+            ("OWD", &format!("{old}/usr")),
+            ("PATH", &format!("{now}/usr/bin/:{old}/usr/bin/:/usr/bin")),
+        ]);
+        let of = |k: &str| got.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(of("LD_LIBRARY_PATH"), Some(None), "git no longer loads the old copy's OpenSSL");
+        assert_eq!(of("PYTHONPATH"), Some(None));
+        assert_eq!(of("OWD"), Some(None));
+        assert_eq!(of("XDG_DATA_DIRS"), Some(Some("/usr/share".into())));
+        assert_eq!(of("PATH"), Some(Some("/home/me/.local/bin:/usr/bin".into())));
     }
 
     #[test]
