@@ -1,28 +1,11 @@
 import SwiftUI
 import UIKit
 
-/// The app's look, chosen in Settings › Appearance and kept in UserDefaults under `theme`. Every screen
-/// reads the tokens here instead of naming a colour or a material itself, so a theme is a value, not a
-/// branch: the same UX, worn differently. `system` is the look the app shipped with, so a phone that has
-/// never opened Appearance changes nothing.
-enum ThemeID: String, CaseIterable, Identifiable {
-    case panes, system, hearth, paper, hairline, graphite
-    var id: String { rawValue }
-    static let key = "theme"
-
-    /// What a phone wears before Appearance is opened. A fresh install gets Panes, the look the desktop app has;
-    /// a phone that already paired with a computer (an update from before Panes) keeps System, the look it had.
-    static func settle() {
-        let defaults = UserDefaults.standard
-        guard defaults.string(forKey: key) == nil else { return }
-        let updated = !(defaults.string(forKey: "serverURL") ?? "").isEmpty
-        defaults.set((updated ? ThemeID.system : .panes).rawValue, forKey: key)
-    }
-}
-
-/// A typeface for a run of text: the system face, its serif (New York) or monospaced designs, or Hearth (`Hearth.swift`).
+/// The app's look: Panes, the desktop app's, the only one (it follows the phone's light and dark). Every screen
+/// reads the tokens here instead of naming a colour or a material itself.
+/// A typeface for a run of text: the system face, or its serif (New York) or monospaced designs.
 enum ThemeFace {
-    case system, serif, mono, hearth
+    case system, serif, mono
 }
 
 /// What the composer card, the attach menu and the jump arrow sit on.
@@ -46,10 +29,6 @@ enum ThemeAccentButton {
 }
 
 struct Theme {
-    let id: ThemeID
-    let name: String
-    /// What it is, not how it was made: VoiceOver's hint on the swatch (no longer shown under the picker).
-    let blurb: String
     /// Forced light or dark; nil follows the phone.
     let scheme: ColorScheme?
 
@@ -86,11 +65,10 @@ struct Theme {
     var userBubble: [Color]? = nil
     var userInk: Color? = nil
 
-    // MARK: the six
+    // MARK: Panes
 
     /// Panes, the desktop app's look: a violet glow behind, panes on it, violet where you act; light and dark.
     static let panes = Theme(
-        id: .panes, name: "Panes", blurb: "Panes on a soft violet glow, as on the desktop. Follows light and dark.",
         scheme: nil, prose: .system, label: .system,
         background: .adaptive(light: "#FFFFFF", dark: "#17151F"), surface: .adaptive(light: "#FAF9FE", dark: "#252232"),
         accent: .adaptive(light: "#7C5CFF", dark: "#8B6CFF"),
@@ -103,63 +81,8 @@ struct Theme {
         userBubble: [.adaptive(light: "#7C5CFF", dark: "#3B3070"), .adaptive(light: "#5B8CFF", dark: "#2A3A6C")],
         userInk: .white)
 
-    static let system = Theme(
-        id: .system, name: "System", blurb: "The app as it ships. Follows light and dark.",
-        scheme: nil, prose: .system, label: .system,
-        background: nil, surface: nil, accent: nil,
-        bubbleFill: nil, bubbleStroke: nil, bubbleRadius: 20,
-        composer: .glass, composerRadius: nil,
-        chromeMonochrome: false,
-        voiceButton: .tinted)
-
-    /// System's shapes, face and glass, in warm ink with a copper accent: only the colours change.
-    static let hearth = Theme(
-        id: .hearth, name: "Hearth", blurb: "The app as it ships, in warm ink and copper. Dark.",
-        scheme: .dark, prose: .system, label: .system,
-        background: Color(hex: "#16130F"), surface: Color(hex: "#1F1A16"), accent: Color(hex: "#D97857"),
-        bubbleFill: Color(hex: "#2B2521"), bubbleStroke: nil, bubbleRadius: 20,
-        composer: .glass, composerRadius: nil,
-        chromeMonochrome: false,
-        voiceButton: .tinted)
-
-    /// A book page: New York for what you read, the system face for the labels round it, one oxblood mark.
-    static let paper = Theme(
-        id: .paper, name: "Paper", blurb: "Serif text on warm stock, one oxblood accent. Light.",
-        scheme: .light, prose: .serif, label: .system,
-        background: Color(hex: "#F3EFE6"), surface: Color(hex: "#FBF9F4"), accent: Color(hex: "#9B2C1F"),
-        bubbleFill: Color(hex: "#E6E0D3"), bubbleStroke: nil, bubbleRadius: 8,
-        composer: .card(fill: Color(hex: "#FBF9F4")!, stroke: Color(hex: "#DCD5C6")), composerRadius: 14,
-        chromeMonochrome: true,
-        voiceButton: .solid)
-
-    static let hairline = Theme(
-        id: .hairline, name: "Hairline", blurb: "Ink rules on off-white, labels in mono. Light.",
-        scheme: .light, prose: .system, label: .mono,
-        background: Color(hex: "#FAFAF8"), surface: .white, accent: Color(hex: "#141414"),
-        bubbleFill: .clear, bubbleStroke: Color(hex: "#141414"), bubbleRadius: 6,
-        composer: .card(fill: .white, stroke: Color(hex: "#141414")), composerRadius: 10,
-        chromeMonochrome: true,
-        voiceButton: .outlined)
-
-    /// An instrument panel: flat graphite planes, no glow, mono labels, and signal orange only where you act.
-    static let graphite = Theme(
-        id: .graphite, name: "Graphite", blurb: "Flat graphite, mono labels, signal orange. Dark.",
-        scheme: .dark, prose: .system, label: .mono,
-        background: Color(hex: "#111213"), surface: Color(hex: "#1A1B1D"), accent: Color(hex: "#FF6A2B"),
-        bubbleFill: Color(hex: "#232427"), bubbleStroke: nil, bubbleRadius: 10,
-        composer: .card(fill: Color(hex: "#18191B")!, stroke: Color(hex: "#2C2D30")), composerRadius: 16,
-        chromeMonochrome: true,
-        voiceButton: .solid)
-
-    static let all: [Theme] = [.panes, .system, .hearth, .paper, .hairline, .graphite]
-
-    static func named(_ raw: String) -> Theme {
-        all.first { $0.id.rawValue == raw } ?? .system
-    }
-
-    /// Light or dark goes on the windows, not through preferredColorScheme: that reached the app and an open
-    /// sheet on separate passes, so on a pick in Settings the sheet and the chat behind it turned a beat
-    /// apart. On the window both take it in the same frame, and nil (unspecified) hands back to the phone.
+    /// Light or dark goes on the windows, not through preferredColorScheme (that reached the app and an open
+    /// sheet on separate passes); nil (unspecified) hands it to the phone.
     func applyScheme() {
         let style: UIUserInterfaceStyle = switch scheme {
         case .dark: .dark
@@ -195,7 +118,6 @@ struct Theme {
         case .system: return .system(style, weight: weight)
         case .serif: return .system(style, design: .serif, weight: weight)
         case .mono: return .system(style, design: .monospaced, weight: weight)
-        case .hearth: return .custom(Hearth.name(weight), size: Hearth.size(style), relativeTo: style)
         }
     }
 
@@ -205,7 +127,6 @@ struct Theme {
         case .system: return .system(size: size, weight: weight)
         case .serif: return .system(size: size, weight: weight, design: .serif)
         case .mono: return .system(size: size, weight: weight, design: .monospaced)
-        case .hearth: return .custom(Hearth.name(weight), fixedSize: size)
         }
     }
 
@@ -216,7 +137,6 @@ struct Theme {
         case .system: base = .systemFont(ofSize: size, weight: weight)
         case .serif: base = .systemFont(ofSize: size, weight: weight).withDesign(.serif)
         case .mono: base = .monospacedSystemFont(ofSize: size, weight: weight)
-        case .hearth: base = UIFont(name: Hearth.name(weight), size: size) ?? .systemFont(ofSize: size, weight: weight)
         }
         return UIFontMetrics(forTextStyle: .body).scaledFont(for: base)
     }
@@ -233,10 +153,6 @@ extension Theme {
         case .system: return .systemFont(ofSize: size, weight: weight)
         case .serif: return UIFont.systemFont(ofSize: size, weight: weight).withDesign(.serif)
         case .mono: return .monospacedSystemFont(ofSize: size, weight: weight)
-        case .hearth:
-            let unscaled = UIFont.preferredFont(forTextStyle: style, compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)).pointSize
-            guard let face = UIFont(name: Hearth.name(weight), size: unscaled) else { return .systemFont(ofSize: size, weight: weight) }
-            return UIFontMetrics(forTextStyle: style).scaledFont(for: face)
         }
     }
 }
@@ -251,7 +167,7 @@ private extension UIFont {
 // MARK: environment
 
 private struct ThemeKey: EnvironmentKey {
-    static let defaultValue = Theme.system
+    static let defaultValue = Theme.panes
 }
 
 extension EnvironmentValues {

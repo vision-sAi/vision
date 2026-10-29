@@ -289,7 +289,6 @@ private struct SelectableProse: UIViewRepresentable {
     fileprivate struct Source: Equatable {
         let blocks: [ReplyMarkdown.Block]
         let isError: Bool
-        let theme: ThemeID
         let lineSpacing: CGFloat
         let typeSize: DynamicTypeSize
     }
@@ -321,7 +320,7 @@ private struct SelectableProse: UIViewRepresentable {
     }
 
     func updateUIView(_ view: UITextView, context: Context) {
-        let source = Source(blocks: blocks, isError: isError, theme: theme.id, lineSpacing: lineSpacing, typeSize: typeSize)
+        let source = Source(blocks: blocks, isError: isError, lineSpacing: lineSpacing, typeSize: typeSize)
         guard context.coordinator.source != source else { return }
         context.coordinator.source = source
         context.coordinator.fitted = nil
