@@ -6,9 +6,18 @@ import UIKit
 /// branch: the same UX, worn differently. `system` is the look the app shipped with, so a phone that has
 /// never opened Appearance changes nothing.
 enum ThemeID: String, CaseIterable, Identifiable {
-    case system, hearth, paper, hairline, graphite
+    case panes, system, hearth, paper, hairline, graphite
     var id: String { rawValue }
     static let key = "theme"
+
+    /// What a phone wears before Appearance is opened. A fresh install gets Panes, the look the desktop app has;
+    /// a phone that already paired with a computer (an update from before Panes) keeps System, the look it had.
+    static func settle() {
+        let defaults = UserDefaults.standard
+        guard defaults.string(forKey: key) == nil else { return }
+        let updated = !(defaults.string(forKey: "serverURL") ?? "").isEmpty
+        defaults.set((updated ? ThemeID.system : .panes).rawValue, forKey: key)
+    }
 }
 
 /// A typeface for a run of text: the system face, its serif (New York) or monospaced designs, or Hearth (`Hearth.swift`).
@@ -22,6 +31,8 @@ enum ThemeSurface {
     case glass
     /// A flat card with a hairline round it.
     case card(fill: Color, stroke: Color?)
+    /// Panes: a card edged and glowing in the accent.
+    case glow(fill: Color, accent: Color)
 }
 
 /// The live-voice button, and anything else that wears the accent as a round button.
@@ -68,7 +79,29 @@ struct Theme {
 
     let voiceButton: ThemeAccentButton
 
-    // MARK: the five
+    /// Panes: the drawer and the chat's top sit on a soft violet glow (`PanesBackdrop`), and the chat floats on
+    /// it as a card while the drawer is out.
+    var backdrop = false
+    /// The user's own bubble as a gradient (nil: `bubbleColor`), with `userInk` for its text.
+    var userBubble: [Color]? = nil
+    var userInk: Color? = nil
+
+    // MARK: the six
+
+    /// Panes, the desktop app's look: a violet glow behind, panes on it, violet where you act; light and dark.
+    static let panes = Theme(
+        id: .panes, name: "Panes", blurb: "Panes on a soft violet glow, as on the desktop. Follows light and dark.",
+        scheme: nil, prose: .system, label: .system,
+        background: .adaptive(light: "#FFFFFF", dark: "#17151F"), surface: .adaptive(light: "#FAF9FE", dark: "#252232"),
+        accent: .adaptive(light: "#7C5CFF", dark: "#8B6CFF"),
+        bubbleFill: nil, bubbleStroke: nil, bubbleRadius: 20,
+        composer: .glow(fill: .adaptive(light: "#FAF9FE", dark: "#252232"), accent: .adaptive(light: "#7C5CFF", dark: "#8B6CFF")),
+        composerRadius: 26,
+        chromeMonochrome: false,
+        voiceButton: .solid,
+        backdrop: true,
+        userBubble: [.adaptive(light: "#7C5CFF", dark: "#3B3070"), .adaptive(light: "#5B8CFF", dark: "#2A3A6C")],
+        userInk: .white)
 
     static let system = Theme(
         id: .system, name: "System", blurb: "The app as it ships. Follows light and dark.",
@@ -118,7 +151,7 @@ struct Theme {
         chromeMonochrome: true,
         voiceButton: .solid)
 
-    static let all: [Theme] = [.system, .hearth, .paper, .hairline, .graphite]
+    static let all: [Theme] = [.panes, .system, .hearth, .paper, .hairline, .graphite]
 
     static func named(_ raw: String) -> Theme {
         all.first { $0.id.rawValue == raw } ?? .system
@@ -279,6 +312,66 @@ private struct ThemeSurfaceModifier: ViewModifier {
             content
                 .background(fill, in: shape)
                 .overlay { if let stroke { shape.strokeBorder(stroke, lineWidth: 1) } }
+        case .glow(let fill, let accent):
+            content
+                .background {
+                    shape.fill(fill)
+                        .shadow(color: accent.opacity(0.22), radius: 14)
+                        .shadow(color: .black.opacity(0.10), radius: 18, y: 8)
+                }
+                .overlay { shape.strokeBorder(accent.opacity(0.4), lineWidth: 1) }
+        }
+    }
+}
+
+
+// MARK: Panes
+
+extension Color {
+    /// A colour that follows light and dark (Panes is one theme for both).
+    static func adaptive(light: String, dark: String) -> Color {
+        let l = UIColor(Color(hex: light) ?? .white), d = UIColor(Color(hex: dark) ?? .black)
+        return Color(UIColor { $0.userInterfaceStyle == .dark ? d : l })
+    }
+}
+
+/// What Panes sits on: lavender to blue in light, deep violet to navy in dark (the desktop's --backdrop).
+struct PanesBackdrop: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let dark = scheme == .dark
+        GeometryReader { geo in
+            let w = geo.size.width, h = geo.size.height
+            ZStack {
+                (dark ? Color(hex: "#0E0C15")! : Color(hex: "#EEECF6")!)
+                RadialGradient(colors: [dark ? Color(hex: "#3B2A75")! : Color(hex: "#D9CFFF")!, .clear],
+                               center: UnitPoint(x: -0.1, y: -0.05), startRadius: 0, endRadius: max(w, h) * 0.75)
+                RadialGradient(colors: [dark ? Color(hex: "#1B3A73")! : Color(hex: "#CFE0FF")!, .clear],
+                               center: UnitPoint(x: 1.1, y: 1.05), startRadius: 0, endRadius: max(w, h) * 0.7)
+            }
+        }
+        .ignoresSafeArea()
+    }
+}
+
+/// Panes' status dot: a small disc in its colour, glowing.
+struct PanesDot: View {
+    let color: Color
+    var size: CGFloat = 8
+
+    var body: some View {
+        Circle().fill(color).frame(width: size, height: size).shadow(color: color.opacity(0.9), radius: 4)
+    }
+
+    /// A thread's colour under Panes: amber when it needs you, the accent while it works, green when it's
+    /// ready to look at; nil (the plain mark) for the rest.
+    static func tone(_ state: String, queued: Bool) -> Color? {
+        switch state {
+        case "waiting_on_you": .adaptive(light: "#C88400", dark: "#FFC46B")
+        case "ready_for_review": .adaptive(light: "#1FA86A", dark: "#5BE3A0")
+        case "working" where !queued, "landing": .adaptive(light: "#7C5CFF", dark: "#8B6CFF")
+        default: nil
         }
     }
 }

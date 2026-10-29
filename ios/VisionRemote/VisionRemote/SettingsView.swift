@@ -449,7 +449,7 @@ private struct ThemeSwatch: View {
     private var card: Color {
         switch theme.composer {
         case .glass: ink.opacity(dark ? 0.16 : 0.08)
-        case .card(let fill, _): fill
+        case .card(let fill, _), .glow(let fill, _): fill
         }
     }
 
@@ -459,7 +459,8 @@ private struct ThemeSwatch: View {
             HStack {
                 Spacer(minLength: 0)
                 RoundedRectangle(cornerRadius: theme.bubbleRadius / 2.4, style: .continuous)
-                    .fill(bubble)
+                    .fill(theme.userBubble.map { AnyShapeStyle(LinearGradient(colors: $0, startPoint: .topLeading, endPoint: .bottomTrailing)) }
+                          ?? AnyShapeStyle(bubble))
                     .frame(width: 40, height: 14)
                     .overlay {
                         if let stroke = theme.bubbleStroke {
@@ -482,12 +483,20 @@ private struct ThemeSwatch: View {
             .overlay {
                 if case .card(_, let stroke?) = theme.composer {
                     RoundedRectangle(cornerRadius: (theme.composerRadius ?? 30) / 2.6, style: .continuous).strokeBorder(stroke, lineWidth: 0.6)
+                } else if case .glow(_, let accent) = theme.composer {
+                    RoundedRectangle(cornerRadius: (theme.composerRadius ?? 30) / 2.6, style: .continuous).strokeBorder(accent.opacity(0.5), lineWidth: 0.6)
                 }
             }
         }
         .padding(8)
         .frame(width: 72, height: 96)
-        .background(ground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background {
+            if theme.backdrop {
+                PanesBackdrop().clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: 14, style: .continuous).fill(ground)
+            }
+        }
         .overlay {
             // Ringed in its own accent (the same colour the app takes on once it's picked), not the
             // environment's tint, which changes under the ring mid-animation.

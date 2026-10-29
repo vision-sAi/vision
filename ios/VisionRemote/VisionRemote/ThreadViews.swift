@@ -183,7 +183,17 @@ struct ProjectSheet: View {
                 case .memory: ProjectMemoryView(projectID: projectID)
                 }
             }
-            .background(theme.backgroundColor.ignoresSafeArea())
+            .background {
+                ZStack(alignment: .top) {
+                    theme.backgroundColor
+                    // Panes: the scout's header sits in a soft violet wash.
+                    if theme.backdrop {
+                        LinearGradient(colors: [(theme.accent ?? .accentColor).opacity(0.16), .clear], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 240)
+                    }
+                }
+                .ignoresSafeArea()
+            }
             .navigationTitle(project?.name ?? "Scout")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -533,6 +543,14 @@ private struct ThreadMark: View {
     let thread: ProjectThread
 
     var body: some View {
+        if theme.backdrop, let tone = PanesDot.tone(thread.state, queued: thread.queued) {
+            PanesDot(color: tone).accessibilityHidden(true)
+        } else {
+            plain
+        }
+    }
+
+    private var plain: some View {
         Group {
             switch thread.state {
             case "waiting_on_you": Circle().fill(theme.accent ?? Color.accentColor)

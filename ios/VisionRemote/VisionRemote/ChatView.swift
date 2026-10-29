@@ -209,7 +209,7 @@ struct ChatView: View {
     var body: some View {
         // On a project's chat pushed over the Projects screen, the edge swipe goes back rather than out to the drawer.
         SideDrawer(isOpen: $showChats, away: $drawerAway, swipeEnabled: !pickerExpanded && attach == nil && projectPath.isEmpty) {
-            ChatsView(projectsShown: projectsHome, showProjects: showProjects,
+            ChatsView(projectsShown: projectsHome, showProjects: showProjects, openScout: openFromProjects,
                       onClose: { withAnimation(SideDrawerMotion.animation) { showChats = false } })
         } content: {
             chatScreen
@@ -415,7 +415,17 @@ struct ChatView: View {
                 }
                 .ignoresSafeArea()
             }
-        .background(theme.backgroundColor.ignoresSafeArea())
+        .background {
+            ZStack(alignment: .top) {
+                theme.backgroundColor
+                // Panes: a soft violet wash at the top, as the desktop's panes have.
+                if theme.backdrop {
+                    LinearGradient(colors: [(theme.accent ?? .accentColor).opacity(0.13), .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 260)
+                }
+            }
+            .ignoresSafeArea()
+        }
         .navigationTitle("Vision")
         .navigationBarTitleDisplayMode(.inline)
         // No bar: just the buttons floating over the chat, no title or background; a soft blur at the top

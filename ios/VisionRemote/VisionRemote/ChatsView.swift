@@ -25,6 +25,8 @@ struct ChatsView: View {
     var projectsShown = false
     /// Put the Projects screen in the chat's place (true), or the chat back (false: a chat or a new one picked here).
     var showProjects: (Bool) -> Void = { _ in }
+    /// A scout tapped in the drawer: its page, over the Scouts screen.
+    var openScout: (ProjectInfo) -> Void = { _ in }
     /// Set when shown in the side drawer; a sheet falls back to `dismiss`.
     var onClose: (() -> Void)? = nil
 
@@ -86,6 +88,7 @@ struct ChatsView: View {
                     .padding(.bottom, 6)
                 if !searching {
                     projectsRow
+                    ForEach(drawerScouts) { scout in scoutRow(scout) }
                     navRow("Library", icon: "books.vertical", sheet: .library)
                     navRow("Scheduled", icon: "clock", sheet: .scheduled)
                     navRow("Earlier conversations", icon: "bubble.left.and.text.bubble.right", sheet: .sessions)
@@ -145,7 +148,7 @@ struct ChatsView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .environment(\.defaultMinListRowHeight, 0)
-        .background(theme.backgroundColor)
+        .background(theme.backdrop ? Color.clear : theme.backgroundColor)   // Panes: the drawer shows the glow behind it
         // The Chat pill and the gear float over the bottom of the list, which scrolls on under them.
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
         .onChange(of: client.chats.map(\.id)) { _, ids in
@@ -201,6 +204,51 @@ struct ChatsView: View {
         pageRow("Scouts", icon: "sparkles", id: "projects", selected: projectsShown, badge: projectsWaiting) {
             showProjects(true)
             close()
+        }
+    }
+
+    /// The scouts under their row, each with its buddy and what it's up to: the ones waiting on you first.
+    private var drawerScouts: [ProjectInfo] {
+        let live = client.projects.filter { $0.status != "archived" }
+        return Array(live.sorted { a, b in
+            let (x, y) = (ScoutWords.needs(a, counts: client.threadCounts(a)), ScoutWords.needs(b, counts: client.threadCounts(b)))
+            return x != y ? x > y : a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }.prefix(6))
+    }
+
+    private func scoutRow(_ scout: ProjectInfo) -> some View {
+        let counts = client.threadCounts(scout)
+        let line = ScoutWords.line(scout, counts: counts)
+        return Button {
+            flash("scout:" + scout.id) {
+                showProjects(true)
+                openScout(scout)
+                close()
+            }
+        } label: {
+            HStack(spacing: 10) {
+                ScoutBuddy(project: scout, size: 30)
+                Text(scout.name).themeFont(size: 16, weight: .semibold).lineLimit(1).layoutPriority(1)
+                Text(line).themeFont(size: 13, weight: ScoutWords.needs(scout, counts: counts) > 0 ? .semibold : .regular)
+                    .foregroundStyle(toneColor(scout, counts: counts)).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .frame(height: 40)
+            .padding(.leading, 6)
+        }
+        .buttonStyle(DrawerRowStyle(selected: false, flashed: flashed == "scout:" + scout.id))
+        .accessibilityLabel("\(scout.name), \(line)")
+    }
+
+    /// The colour of a scout's state: amber when it needs you, the accent while it works, green once it has
+    /// landed something, red when something failed; grey otherwise.
+    private func toneColor(_ scout: ProjectInfo, counts: [String: Int]) -> Color {
+        if ScoutWords.needs(scout, counts: counts) > 0 { return .adaptive(light: "#C88400", dark: "#FFC46B") }
+        switch scout.mood {
+        case "focused", "curious", "waking": return theme.accent ?? .accentColor
+        case "proud", "found_it": return .adaptive(light: "#1FA86A", dark: "#5BE3A0")
+        case "worried": return .red
+        default: return .secondary
         }
     }
 
@@ -363,11 +411,18 @@ struct ChatsView: View {
                     Image(systemName: "square.and.pencil").font(.system(size: 17, weight: .semibold))
                     Text("Chat").themeFont(size: 17, weight: .semibold)
                 }
-                .foregroundStyle(Color(.systemBackground))
+                .foregroundStyle(theme.backdrop ? Color.white : Color(.systemBackground))
                 .padding(.horizontal, 20)
                 .frame(height: 48)
-                .background(Capsule().fill(Color.primary))
-                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+                .background {
+                    if theme.backdrop {
+                        Capsule().fill(LinearGradient(colors: [theme.accent ?? .accentColor, .adaptive(light: "#5B8CFF", dark: "#6E9BFF")],
+                                                      startPoint: .topLeading, endPoint: .bottomTrailing))
+                    } else {
+                        Capsule().fill(Color.primary)
+                    }
+                }
+                .shadow(color: (theme.backdrop ? (theme.accent ?? .accentColor) : .black).opacity(theme.backdrop ? 0.35 : 0.18), radius: 10, y: 4)
             }
             .buttonStyle(PressScaleStyle())
             .disabled(client.connection != .online)
@@ -641,12 +696,28 @@ private struct DrawerRowStyle: ButtonStyle {
     var flashed = false
 
     func makeBody(configuration: Configuration) -> some View {
+        DrawerRow(configuration: configuration, selected: selected, flashed: flashed)
+    }
+}
+
+/// The row itself, so it can read the theme: Panes lights the chosen row in the accent, ringed.
+private struct DrawerRow: View {
+    let configuration: ButtonStyleConfiguration
+    let selected: Bool
+    let flashed: Bool
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        let accent = theme.accent ?? .accentColor
         configuration.label
             .padding(.horizontal, 12)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color(.label).opacity(configuration.isPressed || flashed ? 0.1 : selected ? 0.06 : 0))
+                shape.fill(theme.backdrop && selected && !(configuration.isPressed || flashed)
+                           ? accent.opacity(0.16)
+                           : Color(.label).opacity(configuration.isPressed || flashed ? 0.1 : selected ? 0.06 : 0))
             )
+            .overlay { if theme.backdrop && selected { shape.strokeBorder(accent.opacity(0.35), lineWidth: 1) } }
             // The whole row takes the tap, not just the icon and text (a clear fill isn't hit-tested).
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             // Light up at once on touch, fade out slowly so even a quick tap shows.
