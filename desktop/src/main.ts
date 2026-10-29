@@ -667,10 +667,10 @@ function drawBadge() {
   invoke("set_tray_status", { text: agents.summary() }).catch(() => {});
   const c = agents.counts();
   const badge = $("agents-badge");
-  const n = c.needs || c.review || c.working;
+  const n = c.needs || c.working;
   badge.hidden = !n;
   badge.textContent = String(n);
-  badge.className = "pill " + (c.needs ? "ask" : c.review ? "ready" : "busy");
+  badge.className = "pill " + (c.asks ? "ask" : c.review ? "ready" : "busy");
   if (view === "agents") drawHeader();
 }
 

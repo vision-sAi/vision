@@ -82,20 +82,23 @@ const NEEDS = ["waiting_on_you"];
 const REVIEW = ["ready_for_review", "landing"];
 const WORKING = ["working"];
 
-export function counts(): { needs: number; working: number; review: number } {
-  let needs = 0, working = 0, review = 0;
+/** What waits on the user, one count everywhere (the sidebar, a scout's row and rail, this badge, the tray):
+ * a thread's question, its work to review, and a scout's request to run something. `review` and `asks` are
+ * the parts of it, for the badge's colour. */
+export function counts(): { needs: number; working: number; review: number; asks: number } {
+  let asks = 0, working = 0, review = 0;
   for (const t of threads.values()) {
-    if (NEEDS.includes(t.state)) needs++;
+    if (NEEDS.includes(t.state)) asks++;
     else if (REVIEW.includes(t.state)) review++;
     else if (WORKING.includes(t.state) || t.queued) working++;
   }
-  return { needs, working, review };
+  for (const p of host.projects()) if (p.status !== "archived") asks += p.approvals?.length ?? 0;
+  return { needs: asks + review, working, review, asks };
 }
 
 export function summary(): string {
   const c = counts();
-  return [c.needs && `${c.needs} need${c.needs === 1 ? "s" : ""} you`, c.review && `${c.review} ready`, c.working && `${c.working} working`]
-    .filter(Boolean).join(" · ");
+  return [c.needs && `${c.needs} need${c.needs === 1 ? "s" : ""} you`, c.working && `${c.working} working`].filter(Boolean).join(" · ");
 }
 
 // ---------------------------------------------------------------- drawing

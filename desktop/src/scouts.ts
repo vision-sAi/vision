@@ -146,7 +146,7 @@ export function drawSidebar(nav: HTMLElement, query: string, onPage: boolean) {
   if (query && !all.length) return;  // searching, and no scout matches: no heading over nothing
   const head = el("div", "group scouts-head");
   head.append(el("span", "", "Scouts"));
-  const needs = all.filter((p) => needCount(p)).length;
+  const needs = all.reduce((n, p) => n + needCount(p), 0);  // things, not scouts: the same count as each row
   if (needs) head.append(el("b", "", `${needs} need${needs === 1 ? "s" : ""} you`));
   nav.append(head);
   if (!live().length && !query) {
