@@ -24,6 +24,7 @@
   function emit(event, payload) {
     for (const id of listeners.get(event) ?? []) callbacks.get(id)?.({ event, id, payload });
   }
+  window.__emit = emit;  // a scene's steps can play native events (a drop from the file manager)
 
   window.__http = [];
   function http({ method, path, query, body }) {
@@ -77,6 +78,8 @@
       case "http": return http(args);
       case "upload": return "/home/me/.local/share/vision/uploads/20261024-120000-abc123-file.png";
       case "fetch_bytes": return PNG;
+      case "upload_path": return { name: args.path.split("/").pop(), path: `/home/me/.local/share/vision/uploads/x-${args.path.split("/").pop()}` };
+      case "paste_files": return scene.clipboard ?? [];
       case "speak": return new ArrayBuffer(0);
       case "plugin:opener|open_url": return null;
       case "plugin:app|version": return "0.1.0";

@@ -278,9 +278,72 @@ async fn http(
 async fn upload(link: State<'_, Link>, request: tauri::ipc::Request<'_>) -> Result<String, String> {
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("No file.".into()) };
     let name = request.headers().get("x-name").and_then(|v| v.to_str().ok()).unwrap_or("file");
-    let name = percent_decode(name);
+    send_upload(&link, percent_decode(name), bytes.clone()).await
+}
+
+/// A file dropped on the window (its path, from the native drop: WebKitGTK hands the page no files from a
+/// file manager) sent up like the paperclip's.
+#[tauri::command]
+async fn upload_path(link: State<'_, Link>, path: String) -> Result<Value, String> {
+    let file = std::path::PathBuf::from(&path);
+    if file.is_dir() {
+        return Err(format!("{} is a folder.", file.display()));
+    }
+    let bytes = tauri::async_runtime::spawn_blocking({ let f = file.clone(); move || std::fs::read(f) })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+    Ok(json!({"name": name, "path": send_upload(&link, name.clone(), bytes).await?}))
+}
+
+/// What a paste brings that the page can't read itself: a picture on the clipboard (a screenshot; WebKitGTK
+/// gives the page none) or files copied in a file manager. Each is uploaded; `[]` when the clipboard has neither.
+#[tauri::command]
+async fn paste_files(link: State<'_, Link>) -> Result<Value, String> {
+    let found = tauri::async_runtime::spawn_blocking(clipboard_files).await.map_err(|e| e.to_string())??;
+    let mut out = Vec::new();
+    for (name, bytes) in found {
+        out.push(json!({"name": name, "path": send_upload(&link, name.clone(), bytes).await?}));
+    }
+    Ok(Value::Array(out))
+}
+
+/// The clipboard's files (copied in a file manager: `file://` URIs) or else its picture, as PNG.
+fn clipboard_files() -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut board = arboard::Clipboard::new().map_err(|e| format!("The clipboard can't be read: {e}"))?;
+    if let Ok(paths) = board.get().file_list() {
+        let files: Vec<(String, Vec<u8>)> = paths
+            .into_iter()
+            .filter(|p| p.is_file())
+            .filter_map(|p| Some((p.file_name()?.to_string_lossy().into_owned(), std::fs::read(&p).ok()?)))
+            .collect();
+        if !files.is_empty() {
+            return Ok(files);
+        }
+    }
+    match board.get_image() {
+        Ok(img) => Ok(vec![("pasted image.png".into(), png_of(img.width as u32, img.height as u32, &img.bytes)?)]),
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// RGBA pixels as a PNG.
+fn png_of(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut out, width, height);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut w = enc.write_header().map_err(|e| e.to_string())?;
+        w.write_image_data(rgba).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
+}
+
+async fn send_upload(link: &Link, name: String, bytes: Vec<u8>) -> Result<String, String> {
     let pairing = link.pairing.lock().unwrap().clone().ok_or("Not paired.")?;
-    let part = reqwest::multipart::Part::bytes(bytes.clone()).file_name(name);
+    let part = reqwest::multipart::Part::bytes(bytes).file_name(name);
     let resp = link
         .http
         .post(format!("{}/upload", pairing.url))
@@ -741,7 +804,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![saved, resume, local_vision, pair, forget, send, http, appearance, upload, speak, fetch_bytes, set_tray_status, set_keep_in_tray, vision_here, provider_status, setup_run, install_kind])
+        .invoke_handler(tauri::generate_handler![saved, resume, local_vision, pair, forget, send, http, appearance, upload, upload_path, paste_files, speak, fetch_bytes, set_tray_status, set_keep_in_tray, vision_here, provider_status, setup_run, install_kind])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -813,6 +876,16 @@ mod tests {
     fn shell_arguments_are_quoted() {
         assert_eq!(quote("/home/a b/vision"), "'/home/a b/vision'");
         assert_eq!(quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn a_pasted_picture_comes_out_as_a_png() {
+        let png = png_of(2, 1, &[255, 0, 0, 255, 0, 0, 255, 128]).unwrap();
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+        let mut px = vec![0; reader.output_buffer_size().unwrap()];
+        reader.next_frame(&mut px).unwrap();
+        assert_eq!(px, [255, 0, 0, 255, 0, 0, 255, 128]);
     }
 
     #[test]

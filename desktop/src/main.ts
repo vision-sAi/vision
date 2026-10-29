@@ -953,6 +953,40 @@ function drawAttachments() {
   drawSendReady();
 }
 
+/** Files picked up natively (dropped from a file manager, or pasted from the clipboard): the native side has
+ * already uploaded them; a picture's preview comes back from the Vision computer. */
+async function attachUploaded(pending: Promise<Json[]>, names: string[]) {
+  const shown: Attachment[] = names.map((name) => ({ id: nextAttachment++, name }));
+  attachments.push(...shown);
+  drawAttachments();
+  try {
+    const done = await pending;
+    attachments = attachments.filter((a) => !shown.includes(a));
+    for (const f of done) {
+      const a: Attachment = { id: nextAttachment++, name: f.name, path: f.path };
+      if (PICTURE.test(f.name)) {
+        invoke<ArrayBuffer>("fetch_bytes", { path: "image", query: { path: f.path } })
+          .then((bytes) => { a.preview = URL.createObjectURL(new Blob([bytes])); drawAttachments(); }).catch(() => {});
+      }
+      attachments.push(a);
+    }
+  } catch (e) {
+    for (const a of shown) a.error = String(e);
+    toast(String(e));
+  }
+  drawAttachments();
+}
+
+const PICTURE = /\.(png|jpe?g|gif|webp|heic|bmp|tiff?)$/i;
+
+/** Dropped from outside the window: each path uploaded by the native side, one by one. */
+function attachPaths(paths: string[]) {
+  for (const path of paths) {
+    const name = path.split(/[\\/]/).pop() || path;
+    attachUploaded(invoke<Json>("upload_path", { path }).then((f) => [f]), [name]);
+  }
+}
+
 let toastTimer = 0;
 function toast(text: string) {
   if (!text) return;
@@ -1571,8 +1605,19 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   input.addEventListener("input", () => { grow(input); drawShellMode(); });
   input.addEventListener("paste", (e) => {
-    const files = e.clipboardData?.files;
-    if (files?.length) { e.preventDefault(); attach(files); }
+    const data = e.clipboardData;
+    const files = data?.files;
+    if (files?.length) { e.preventDefault(); attach(files); return; }
+    // A screenshot, or files copied in a file manager: WebKitGTK gives the page neither, so the native side
+    // reads the clipboard. Plain text pastes as text.
+    const types = [...(data?.types ?? [])];
+    const copiedFiles = (data?.getData("text/uri-list") ?? "").split("\n").some((l) => l.trim().startsWith("file://"));
+    if (types.some((t) => t.startsWith("image/")) || copiedFiles || !data?.getData("text/plain")) {
+      e.preventDefault();
+      const pending = invoke<Json[]>("paste_files");
+      pending.then((found) => { if (!found.length && !copiedFiles) toast("Nothing to paste."); });
+      attachUploaded(pending, ["Pasting…"]);
+    }
   });
   $("stop").onclick = () => act("stop");
   $("model").onclick = (e) => { e.stopPropagation(); openModels(); };
@@ -1585,7 +1630,15 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   for (const b of $("mode").querySelectorAll<HTMLElement>("button")) b.onclick = () => setMode(b.dataset.mode!);
 
-  // Files dropped anywhere on the chat are attached (Tauri's own drop handling is off: dragDropEnabled).
+  // Files dropped from outside the window come natively, as paths (dragDropEnabled): WebKitGTK hands the page
+  // none from a file manager. The page's own drop below still takes what a browser-style drag carries.
+  listen<Json>("tauri://drag-enter", () => { if (!$("app").hidden) $("drop").hidden = false; });
+  listen<Json>("tauri://drag-leave", () => { $("drop").hidden = true; });
+  listen<Json>("tauri://drag-drop", (e) => {
+    $("drop").hidden = true;
+    const paths: string[] = e.payload?.paths ?? [];
+    if (paths.length && !$("app").hidden) attachPaths(paths);
+  });
   let dragDepth = 0;
   const main = $("main");
   main.addEventListener("dragenter", (e) => { if (e.dataTransfer?.types.includes("Files")) { dragDepth++; $("drop").hidden = false; } });

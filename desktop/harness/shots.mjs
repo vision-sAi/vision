@@ -23,8 +23,12 @@ const site = mkdtempSync(join(tmpdir(), "vision-shots-"));
 cpSync(join(root, "dist"), site, { recursive: true });
 cpSync(join(here, "fake-tauri.js"), join(site, "fake-tauri.js"));
 cpSync(join(here, "scenes.js"), join(site, "scenes.js"));
+// The window's own content security policy, as the app applies it: a picture or a script it would block
+// is blocked here too (blob: pictures once showed only their captions in the app while every shot passed).
+const csp = JSON.parse(readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8")).app?.security?.csp ?? "";
 const page = readFileSync(join(site, "index.html"), "utf8")
-  .replace("<head>", '<head>\n<script src="/scenes.js"></script>\n<script src="/fake-tauri.js"></script>');
+  .replace("<head>", '<head>\n<script src="/scenes.js"></script>\n<script src="/fake-tauri.js"></script>'
+    + (csp ? `\n<meta http-equiv="Content-Security-Policy" content="${csp.replace(/"/g, "&quot;")}">` : ""));
 writeFileSync(join(site, "index.html"), page);
 
 const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml" };
