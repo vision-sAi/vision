@@ -67,6 +67,16 @@ final class FakeServerTests: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch
     }
 
+    /// The match that's on screen and can take a tap (a closed drawer keeps copies of some rows out of sight).
+    private func onScreen(_ query: XCUIElementQuery, timeout: TimeInterval = 5) -> XCUIElement {
+        let end = Date().addingTimeInterval(timeout)
+        repeat {
+            if let hit = query.allElementsBoundByIndex.first(where: { $0.exists && $0.isHittable }) { return hit }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        } while Date() < end
+        return query.firstMatch
+    }
+
     private func text(_ app: XCUIApplication, containing part: String) -> XCUIElement {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", part)).firstMatch
     }
@@ -660,14 +670,16 @@ final class FakeServerTests: XCTestCase {
         let app = launch()
         app.buttons["Chats"].tap()
         XCTAssertTrue(text(app, containing: "Groceries").waitForExistence(timeout: 10))
-        XCTAssertFalse(text(app, containing: "Widget").exists, "projects aren't listed with the chats")
-        XCTAssertFalse(text(app, containing: "Flaky tests").exists, "nor is a project's chat")
+        // Scouts are listed under their row with their buddies, not among the chats; a scout's own chat isn't a chat row.
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Widget,")).firstMatch.exists, "the scout is in the drawer")
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Flaky tests")).count, 1,
+                       "a project's chat isn't listed with the chats too")
 
         app.buttons["Scouts"].tap()
         XCTAssertTrue(text(app, containing: "Widget").waitForExistence(timeout: 5))
-
-        // One whose chat is open: pushed over the Projects screen, and back returns to it.
-        text(app, containing: "Flaky tests").tap()
+        // One whose chat is open: pushed over the Projects screen, and back returns to it. The drawer, away under the
+        // screen, lists the scouts too: the one on screen is tapped.
+        onScreen(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Flaky tests"))).tap()
         XCTAssertTrue(app.buttons["Threads"].waitForExistence(timeout: 5), "the project's chat is pushed")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(text(app, containing: "Widget").waitForExistence(timeout: 5), "back on the Projects screen")
@@ -739,9 +751,10 @@ final class FakeServerTests: XCTestCase {
         app.buttons["Chats"].tap()
         let scouts = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Scouts")).firstMatch
         XCTAssertTrue(scouts.waitForExistence(timeout: 10))
-        XCTAssertEqual(scouts.label, "Scouts, 1 needs you", "the drawer counts what waits on you")
-        scouts.tap()
-        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Atlas")).firstMatch
+        // The count arrives with the scout's threads, a moment after the row.
+        XCTAssertTrue(app.buttons["Scouts, 1 needs you"].waitForExistence(timeout: 5), "the drawer counts what waits on you: \(scouts.label)")
+        // The scout is right there in the drawer, its line leading with what needs you; a tap opens its page.
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Atlas,")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         XCTAssertTrue(row.label.contains("1 needs you"), "its line leads with what needs you: \(row.label)")
         row.tap()

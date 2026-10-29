@@ -84,7 +84,7 @@ struct MessageBubble: View {
                             .lineSpacing(4)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 10)
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(theme.userInk ?? .primary)
                             .modifier(UserBubble(theme: theme))
                             // Held, the bubble lifts with a menu, as in ChatGPT's app: the whole message to
                             // copy or share, or its words made selectable right here.
@@ -204,9 +204,17 @@ private struct UserBubble: ViewModifier {
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: theme.bubbleRadius, style: .continuous)
-        content
-            .background(theme.bubbleColor, in: shape)
-            .overlay { if let stroke = theme.bubbleStroke { shape.strokeBorder(stroke, lineWidth: 1) } }
+        if let colors = theme.userBubble {
+            // Panes: the violet gradient, the text on it in the theme's ink (links and code too).
+            content
+                .foregroundStyle(theme.userInk ?? .primary)
+                .tint(theme.userInk ?? .primary)
+                .background(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing), in: shape)
+        } else {
+            content
+                .background(theme.bubbleColor, in: shape)
+                .overlay { if let stroke = theme.bubbleStroke { shape.strokeBorder(stroke, lineWidth: 1) } }
+        }
     }
 }
 
@@ -267,7 +275,7 @@ struct QueuedStrip: View {
             if !message.text.isEmpty {
                 Text(message.text)
                     .themeFont(.body)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.userInk.map { AnyShapeStyle($0.opacity(0.8)) } ?? AnyShapeStyle(.secondary))
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)   // with a thumbnail row above, it was held to one line
                     .padding(.horizontal, 16)
@@ -1367,7 +1375,7 @@ private struct SelectableBubbleText: UIViewRepresentable {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = lineSpacing
         view.attributedText = NSAttributedString(string: text, attributes: [
-            .font: theme.uiFont(.body), .foregroundColor: UIColor.label, .paragraphStyle: style])
+            .font: theme.uiFont(.body), .foregroundColor: theme.userInk.map { UIColor($0) } ?? UIColor.label, .paragraphStyle: style])
         DispatchQueue.main.async { [coordinator = context.coordinator] in
             view.becomeFirstResponder()
             view.selectedRange = NSRange(location: 0, length: (text as NSString).length)

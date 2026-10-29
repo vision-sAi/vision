@@ -772,8 +772,11 @@ struct ApprovalCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(approval.title.isEmpty ? project.name : approval.title) asks to run")
-                .themeFont(.subheadline, weight: .semibold)
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                if theme.backdrop { PanesDot(color: theme.accent ?? .accentColor) }
+                Text("\(approval.title.isEmpty ? project.name : approval.title) asks to run")
+                    .themeFont(.subheadline, weight: .semibold)
+            }
             Text(approval.command)
                 .font(.system(.footnote, design: .monospaced))
                 .padding(8)
@@ -796,8 +799,10 @@ struct ApprovalCardView: View {
             if let error { Text(error).themeFont(.caption).foregroundStyle(.red) }
         }
         .padding(14)
-        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.orange.opacity(0.45)))
+        // Panes: a neutral card like the rest, its kind in the dot; the other themes keep the orange.
+        .background(theme.backdrop ? theme.surfaceColor : Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .strokeBorder(theme.backdrop ? Color(.separator).opacity(0.5) : Color.orange.opacity(0.45)))
         .alert("Edit the command", isPresented: $editing) {
             TextField("Command", text: $edited).font(.system(.body, design: .monospaced))
             Button("Approve edited") { decide(true, command: edited) }

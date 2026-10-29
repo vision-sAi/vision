@@ -58,6 +58,7 @@ struct VisionRemoteApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        ThemeID.settle()
         CallLiveActivity.endLeftovers()
         #if DEBUG
         // Screenshot hook: `--theme hearth` opens in that theme.

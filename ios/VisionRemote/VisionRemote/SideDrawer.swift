@@ -90,9 +90,11 @@ struct SideDrawer<Drawer: View, Content: View>: View {
         }
     }
 
-    /// A theme with its own background washes in that; the system theme keeps the measured one.
+    /// A theme with its own background washes in that; the system theme keeps the measured one. Panes barely
+    /// washes: the chat floats on the glow as a card and stays readable.
     private var wash: Color {
-        switch theme.scheme {
+        if theme.backdrop { return theme.backgroundColor.opacity(0.18) }
+        return switch theme.scheme {
         case .dark: Color(white: 0.19).opacity(0.39)
         case .light: theme.backgroundColor.opacity(0.45)
         default: Color(Self.systemWash)
@@ -114,6 +116,8 @@ struct SideDrawer<Drawer: View, Content: View>: View {
                     .opacity(progress)
                     // Keep the drawer's own gestures out of the way until it is actually showing.
                     .allowsHitTesting(progress > 0.5)
+                    // Nor is it there for VoiceOver (or a UI test) while it's away under the chat.
+                    .accessibilityHidden(progress < 0.5)
                     // Swipe left on the panel itself to put it away, not just on the sliver of chat beside it.
                     .simultaneousGesture(dragGesture(width: width, closeOnly: true))
                 content
@@ -145,10 +149,12 @@ struct SideDrawer<Drawer: View, Content: View>: View {
                     .background {
                         RoundedRectangle(cornerRadius: radius, style: .continuous)
                             .fill(theme.backgroundColor)
-                            .shadow(color: .black.opacity(0.14 * progress), radius: 18)
+                            .shadow(color: .black.opacity((theme.backdrop ? 0.24 : 0.14) * progress), radius: theme.backdrop ? 26 : 18)
                             .ignoresSafeArea()
                             .allowsHitTesting(false)
                     }
+                    // Panes: the chat shrinks a little as it slides, so it floats on the glow with room above and below.
+                    .scaleEffect(theme.backdrop ? 1 - 0.08 * progress : 1, anchor: .leading)
                     .offset(x: offset)
                     // When the drawer swipe is disabled (notably over a pushed project chat), don't leave
                     // its recogniser attached at all: it can compete with NavigationStack's edge-back swipe
@@ -156,7 +162,9 @@ struct SideDrawer<Drawer: View, Content: View>: View {
                     .simultaneousGesture(dragGesture(width: width), including: swipeEnabled || isOpen ? .all : .none)
                     .onPreferenceChange(DrawerSwipeGuardKey.self) { if !away { contentGuards = $0 } }
             }
-            .background(theme.backgroundColor.ignoresSafeArea())
+            .background {
+                if theme.backdrop { PanesBackdrop() } else { theme.backgroundColor.ignoresSafeArea() }
+            }
             #if DEBUG
             // The performance hook's scripted finger (PerfDrive).
             .onReceive(NotificationCenter.default.publisher(for: PerfDrive.drag)) { note in

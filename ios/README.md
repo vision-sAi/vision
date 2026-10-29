@@ -140,10 +140,13 @@ window. More Visions are added later under Settings → the connection row.
   Force-quitting the app ends iOS background audio.
 - When Vision asks a question, a form appears; Skip lets it carry on without answers.
 - Menu: new conversation, earlier conversations (for the active provider), model + effort, settings.
-- Settings → Appearance picks the app's look: System (as it ships, follows light and dark), Hearth (Vision's
-  own typeface on warm ink), Paper (serif on warm stock), Hairline (ink rules, mono labels) or Graphite
-  (flat dark, signal orange). Same screens and controls, different clothes; the
-  choice is kept on the phone and applies at once.
+- Settings → Appearance picks the app's look: Panes (the desktop app's: violet on a soft glow, the chat floating
+  beside the drawer as a card; follows light and dark, and is what a new install starts on), System (plain iOS,
+  follows light and dark; a phone that was paired before Panes stays on it), Hearth (Vision's own typeface on warm
+  ink), Paper (serif on warm stock), Hairline (ink rules, mono labels) or Graphite (flat dark, signal orange).
+  Same screens and controls, different clothes; the choice is kept on the phone and applies at once.
+- The drawer lists the scouts under their row, each with its buddy and what it's up to in that state's colour
+  (amber when it needs you); a tap opens its page.
 - If the app is backgrounded during a silent text reply, the machine carries on; on return the reply is
   picked up, and the combined typed/voice transcript comes back from the server. Voice history lasts while the server runs;
   resuming an older native session restores its typed history.
