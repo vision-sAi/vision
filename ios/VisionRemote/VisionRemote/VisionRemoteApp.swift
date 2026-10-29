@@ -58,14 +58,7 @@ struct VisionRemoteApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
-        ThemeID.settle()
         CallLiveActivity.endLeftovers()
-        #if DEBUG
-        // Screenshot hook: `--theme hearth` opens in that theme.
-        if let i = CommandLine.arguments.firstIndex(of: "--theme"), i + 1 < CommandLine.arguments.count {
-            UserDefaults.standard.set(CommandLine.arguments[i + 1], forKey: ThemeID.key)
-        }
-        #endif
     }
 
     var body: some Scene {
@@ -89,19 +82,17 @@ struct VisionRemoteApp: App {
     }
 }
 
-/// The app in the theme picked in Settings › Appearance. Read in a view, not the App: there it reached the chat
-/// a pass after the Settings sheet took it, so the sheet turned a few frames before the screen behind it.
+/// The app in Panes, its one look (Theme.swift).
 private struct ThemedRoot: View {
-    @AppStorage(ThemeID.key) private var themeID = ThemeID.system.rawValue
-
     var body: some View {
-        let theme = Theme.named(themeID)
+        let theme = Theme.panes
         ChatView()
             .environment(\.theme, theme)
             .themeFont(.body)
             .tint(theme.accent)
-            // Light or dark on the window (see Theme.applyScheme); a pick in Settings sets it itself first.
-            .onAppear { theme.applyScheme() }
-            .onChange(of: themeID) { theme.applyScheme() }
+            .onAppear {
+                theme.applyScheme()
+                UserDefaults.standard.removeObject(forKey: "theme")   // what a phone picked before there was only Panes
+            }
     }
 }

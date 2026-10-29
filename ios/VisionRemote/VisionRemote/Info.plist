@@ -37,13 +37,6 @@
 	<string>Vision shows your recent photos and videos so you can attach them to a message.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
-	<key>UIAppFonts</key>
-	<array>
-		<string>Hearth-Regular.otf</string>
-		<string>Hearth-Medium.otf</string>
-		<string>Hearth-SemiBold.otf</string>
-		<string>Hearth-Bold.otf</string>
-	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
