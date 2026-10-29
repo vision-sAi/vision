@@ -260,12 +260,12 @@
       { wait: 300, click: ".side-row[data-action=agents]" },
       { wait: 200, check: "the board's columns each carry their colour", fn: () => [...document.querySelectorAll(".lane")].map((l) => [...l.classList].find((c) => c.startsWith("tone-")) ?? "wide").join() === "tone-ask,tone-ready,tone-busy,tone-idle,wide" },
       { wait: 200, check: "the board groups threads by what they need", fn: () => [...document.querySelectorAll(".lane-head h3")].map((h) => h.textContent).join(",") === "Needs you,Ready for review,Working,Idle,Scheduled" },
-      { check: "the sidebar badge counts what needs you", fn: () => document.querySelector("#agents-badge").textContent === "1" },
+      { check: "the sidebar badge counts what needs you: questions, work to review and requests", fn: () => document.querySelector("#agents-badge").textContent === "3" },
       { check: "a recent sleep is explained", fn: () => !!document.querySelector(".sleep-banner") },
       { frame: { type: "thread", project: "p1", thread: { ...THREADS.p1[2], state: "ready_for_review", last_result: { status: "completed", summary: "Tests added." } } } },
       { wait: 100, check: "a thread frame moves its card", fn: () => document.querySelectorAll(".lane")[1].querySelectorAll(".thread-card").length === 2 },
       { check: "finishing notifies", fn: () => window.__notified.some((n) => n.title === "Vision desktop app: ready for review") },
-      { check: "the tray says what the agents are up to", fn: () => window.__tray === "1 needs you · 2 ready · 1 working" },
+      { check: "the tray says what the agents are up to, with the same count", fn: () => window.__tray === "4 need you · 1 working" },
     ] },
 
     thread: { ...base, http: AGENT_HTTP, steps: [
@@ -344,7 +344,7 @@
       { wait: 300, check: "a scout waiting on you says so in amber", fn: () => document.querySelector(".chat-item.scout .scout-line")?.classList.contains("tone-ask") },
       { wait: 300, check: "the sidebar lists scouts with what they're doing", fn: () => document.querySelector(".chat-item.scout .scout-line")?.textContent.endsWith("3 need you") },
       { check: "a scout's own chat isn't listed with the chats", fn: () => ![...document.querySelectorAll(".chat-item:not(.scout) .chat-name")].some((n) => n.textContent === "Vision desktop app") },
-      { check: "the Scouts heading counts who needs you", fn: () => document.querySelector(".scouts-head b")?.textContent === "1 needs you" },
+      { check: "the Scouts heading adds up what each scout's row says", fn: () => document.querySelector(".scouts-head b")?.textContent === "3 need you" && document.querySelector(".chat-item.scout .scout-line")?.textContent === "3 need you" },
       openAtlas,
       { wait: 300, check: "a scout's page shows its name and goal", fn: () => document.querySelector(".scout-titles .scout-name")?.textContent === "Atlas" && document.querySelector(".scout-leash")?.textContent === "Check-ins" && !!document.querySelector(".scout-goal")?.textContent },
       { check: "the rail has its four sections", fn: () => [...document.querySelectorAll(".rail-head h3")].map((h) => h.textContent).join(",") === "Needs you,Activity,Leash,Remembers" },
