@@ -154,6 +154,36 @@ def saved_chats(directory: Path | None = None) -> list[tuple[str, list[dict]]]:
     return chats
 
 
+_BRAINS_CACHE: dict[Path, tuple[float, int, dict[str, tuple[str, str]]]] = {}
+
+
+def session_brains(directory: Path | None = None) -> dict[str, tuple[str, str]]:
+    """The model and effort each provider session last ran on, from every chat's journal: {session_id: (model,
+    effort)}. A file is re-read only when it has changed since the last call."""
+    root = directory or JOURNAL_DIR
+    out: dict[str, tuple[str, str]] = {}
+    if not root.exists():
+        return out
+    for path in root.glob("*.jsonl"):
+        try:
+            st = path.stat()
+            hit = _BRAINS_CACHE.get(path)
+            if not hit or hit[:2] != (st.st_mtime, st.st_size):
+                found: dict[str, tuple[str, str]] = {}
+                model = effort = ""
+                for r in ChatJournal(path.stem, root).read():
+                    if r.get("event") in ("chat", "model"):
+                        model, effort = r.get("model") or model, r.get("effort") or ""
+                    sid = r.get("session_id")
+                    if sid and model and r.get("event") in ("done", "model"):
+                        found[sid] = (model, effort)
+                hit = _BRAINS_CACHE[path] = (st.st_mtime, st.st_size, found)
+        except (OSError, ValueError):
+            continue
+        out.update(hit[2])
+    return out
+
+
 def interrupted_journals(directory: Path | None = None) -> list[tuple[str, dict]]:
     """All chats with a turn that started but never reached a durable done event."""
     root = directory or JOURNAL_DIR

@@ -55,33 +55,26 @@ struct SessionsView: View {
                 Button("Try again") { Task { await load() } }.buttonStyle(.bordered)
             }
         } else {
-            List {
-                if rows != nil, providers.count > 1 {
-                    filterChips
-                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                }
-                if rows == nil {
-                    Section {
-                        ForEach(0..<7, id: \.self) { _ in placeholderRow }
-                    } header: {
-                        Text("Today")
+            // Laid out like Usage: a solid backdrop, each date's conversations on one rounded card.
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if rows != nil, providers.count > 1 {
+                        filterChips.padding(.bottom, 6)
                     }
-                    .redacted(reason: .placeholder)
-                } else {
-                    ForEach(groups, id: \.title) { group in
-                        Section {
-                            ForEach(group.rows, id: \.stableID) { row($0) }
-                        } header: {
-                            if !group.title.isEmpty { Text(group.title) }
+                    if rows == nil {
+                        groupCard(title: "Today", rows: (0..<7).map { _ in nil })
+                            .redacted(reason: .placeholder)
+                    } else {
+                        ForEach(groups, id: \.title) { group in
+                            groupCard(title: group.title, rows: group.rows)
                         }
                     }
                 }
+                .padding(.top, 4)
+                .padding(.bottom, 28)
+                .animation(.smooth, value: filter)
             }
-            .listStyle(.insetGrouped)
-            .listSectionSpacing(.compact)
-            .contentMargins(.top, 4, for: .scrollContent)
+            .background(Color(.systemGroupedBackground))
             .overlay {
                 if rows != nil, shown.isEmpty {
                     if query.isEmpty {
@@ -130,13 +123,13 @@ struct SessionsView: View {
                         .themeFont(.caption, weight: .bold)
                         .foregroundStyle(selected ? AnyShapeStyle(Color(.systemBackground)) : AnyShapeStyle(ProviderStyle.tint(id)))
                 }
-                Text(label).themeFont(.subheadline, weight: .semibold)
+                Text(label).themeFont(.footnote, weight: .semibold)
                 Text("\(count)")
                     .themeFont(.caption, weight: .semibold, digits: true)
                     .foregroundStyle(selected ? AnyShapeStyle(Color(.systemBackground).opacity(0.7)) : AnyShapeStyle(.secondary))
             }
-            .padding(.horizontal, 14)
-            .frame(height: 36)
+            .padding(.horizontal, 12)
+            .frame(height: 32)
             .foregroundStyle(selected ? AnyShapeStyle(Color(.systemBackground)) : AnyShapeStyle(.primary))
             .background(selected ? AnyShapeStyle(Color(.label)) : AnyShapeStyle(Color(.secondarySystemGroupedBackground)),
                         in: Capsule())
@@ -191,51 +184,69 @@ struct SessionsView: View {
 
     // MARK: - rows
 
+    /// A date's title, then its conversations on one card with hairlines between them. A nil row is a placeholder.
+    private func groupCard(title: String, rows: [SessionRow?]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !title.isEmpty {
+                Text(title)
+                    .themeFont(.footnote, weight: .semibold)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 20)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            VStack(spacing: 0) {
+                ForEach(rows.indices, id: \.self) { i in
+                    if i > 0 { Divider().padding(.leading, 56) }
+                    if let r = rows[i] { row(r) } else { placeholderRow }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 4)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .padding(.horizontal, 16)
+        }
+        .padding(.top, 14)
+    }
+
     private func row(_ s: SessionRow) -> some View {
         Button {
             client.resume(sessionID: s.id, provider: s.provider)
             dismiss()
         } label: {
             HStack(spacing: 12) {
-                ProviderBadge(provider: s.provider, size: 38)
-                VStack(alignment: .leading, spacing: 5) {
+                ProviderBadge(provider: s.provider, size: 30)
+                VStack(alignment: .leading, spacing: 3) {
                     Text(s.displayTitle)
-                        .themeFont(.body)
+                        .themeFont(.subheadline, weight: .semibold)
                         .foregroundStyle(.primary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    HStack(spacing: 6) {
-                        Text(ProviderStyle.title(s.provider))
-                            .fontWeight(.medium)
-                            .foregroundStyle(ProviderStyle.tint(s.provider))
+                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        Text(s.brainLabel)
+                        Text("·")
+                        Text(Self.stamp(s)).monospacedDigit()
                         if s.hasAttachment {
                             Image(systemName: "paperclip")
                                 .imageScale(.small)
                                 .accessibilityLabel("Attachment")
                         }
                     }
-                    .themeFont(.footnote)
+                    .themeFont(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 }
                 Spacer(minLength: 4)
-                VStack(alignment: .trailing, spacing: 6) {
-                    Text(Self.stamp(s))
-                        .themeFont(.caption, weight: .medium)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    if s.current {
-                        HStack(spacing: 4) {
-                            Circle().fill(.green).frame(width: 6, height: 6)
-                            Text("Open")
-                        }
-                        .themeFont(.caption2, weight: .semibold)
-                        .foregroundStyle(.secondary)
+                if s.current {
+                    HStack(spacing: 4) {
+                        Circle().fill(.green).frame(width: 6, height: 6)
+                        Text("Open")
                     }
+                    .themeFont(.caption2, weight: .semibold)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Color(.tertiarySystemFill), in: Capsule())
                 }
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -244,12 +255,13 @@ struct SessionsView: View {
 
     private var placeholderRow: some View {
         HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(.tertiarySystemFill)).frame(width: 32, height: 32)
+            RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color(.tertiarySystemFill)).frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 3) {
-                Text("A conversation title that runs")
-                Text("Claude · 2:14 PM").themeFont(.footnote)
+                Text("A conversation title that runs").themeFont(.subheadline, weight: .semibold)
+                Text("Claude · 2:14 PM").themeFont(.caption)
             }
+            Spacer()
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 10)
     }
 }

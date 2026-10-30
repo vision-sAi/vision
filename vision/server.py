@@ -3491,9 +3491,13 @@ def create_app(hub: Hub) -> FastAPI:
 
     @app.get("/sessions", dependencies=[Depends(bearer)])
     async def sessions() -> list[dict]:
+        from vision.models import model_label
         from vision.sessions import list_all_sessions
+        from vision.turnjournal import session_brains
 
-        rows = await asyncio.get_running_loop().run_in_executor(None, list_all_sessions)
+        loop = asyncio.get_running_loop()
+        rows = await loop.run_in_executor(None, list_all_sessions)
+        brains = await loop.run_in_executor(None, session_brains)  # the model and effort each one last ran on
         rows.sort(key=lambda s: s.last_active, reverse=True)  # every provider merged, newest first
         open_ids = {(c.provider, c.session_id): c.id for c in hub.chats.values()}
         return [
@@ -3503,6 +3507,8 @@ def create_app(hub: Hub) -> FastAPI:
                 "age": s.age(),
                 "updated": s.last_active,
                 "provider": s.provider,
+                "model": model_label(brains[s.id][0]) if s.id in brains else None,
+                "effort": (brains[s.id][1] or None) if s.id in brains else None,
                 "current": (s.provider, s.id) in open_ids,
                 "chat": open_ids.get((s.provider, s.id)),
             }

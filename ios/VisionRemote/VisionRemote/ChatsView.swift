@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The side drawer, laid out like the ChatGPT app's: the title, a column of plain icon rows (Projects, Library,
-/// Scheduled, Earlier conversations, Usage), then every other chat open on the machine. Tap a chat to switch to
+/// Scheduled, Usage), then every other chat (earlier conversations from the clock by the Chats title) open on the machine. Tap a chat to switch to
 /// it, long-press it for a preview and Close; the floating Chat pill starts a new one and the gear opens Settings. A chat
 /// open in a terminal on the machine is listed too (terminal icon); it closes from its own window. A project's chat
 /// isn't listed: it opens from the Projects page.
@@ -97,7 +97,6 @@ struct ChatsView: View, Equatable {
                     projectsRow
                     ForEach(drawerScouts) { scout in scoutRow(scout) }
                     navRow("Library", icon: "books.vertical", sheet: .library)
-                    navRow("Earlier conversations", icon: "bubble.left.and.text.bubble.right", sheet: .sessions)
                     navRow("Usage", icon: "gauge.with.dots.needle.67percent", sheet: .usage)
                 }
             }
@@ -114,7 +113,7 @@ struct ChatsView: View, Equatable {
             }
 
             Group {
-                if !rows.isEmpty || (pinnedRows.isEmpty && !searching) { sectionTitle("Chats") }
+                if searching { if !rows.isEmpty { sectionTitle("Chats") } } else { chatsTitle }
                 if searching && titled.isEmpty && messageHits.isEmpty {
                     Text("Nothing matches")
                         .themeFont(.body)
@@ -292,6 +291,24 @@ struct ChatsView: View, Equatable {
             .padding(.bottom, 4)
             .padding(.horizontal, 12)
             .accessibilityAddTraits(.isHeader)
+    }
+
+    /// The Chats title, with earlier conversations a small clock button at its end.
+    private var chatsTitle: some View {
+        HStack(alignment: .lastTextBaseline) {
+            sectionTitle("Chats")
+            Spacer()
+            Button { sheet = .sessions } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Earlier conversations")
+        }
     }
 
     private var searchField: some View {
