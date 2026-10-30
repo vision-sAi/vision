@@ -1110,6 +1110,11 @@ class Chat:
     async def _run_one_turn(self, text: str, speak: bool, voice: bool, talk: bool = False) -> None:
         from vision.projects import checkin_note, report_note
 
+        if self.hub.cfg.remote.suggestions:
+            from vision.suggest import warm  # its guess finds Claude Code started, not starting
+
+            asyncio.get_running_loop().run_in_executor(None, warm, self.hub.cfg.providers.enabled)
+
         loop = asyncio.get_running_loop()
         self.busy, self.partial, self.user_text = True, "", text
         self.suggestion, self._spoken = "", bool(voice or talk)
