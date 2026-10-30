@@ -66,12 +66,12 @@ class CoordinatorTest(unittest.TestCase):
 
     def test_the_rules_follow_the_settings(self):
         ask = prompt_section(clean({"goal": "g", "settings": {"autonomy": "ask", "max_threads": 5}}))
-        self.assertIn("The leash is `on call`", ask)
+        self.assertIn("is set to `When asked`", ask)
         self.assertIn("at most 5 at once", ask)
         self.assertIn("vision thread land", ask)
         self.assertIn("Land only when the user has said to", ask)
         free = prompt_section(clean({"goal": "g", "settings": {"autonomy": "free", "updates": "needs_you"}}))
-        self.assertIn("The leash is `autonomous`", free)
+        self.assertIn("is set to `On its own`", free)
         self.assertIn("Land only when the user has said to", free)  # landing asks first on every leash by default
         landing = prompt_section(clean({"goal": "g", "settings": {"autonomy": "free", "rules": {"land": "does"}}}))
         self.assertIn("Land a thread once its checks passed", landing)
@@ -199,7 +199,7 @@ class StoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             s.find("ab")
 
-    def test_archive_hides_it_and_frees_its_chat(self):
+    def test_archive_hides_it_and_keeps_its_chat(self):
         s = ProjectStore(self.root)
         p = s.upsert({"goal": "g"})
         s.set_chat(p["id"], "chat1")
@@ -207,7 +207,7 @@ class StoreTest(unittest.TestCase):
         s.archive(p["id"])
         self.assertEqual(s.list(), [])
         self.assertEqual([x["id"] for x in s.list(include_archived=True)], [p["id"]])
-        self.assertIsNone(s.by_chat("chat1"))
+        self.assertEqual(s.by_chat("chat1")["id"], p["id"])  # still its chat, for when it's brought back
         self.assertTrue((self.root / p["id"] / "project.json").is_file())  # nothing deleted
 
     def test_a_broken_file_is_skipped(self):
@@ -310,14 +310,35 @@ class ServerTest(unittest.TestCase):
             chat.brain = _Brain(chat.cfg.brain)
             self.assertIn("Never push.", chat.brain.project_prompt)
 
-            # Archived: off the list, and its chat stays open as an ordinary one.
+            # Retired: off the list, but its chat stays its own and still opens.
+            tc.post(f"/projects/{p['id']}/checkins", json={"repeat": "daily", "time": "09:00"}, headers=self.auth)
             self.assertEqual(tc.delete(f"/projects/{p['id']}", headers=self.auth).status_code, 200)
             self._drain(ws, lambda ev: ev["type"] == "project_removed" and ev["project"] == p["id"])
             self.assertEqual(tc.get("/projects", headers=self.auth).json(), [])
-            self.assertEqual(len(tc.get("/projects", params={"all": 1}, headers=self.auth).json()), 1)
-            self.assertEqual((chat.project, chat.brain.project_prompt), ("", ""))
-            self.assertIn(chat.id, self.hub.chats)
-            self.assertEqual(tc.post(f"/projects/{p['id']}/open", headers=self.auth).status_code, 409)
+            retired = tc.get("/projects", params={"all": 1}, headers=self.auth).json()
+            self.assertEqual([x["status"] for x in retired], ["archived"])
+            self.assertEqual(chat.project, p["id"])
+            self.assertIn("Never push.", chat.brain.project_prompt)
+            self.assertEqual(tc.post(f"/projects/{p['id']}/open", headers=self.auth).json()["chat"], chat.id)
+            self.assertIsNotNone(retired[0]["checkin"]["schedule"])  # kept, skipped while it's retired
+
+            # Brought back: on the list again, as it was.
+            r = tc.post(f"/projects/{p['id']}/resume", headers=self.auth)
+            self.assertEqual((r.json()["status"], r.json()["chat"]), ("active", chat.id))
+            self._drain(ws, lambda ev: ev["type"] == "project" and ev["project"]["id"] == p["id"])
+            self.assertEqual([x["id"] for x in tc.get("/projects", headers=self.auth).json()], [p["id"]])
+
+            # Deleted: only once it's retired, and then its chat, check-ins and folder go too.
+            self.assertEqual(tc.post(f"/projects/{p['id']}/delete", headers=self.auth).status_code, 409)
+            tc.delete(f"/projects/{p['id']}", headers=self.auth)
+            r = tc.post(f"/projects/{p['id']}/delete", headers=self.auth)
+            self.assertEqual(r.json(), {"deleted": p["id"], "kept": []})
+            self._drain(ws, lambda ev: ev["type"] == "chat_closed" and ev["chat"] == chat.id)
+            self.assertNotIn(chat.id, self.hub.chats)
+            self.assertIsNone(self.hub.schedule.for_project(p["id"]))
+            self.assertFalse((self.hub.projects.root / p["id"]).exists())
+            self.assertEqual(tc.get(f"/projects/{p['id']}", headers=self.auth).status_code, 404)
+            self.assertTrue(Path(work).is_dir())  # its work folder is never touched
 
     def test_an_open_chat_becomes_a_project_as_it_is(self):
         from fastapi.testclient import TestClient

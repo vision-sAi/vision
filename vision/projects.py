@@ -23,8 +23,9 @@ it's shown, never stored.
 is the project's coordinator. The goal, instructions and the coordinator's rules go into that chat's
 system prompt (`prompt_section`), so every turn there knows whose it is; what changes from minute to
 minute (the threads, the project memory) rides in with each turn instead (`status_block`), so a thread
-finishing never restarts the brain's process. Archiving hides a project and frees its chat; nothing on
-disk is deleted. An empty model setting means the chat's own.
+finishing never restarts the brain's process. Archiving (retiring) hides a project from the lists but keeps
+its chat its own, so making it active again brings it back as it was; nothing on disk is deleted. Deleting
+(`delete`, a retired project only) takes its folder away for good. An empty model setting means the chat's own.
 
 Beside project.json: threads.json (runs.py), memory.md (the project memory: one dated fact a line, fed
 by the threads' `decisions` and by the coordinator), library.json (library.py's project index) and
@@ -45,6 +46,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import threading
 import time
 from datetime import datetime
@@ -547,11 +549,11 @@ def clean(body: dict, old: dict | None = None) -> dict:
 
 
 _AUTONOMY = {
-    "ask": "The leash is `on call`: propose threads (what each would do) and start them only once the user says yes. "
+    "ask": "How much you do alone is set to `When asked`: propose threads (what each would do) and start them only once the user says yes. "
            "Following up a thread the user already started is fine.",
-    "balanced": "The leash is `check-ins`: start small, clearly wanted threads yourself (a look, a check, a contained fix); "
+    "balanced": "How much you do alone is set to `Asks first`: start small, clearly wanted threads yourself (a look, a check, a contained fix); "
                 "for big or costly work (several threads, a refactor, anything hours long) say the plan and wait for a yes.",
-    "free": "The leash is `autonomous`: start, continue and split threads as the work needs, without asking first.",
+    "free": "How much you do alone is set to `On its own`: start, continue and split threads as the work needs, without asking first.",
 }
 
 
@@ -708,7 +710,7 @@ def recap(transcript: list[dict]) -> str:
 
     said = [m for m in transcript if m.get("role") in ("user", "assistant") and not report_note(m.get("text") or "")
             or m.get("role") == "checkin" and m.get("text")]
-    said = [{**m, "role": "assistant", "text": f"({m.get('label') or 'Check-in'}) {m['text']}"} if m["role"] == "checkin" else m
+    said = [{**m, "role": "assistant", "text": f"({m.get('label') or 'Status report'}) {m['text']}"} if m["role"] == "checkin" else m
             for m in said]
     return format_transcript(said, max_chars=RECAP_CHARS)
 
@@ -778,7 +780,7 @@ def checkin_label(started: float) -> str:
     """Morning check-in, Afternoon…, Evening…, Night…, by the hour it started."""
     hour = datetime.fromtimestamp(started).hour
     part = "Morning" if 5 <= hour < 12 else "Afternoon" if 12 <= hour < 17 else "Evening" if 17 <= hour < 22 else "Night"
-    return f"{part} check-in"
+    return f"{part} status report"
 
 
 def _ago(seconds: float) -> str:
@@ -796,22 +798,24 @@ def checkin_message(started: float, since: float | None, changes: list[str], *, 
     `asleep_s`: how much of the time since the last one the computer slept."""
     label = checkin_label(started)
     data = {"started": round(started, 1), "since": round(since, 1) if since else None, "why": why}
-    when = (f"The last one was {_ago(started - since)} ago" if since else "This is its first check-in") + (
+    when = (f"The last one was {_ago(started - since)} ago" if since else "This is its first status report") + (
         f", and the computer slept for {_ago(asleep_s)} of that." if asleep_s >= 300 else ".")
     late = (f" It was due at {datetime.fromtimestamp(missed).strftime('%H:%M on %a %d %b')}, but this computer was asleep "
             "or Vision was off, so it runs now, once." if missed else "")
-    asked = "The user asked for it just now." if why == "now" else "It's the project's scheduled check-in."
+    asked = "The user asked for it just now." if why == "now" else "It's the project's scheduled status report."
     lines = [f"{CHECKIN_PREFIX}{label}", f"{CHECKIN_OPEN}{json.dumps(data)}{CHECKIN_CLOSE}",
-             f"A check-in, from Vision, not the user's words. {asked} {when}{late}"]
+             f"A status report, from Vision, not the user's words. {asked} {when}{late}"]
     if changes:
         lines.append("Since then:")
         lines.extend(f"- {_cut(c, 200)}" for c in changes[:20])
     else:
         lines.append("Nothing has changed in the project's folder or its threads since then.")
     lines.append("Work on the goal now, on your own: look into what's new and start or carry on threads as your rules allow "
-                 "(your leash and rules still hold). Then end with a short report for "
-                 "the user, a few lines and no headings: what you did, and what needs them (a decision, an approval, work to "
-                 "review), or that nothing does.")
+                 "(your leash and rules still hold). Then end with the report for the user. When the goal is something "
+                 "delivered on a schedule (a news brief, a digest, a summary of something), the report is that thing, "
+                 "written out in full, not a note that you made it; say what's new since the last one rather than "
+                 "repeating it. Otherwise it's a few lines, no headings: what you did, and what needs them (a decision, an "
+                 "approval, work to review), or that nothing does.")
     return "\n".join(lines)
 
 
@@ -819,7 +823,7 @@ def checkin_of(text: str) -> dict | None:
     """{label, started, since, why} of a check-in turn, or None when the text is no check-in."""
     if not text.startswith(CHECKIN_PREFIX):
         return None
-    label = text[len(CHECKIN_PREFIX):].split("\n", 1)[0].strip() or "Check-in"
+    label = text[len(CHECKIN_PREFIX):].split("\n", 1)[0].strip() or "Status report"
     data: dict = {}
     if CHECKIN_OPEN in text and CHECKIN_CLOSE in text:
         try:
@@ -1065,12 +1069,11 @@ class ProjectStore:
         return dict(hits[0]) if hits else None
 
     def by_chat(self, chat_id: str) -> dict | None:
-        """The project whose chat this is (archived ones have given theirs up)."""
+        """The project whose chat this is (a retired one's too: it keeps its chat)."""
         if not chat_id:
             return None
         with self._lock:
-            return next((dict(p) for p in self._projects.values()
-                         if p.get("chat") == chat_id and p.get("status") != "archived"), None)
+            return next((dict(p) for p in self._projects.values() if p.get("chat") == chat_id), None)
 
     def upsert(self, body: dict) -> dict:
         with self._lock:
@@ -1096,8 +1099,17 @@ class ProjectStore:
             self._save(project)
             return dict(project)
 
+    def delete(self, pid: str) -> dict | None:
+        """Gone for good: out of the store and its folder (memory, threads, activity, approvals) deleted.
+        Returns it as it was, None when there's no such project."""
+        with self._lock:
+            project = self._projects.pop(pid, None)
+            if project is not None:
+                shutil.rmtree(self.root / pid, ignore_errors=True)
+            return project
+
     def archive(self, pid: str) -> dict | None:
-        """Hidden from the lists and its chat freed; its folder (memory, threads to come) stays on disk."""
+        """Hidden from the lists; its chat and folder (memory, threads) stay, for when it's brought back."""
         with self._lock:
             project = self._projects.get(pid)
             if project is None:

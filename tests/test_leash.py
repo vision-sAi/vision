@@ -87,7 +87,7 @@ class LeashTest(unittest.TestCase):
 
     def test_the_coordinator_is_told_the_same_table(self):
         text = prompt_section(_project(leash="autonomous", rules={"land": "never"}))
-        self.assertIn("leash is `autonomous`", text)
+        self.assertIn("set to `On its own`", text)
         self.assertIn("Never land", text)
         self.assertIn("you and your threads may do these alone: push or open a pull request", text)
         self.assertIn("never: land a branch into the project folder", text)
@@ -220,7 +220,7 @@ class ServerTest(unittest.TestCase):
             self.assertNotIn("Bash(vision thread land:*)", ask)
             self.assertIn("Bash(git push:*)", deny)
             tc.post("/projects", json={"id": p["id"], "settings": {"leash": "on_call"}}, headers=self.auth)
-            self.assertIn("leash is `on call`", chat.brain.project_prompt)
+            self.assertIn("set to `When asked`", chat.brain.project_prompt)
             self.assertIsNone(asyncio_run(self.hub, self.hub.checkin(p["id"], why="scheduled")))  # on call: no scheduled check-in
 
     def test_a_threads_request_round_trip(self):

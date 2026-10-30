@@ -1,3 +1,4 @@
+import os
 """Scouts: every project's name, colour and trait (projects.suggest_scout), the
 mood its buddy is shown in (projects.mood), its activity log, and how the server hands all three out."""
 import json
@@ -245,8 +246,8 @@ class CheckinTurnTest(unittest.TestCase):
         self.assertIn("- “Tray” finished: fixed", text)
         info = checkin_of(text)
         self.assertEqual((info["started"], info["why"]), (started, "scheduled"))
-        self.assertTrue(info["label"].endswith("check-in"))
-        self.assertIn("This is its first check-in", checkin_message(started, None, []))
+        self.assertTrue(info["label"].endswith("status report"))
+        self.assertIn("This is its first status report", checkin_message(started, None, []))
         self.assertIsNone(checkin_of("hello"))
         self.assertEqual(unwrap_turn(text)[0], "checkin")
 
@@ -264,7 +265,7 @@ class CheckinTurnTest(unittest.TestCase):
             self.assertEqual((card["text"], card["started"], card["ended"], card["needs_you"], card["duration_ms"]),
                              ("Fixed the tray.", 500.0, 530.0, 2, 30000))
             self.assertEqual(folded[3]["text"], "")  # still running
-            self.assertNotIn("Check-in", projects.recap(rows[:2]))
+            self.assertNotIn("Status report", projects.recap(rows[:2]))
 
     def test_turn_entries_mark_the_checkin(self):
         from vision.agentlog import turn_entries
@@ -336,7 +337,7 @@ class CheckinServerTest(unittest.TestCase):
             started = self._until(ws, lambda ev: ev["type"] == "checkin")
             self.assertEqual(started["state"], "started")
             begun = self._until(ws, lambda ev: ev["type"] == "start")
-            self.assertTrue(begun["note"].endswith("check-in"))  # shown as a note, not as the user's words
+            self.assertTrue(begun["note"].endswith("status report"))  # shown as a note, not as the user's words
             done = self._until(ws, lambda ev: ev["type"] == "checkin")
             self.assertEqual((done["state"], done["needs_you"]), ("done", 1))
             self.assertIn("Fixed the tray icon", done["summary"])
@@ -349,7 +350,7 @@ class CheckinServerTest(unittest.TestCase):
             kinds = [e["kind"] for e in tc.get(f"/projects/{p['id']}/activity", headers=self.auth).json()["events"]]
             self.assertEqual(kinds[:2], ["checkin_done", "checkin"])
             # One push, because something needs the user (notify is needs_you).
-            self.assertEqual(self.pushed, [("Atlas checked in · 1 needs you", "Fixed the tray icon on its branch.")])
+            self.assertEqual(self.pushed, [("Atlas sent a status report · 1 needs you", "Fixed the tray icon on its branch.")])
 
     def test_schedule_skips_and_catch_up(self):
         from fastapi.testclient import TestClient
@@ -370,10 +371,46 @@ class CheckinServerTest(unittest.TestCase):
             self.assertIsNone(run(why="now"))
             tc.post(f"/projects/{pid}/checkins", json={"repeat": "off"}, headers=self.auth)
             self.assertIsNone(self.hub.schedule.for_project(pid))
-            # Retiring a scout drops its schedule.
+            # Retiring a scout keeps its schedule (for when it's brought back); deleting it drops it.
             tc.post(f"/projects/{pid}/checkins", json={"repeat": "weekdays", "time": "09:00"}, headers=self.auth)
             tc.delete(f"/projects/{pid}", headers=self.auth)
+            self.assertIsNotNone(self.hub.schedule.for_project(pid))
+            tc.post(f"/projects/{pid}/delete", headers=self.auth)
             self.assertIsNone(self.hub.schedule.for_project(pid))
+
+    def test_a_job_on_its_own_is_a_scout(self):
+        from fastapi.testclient import TestClient
+
+        # One from before scouts took them over turns into a scout as the server starts; one set from a
+        # chat stays a task.
+        old = self.hub.schedule.upsert({"prompt": "USA news brief", "repeat": "daily", "time": "07:00"})
+        kept = self.hub.schedule.upsert({"prompt": "check the deploy", "repeat": "once", "time": "15:00",
+                                         "date": "2099-01-01", "chat": "c1"})
+        with TestClient(self.server.create_app(self.hub)) as tc:
+            self.assertEqual([t["id"] for t in self.hub.schedule.list() if t["kind"] == "task"], [kept["id"]])
+            self.assertNotIn(old["id"], [t["id"] for t in self.hub.schedule.list()])
+            news = next(p for p in self.hub.projects.list() if p["goal"] == "USA news brief")
+            task = self.hub.schedule.for_project(news["id"])
+            self.assertEqual((task["repeat"], task["time"]), ("daily", "07:00"))
+
+            # A new one from the apps is made a scout too, in the folder it names.
+            r = tc.post("/scheduled", json={"prompt": "Tidy the notes", "repeat": "weekdays", "time": "09:00",
+                                            "workdir": self.dir.name}, headers=self.auth)
+            self.assertEqual((r.status_code, r.json()["kind"]), (200, "checkin"))
+            notes = self.hub.projects.get(r.json()["project"])
+            self.assertEqual((notes["goal"], notes["workdirs"]), ("Tidy the notes", [os.path.abspath(self.dir.name)]))
+            self.assertEqual(tc.post("/scheduled", json={"prompt": "x", "repeat": "daily", "time": "7"},
+                                     headers=self.auth).status_code, 400)
+            self.assertEqual(len(self.hub.projects.list()), 2)  # the bad one left no scout behind
+
+    def test_on_call_becomes_its_schedule_off(self):
+        from fastapi.testclient import TestClient
+
+        p = self.hub.projects.upsert({"goal": "Inbox", "workdirs": [self.dir.name], "settings": {"leash": "on_call"}})
+        self.hub.schedule.upsert({"kind": "checkin", "project": p["id"], "repeat": "daily", "time": "08:00"})
+        with TestClient(self.server.create_app(self.hub)):
+            self.assertEqual(self.hub.projects.get(p["id"])["settings"]["leash"], "checkins")
+            self.assertFalse(self.hub.schedule.for_project(p["id"])["enabled"])
 
 
 def asyncio_run(hub, coro):
