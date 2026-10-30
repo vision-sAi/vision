@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Bottom sheet: `/usage` for every subscription brain, one card per provider with a ring per
+/// Bottom sheet: `/usage` for every subscription brain, one card per provider with a bar per
 /// window (session, week, per-model), when it resets, and the plan when the provider names one.
 struct UsageView: View {
     @EnvironmentObject private var client: VisionClient
@@ -127,16 +127,19 @@ private struct ProviderUsageCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             header
             if let error = provider.error {
-                Text(LocalizedStringKey(error))
+                Label { Text(LocalizedStringKey(error)) } icon: { Image(systemName: "exclamationmark.circle") }
                     .themeFont(.footnote)
                     .foregroundStyle(.secondary)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             } else if provider.windows.isEmpty {
                 Text("Nothing to show yet.").themeFont(.footnote).foregroundStyle(.secondary)
             } else {
-                rings
+                bars
             }
             if let banked = provider.banked, banked.count > 0 {
                 BankedResets(provider: provider.provider, label: provider.label, banked: banked,
@@ -155,15 +158,15 @@ private struct ProviderUsageCard: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .padding(18)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .animation(.smooth, value: resetOutcome)
     }
 
     private var header: some View {
         HStack(spacing: 10) {
-            ProviderBadge(provider: provider.provider, size: 30)
+            ProviderBadge(provider: provider.provider, size: 28)
             Text(provider.label).themeFont(.headline)
             if let plan = provider.plan, !plan.isEmpty {
                 Text(plan)
@@ -182,17 +185,11 @@ private struct ProviderUsageCard: View {
         }
     }
 
-    /// Up to three rings a row, each row sharing the card's width evenly.
-    private var rings: some View {
-        let chunks = stride(from: 0, to: provider.windows.count, by: 3).map { Array(provider.windows[$0..<min($0 + 3, provider.windows.count)]) }
-        return VStack(spacing: 18) {
-            ForEach(chunks.indices, id: \.self) { i in
-                HStack(alignment: .top, spacing: 8) {
-                    ForEach(chunks[i]) { w in
-                        UsageRing(window: w, tint: ProviderStyle.tint(provider.provider), loading: loading)
-                            .frame(maxWidth: .infinity)
-                    }
-                }
+    /// One bar per window, stacked.
+    private var bars: some View {
+        VStack(spacing: 14) {
+            ForEach(provider.windows) { w in
+                UsageBar(window: w, tint: ProviderStyle.tint(provider.provider), loading: loading)
             }
         }
     }
@@ -306,9 +303,10 @@ private struct BankedResets: View {
     }
 }
 
-// MARK: - ring
+// MARK: - bar
 
-private struct UsageRing: View {
+/// A window as one line of words over a bar: "Session · 11%", then when it resets.
+private struct UsageBar: View {
     let window: UsageReport.Window
     let tint: Color
     var loading = false
@@ -316,7 +314,7 @@ private struct UsageRing: View {
 
     private var pct: Double? { window.usedPercent.map { max(0, min(100, $0)) } }
 
-    /// Status colours only when a limit is close; below that the ring wears its provider's tint.
+    /// Status colours only when a limit is close; below that the bar wears its provider's tint.
     private var levelColor: Color {
         guard let pct else { return tint }
         if pct >= 90 { return .red }
@@ -328,68 +326,65 @@ private struct UsageRing: View {
         switch window.label {
         case "Current session": return "Session"
         case "Current week": return "Week"
+        case "Current window": return "Window"
         default: return window.label
         }
     }
 
     var body: some View {
-        VStack(spacing: 10) {
-            ZStack {
-                if pct == nil && !loading {
-                    Circle().strokeBorder(Color(.tertiarySystemFill), style: StrokeStyle(lineWidth: 8, dash: [3, 5]))
-                } else {
-                    Circle().strokeBorder(Color(.tertiarySystemFill), lineWidth: 8)
-                    Circle()
-                        .inset(by: 4)
-                        .trim(from: 0, to: shown / 100)
-                        .stroke(levelColor.gradient, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                }
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).themeFont(.subheadline, weight: .semibold).lineLimit(1)
+                Spacer(minLength: 8)
                 if let pct {
-                    HStack(alignment: .firstTextBaseline, spacing: 1) {
-                        Text("\(Int(pct.rounded()))").themeFont(.title3, weight: .bold)
-                        Text("%").themeFont(.caption, weight: .bold).foregroundStyle(.secondary)
-                    }
-                    .monospacedDigit()
-                    .contentTransition(.numericText(value: pct))
+                    Text("\(Int(pct.rounded()))%")
+                        .themeFont(.subheadline, weight: .semibold)
+                        .foregroundStyle(pct >= 75 ? levelColor : .primary)
+                        .monospacedDigit()
+                        .contentTransition(.numericText(value: pct))
                 } else {
-                    Text("—").themeFont(.title3, weight: .semibold).foregroundStyle(.tertiary)
+                    Text("—").themeFont(.subheadline).foregroundStyle(.tertiary)
                 }
             }
-            .frame(width: 76, height: 76)
-
-            VStack(spacing: 2) {
-                Text(title)
-                    .themeFont(.subheadline, weight: .semibold)
-                    .lineLimit(1)
-                Text(resets)
-                    .themeFont(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color(.tertiarySystemFill))
+                    if pct != nil || loading {
+                        Capsule()
+                            .fill(levelColor.gradient)
+                            // A sliver stays visible at 0% so the bar still reads as live.
+                            .frame(width: max(shown > 0 ? 8 : 0, geo.size.width * shown / 100))
+                    }
+                }
             }
+            .frame(height: 8)
+            Text(resets)
+                .themeFont(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .onAppear { withAnimation(.smooth(duration: 0.8).delay(0.1)) { shown = pct ?? 0 } }
         .onChange(of: pct) { _, new in withAnimation(.smooth) { shown = new ?? 0 } }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
-        .accessibilityValue(pct.map { "\(Int($0.rounded())) percent used, resets \(resets)" } ?? "not reported")
+        .accessibilityValue(pct.map { "\(Int($0.rounded())) percent used, \(resets)" } ?? "not reported")
     }
 
-    /// "in 4h 12m" inside a day, "Thu 10:59 PM" beyond; the machine's own wording otherwise.
+    /// "Resets in 4h 12m" inside a day, "Resets Thu 10:59 PM" beyond; the machine's own wording otherwise.
     private var resets: String {
-        if pct == nil, !loading, window.resetsAt == nil { return "not reported" }
-        guard let ts = window.resetsAt else { return window.resets ?? "" }
+        if pct == nil, !loading, window.resetsAt == nil { return "Not reported" }
+        guard let ts = window.resetsAt else { return window.resets.map { "Resets \($0)" } ?? "" }
         let date = Date(timeIntervalSince1970: ts)
         let secs = date.timeIntervalSinceNow
         // A snapshot can outlive its window; its percent is then from before the reset.
-        if secs < -60 { return "already reset" }
-        if secs <= 60 { return "resets now" }
-        if secs < 3600 { return "in \(Int(secs / 60))m" }
+        if secs < -60 { return "Already reset" }
+        if secs <= 60 { return "Resets now" }
+        if secs < 3600 { return "Resets in \(Int(secs / 60))m" }
         if secs < 86400 {
             let h = Int(secs / 3600), m = Int(secs.truncatingRemainder(dividingBy: 3600) / 60)
-            return m == 0 ? "in \(h)h" : "in \(h)h \(m)m"
+            return m == 0 ? "Resets in \(h)h" : "Resets in \(h)h \(m)m"
         }
-        return date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        return "Resets " + date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
     }
 }
