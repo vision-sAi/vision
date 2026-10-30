@@ -596,6 +596,33 @@ class MultiChatTests(unittest.TestCase):
                 self.assertEqual(hub.chats[opened["chat"]].brain.cfg.model, "opus")
                 save.assert_not_called()
 
+    def test_a_model_looked_at_in_an_open_chat_shows_its_own_effort_levels(self):
+        from fastapi.testclient import TestClient
+        from vision.config import Config
+        from vision.models import efforts_for
+
+        cfg = Config()
+        cfg.brain.model, cfg.brain.effort = "opus", "high"
+        with patch.object(server, "load_token", return_value="tok"):
+            hub = server.Hub(cfg, _StubBrain(cfg.brain), "tok", log=lambda *_: None, follow_defaults=False)
+        auth = {"Authorization": "Bearer tok"}
+        with tempfile.TemporaryDirectory() as live, patch("vision.link.LIVE_DIR", __import__("pathlib").Path(live)), \
+             patch.object(server.Hub, "warm_up", lambda self: None), \
+             patch("vision.brain.create_brain", side_effect=lambda cfg, **kw: _StubBrain(cfg)):
+            with TestClient(server.create_app(hub)) as tc, tc.websocket_connect("/ws", headers=auth) as ws:
+                chat = ws.receive_json()["chats"][0]["chat"]
+                own = tc.get("/models", headers=auth, params={"chat": chat}).json()
+                self.assertEqual((own["current"], own["effort"]), ("opus", "high"))
+                self.assertEqual([e["id"] for e in own["efforts"]], list(efforts_for("opus")))
+                # Haiku has no effort setting: its levels show, and the chat itself hasn't switched.
+                haiku = tc.get("/models", headers=auth, params={"chat": chat, "model": "haiku"}).json()
+                self.assertEqual([e["id"] for e in haiku["efforts"]], [""])
+                self.assertEqual((haiku["current"], haiku["effort"]), ("opus", ""))
+                self.assertEqual(hub.chats[chat].brain.cfg.model, "opus")
+                # A model the server doesn't know falls back to the chat's own.
+                unknown = tc.get("/models", headers=auth, params={"chat": chat, "model": "nope"}).json()
+                self.assertEqual(unknown["efforts"], own["efforts"])
+
     def test_a_reply_says_how_long_it_took_and_how_long_it_has_been_going(self):
         from fastapi.testclient import TestClient
 

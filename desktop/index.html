@@ -73,14 +73,13 @@
             <textarea id="input" rows="1" placeholder="Message Vision"></textarea>
             <div class="composer-bar">
               <div class="bar-left">
+                <button type="button" id="mode" class="chip-btn mode-btn" aria-pressed="false" title="Auto runs tools as it goes; Plan proposes a plan first (Shift+Tab)">
+                  <span id="mode-icon" data-icon="Zap"></span><span id="mode-text">Auto</span>
+                </button>
                 <button type="button" id="attach" class="tool-btn" title="Attach files" data-icon="Paperclip"></button>
                 <button type="button" id="folder" class="chip-btn" title="The folder this chat works in">
                   <span data-icon="Folder"></span><span id="folder-text"></span>
                 </button>
-                <div id="mode" class="segmented" title="Auto runs tools as it goes; Plan proposes a plan first">
-                  <button type="button" data-mode="auto">Auto</button>
-                  <button type="button" data-mode="plan">Plan</button>
-                </div>
               </div>
               <div class="bar-right">
                 <button type="button" id="model" class="chip-btn" title="Model and effort">

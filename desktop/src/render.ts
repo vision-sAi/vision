@@ -47,6 +47,32 @@ export const el = (tag: string, cls = "", text = "") => {
   return node;
 };
 
+/**
+ * Shows a fixed menu by `anchor`, on the `prefer`red side unless the other has more room, never wider or
+ * taller than the window leaves. Under the ⌘+/⌘− zoom, getBoundingClientRect and the left/top a box is
+ * given can be in different px depending on the engine, so the ratio is measured off the box itself and
+ * everything is worked out in the box's own px (the window's size taken from the body, which fills it).
+ */
+export function placeFixed(box: HTMLElement, anchor: HTMLElement,
+  o: { width: number; align?: "left" | "right"; prefer?: "above" | "below"; gap?: number; maxHeight?: number }) {
+  const { align = "left", prefer = "above", gap = 8, maxHeight = 460 } = o;
+  box.style.width = `${o.width}px`;
+  box.hidden = false;
+  const k = box.getBoundingClientRect().width / box.offsetWidth || 1;
+  const win = document.body.getBoundingClientRect(), r = anchor.getBoundingClientRect();
+  const W = win.width / k, H = win.height / k;
+  const a = { top: r.top / k, bottom: r.bottom / k, left: r.left / k, right: r.right / k };
+  const w = Math.min(o.width, W - 16);
+  const above = a.top - 16, below = H - a.bottom - 16;
+  box.style.width = `${w}px`;
+  box.style.maxHeight = `${Math.min(maxHeight, Math.max(above, below))}px`;
+  const h = box.offsetHeight;
+  const left = Math.min(Math.max(8, align === "left" ? a.left : a.right - w), W - w - 8);
+  const up = prefer === "above" ? h <= above || above >= below : !(h <= below || below >= above);
+  box.style.left = `${left}px`;
+  box.style.top = `${up ? a.top - h - gap : a.bottom + gap}px`;
+}
+
 export function toolOf(t: Json): Tool {
   return {
     id: t.id ?? "", name: t.name ?? "", detail: t.detail ?? "", done: t.done ?? true, isError: !!t.is_error,
@@ -396,6 +422,11 @@ function replyBody(m: Msg): HTMLElement[] {
       const box = el("div", "cards");
       box.append(toolCard(c.tool));
       out.push(box);
+      // The brain echoes the plan into the reply for the terminal; here the card already holds it.
+      const plan = Array.from(planOf(c.tool).trim());
+      let skip = from;
+      while (skip < chars.length && /\s/.test(chars[skip])) skip++;
+      if (plan.length && chars.slice(skip, skip + plan.length).join("") === plan.join("")) from = skip + plan.length;
     } else run.push(c);
   }
   flush();

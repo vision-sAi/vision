@@ -256,10 +256,10 @@ function threadCard(t: Json): HTMLElement {
 function scheduledSection(): HTMLElement {
   const section = el("section", "lane wide");
   const head = el("div", "lane-head");
-  head.append(el("h3", "", "Scheduled"), el("span", "lane-count", String(scheduled.length)));
+  head.append(el("h3", "", "Coming up"), el("span", "lane-count", String(scheduled.length)));
   section.append(head);
   if (!scheduled.length) {
-    section.append(el("p", "dim small lane-empty", "Nothing scheduled. Ask Vision to remind you of something, or to check on something every morning."));
+    section.append(el("p", "dim small lane-empty", "Nothing coming up. Ask Vision to remind you of something, or send a scout for a job that runs every morning."));
     return section;
   }
   const list = el("div", "sched-list");
@@ -267,8 +267,12 @@ function scheduledSection(): HTMLElement {
     const row = el("div", "sched-row" + (task.enabled ? "" : " off"));
     const text = el("div", "sched-text");
     const title = el("div", "sched-title");
-    title.append(el("span", "", task.title || task.prompt));
+    // A scout's run is its own: named by the scout, and it opens the scout's chat.
+    const scout = task.kind === "checkin" ? host.projects().find((p) => p.id === task.project) : undefined;
+    title.append(el("span", "", scout ? host.projectName(scout) : task.title || task.prompt));
     if (task.kind === "reminder") title.append(el("span", "badge", "reminder"));
+    if (task.kind === "checkin") title.append(el("span", "badge", "scout"));
+    if (scout?.chat) { title.classList.add("link"); title.onclick = () => host.openChat(scout.chat); }
     text.append(title, el("div", "dim small", whenOf(task)));
     const run = el("button", "chip-btn bordered", "Run now");
     run.onclick = async () => {

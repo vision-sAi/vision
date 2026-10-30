@@ -6,7 +6,7 @@
 import * as agents from "./agents";
 import { Mood, Scout, TRAITS, buddy } from "./buddy";
 import { icon } from "./icons";
-import { Json, el, markdown } from "./render";
+import { Json, el, markdown, placeFixed } from "./render";
 
 export interface ScoutsHost {
   http: (method: string, path: string, query?: Json, body?: Json) => Promise<any>;
@@ -55,7 +55,10 @@ export function setCurrent(pid: string | null) {
 }
 
 export const live = (): Json[] => host.projects().filter((p) => p.status !== "archived");
-export const project = (pid: string | null) => (pid ? live().find((p) => p.id === pid) : undefined);
+/** Retired scouts: off the home page, dimmed at the foot of the sidebar, with a Bring back. */
+export const retired = (): Json[] => host.projects().filter((p) => p.status === "archived");
+export const isRetired = (p: Json) => p.status === "archived";
+export const project = (pid: string | null) => (pid ? host.projects().find((p) => p.id === pid) : undefined);
 export const scoutOf = (p: Json): Scout => p.scout ?? {};
 export const nameOf = (p: Json): string => p.scout?.name || p.title || "Scout";
 
@@ -72,8 +75,22 @@ function play(pid: string, mood: Mood, seconds: number) {
   host.changed();
 }
 
-const LEASH: [string, string, string][] = [["on_call", "ask", "On call"], ["checkins", "balanced", "Check-ins"], ["autonomous", "free", "Autonomous"]];
-const leashWords = (p: Json) => LEASH.find((l) => l[0] === p.leash)?.[2] ?? "Check-ins";
+// The one choice of how far a scout goes alone (its leash underneath): ask before big changes, or don't.
+const ASK_LABEL = "Ask me before big changes";
+const ASK_NOTE = "Off, it pushes, deletes and merges without asking.";
+const asksFirst = (leash: string) => leash !== "autonomous";
+const leashOf = (asking: boolean) => (asking ? "checkins" : "autonomous");
+/** A switch, `on` to start with; `change` gets each flip. */
+function askSwitch(on: boolean, change: (on: boolean) => void): HTMLElement {
+  const row = el("label", "ask-row");
+  const t = el("button", "toggle" + (on ? " on" : "")) as HTMLButtonElement;
+  t.type = "button";
+  t.setAttribute("role", "switch");
+  t.setAttribute("aria-checked", String(on));
+  t.onclick = () => { on = !on; t.classList.toggle("on", on); t.setAttribute("aria-checked", String(on)); change(on); };
+  row.append(el("span", "", ASK_LABEL), t);
+  return row;
+}
 
 /** How many things wait on the user: its threads' questions and work to look at, and its approval requests. */
 function needCount(p: Json): number {
@@ -84,13 +101,14 @@ function needCount(p: Json): number {
 /** What a scout is up to, in a word or two, and its colour: `ask` (amber) when something waits on you,
  * `busy` (violet) while it works, `done` (green) after it found or landed something, `failed`, or `quiet`. */
 export function stateOf(p: Json): [string, string] {
+  if (isRetired(p)) return ["retired", "quiet"];
   const n = needCount(p);
   if (n) return [`${n} need${n === 1 ? "s" : ""} you`, "ask"];
   const mood = moodOf(p);
   const word = ({ worried: "something failed", focused: "working", curious: "reading up", proud: "landed something", found_it: "found it",
     waking: "waking up", out_cold: "paused while asleep" } as Record<string, string>)[mood];
   if (word) return [word, mood === "worried" ? "failed" : ["proud", "found_it"].includes(mood) ? "done" : mood === "out_cold" ? "quiet" : "busy"];
-  return [p.status === "paused" ? "paused" : p.leash === "on_call" ? "on call"
+  return [p.status === "paused" ? "paused" : p.leash === "on_call" ? "resting"
     : p.checkin?.schedule?.next_run ? nextWords(p.checkin.schedule.next_run) : "resting", "quiet"];
 }
 
@@ -141,17 +159,18 @@ async function load(pid: string) {
 // ---------------------------------------------------------------- the sidebar
 
 export function drawSidebar(nav: HTMLElement, query: string, onPage: boolean) {
-  const all = live().filter((p) => !query || `${nameOf(p)} ${p.title ?? ""} ${p.goal ?? ""}`.toLowerCase().includes(query))
-    .sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
+  const matches = (p: Json) => !query || `${nameOf(p)} ${p.title ?? ""} ${p.goal ?? ""}`.toLowerCase().includes(query);
+  const byName = (a: Json, b: Json) => nameOf(a).localeCompare(nameOf(b));
+  const all = [...live().filter(matches).sort(byName), ...retired().filter(matches).sort(byName)];
   if (query && !all.length) return;  // searching, and no scout matches: no heading over nothing
   const head = el("div", "group scouts-head");
   head.append(el("span", "", "Scouts"));
   const needs = all.reduce((n, p) => n + needCount(p), 0);  // things, not scouts: the same count as each row
   if (needs) head.append(el("b", "", `${needs} need${needs === 1 ? "s" : ""} you`));
   nav.append(head);
-  if (!live().length && !query) {
+  if (!all.length && !query) {
     const first = el("button", "first-scout");
-    first.append(buddy({ hue: 205, trait: "antenna" }, "asleep", 34, { still: true }));
+    first.append(buddy({ hue: 205, trait: "sprout" }, "asleep", 34, { still: true }));
     const text = el("span", "first-text");
     text.append(el("b", "", "Send your first scout"), el("span", "dim small", "Give it a goal; it works on it in the background"));
     first.append(text);
@@ -161,9 +180,9 @@ export function drawSidebar(nav: HTMLElement, query: string, onPage: boolean) {
   }
   for (const p of all) {
     const on = onPage && p.id === current;
-    const mood = moodOf(p);
+    const mood = isRetired(p) ? "asleep" : moodOf(p);
     const quiet = !on && !["needs_you", "still_waiting", "found_it", "worried"].includes(mood);
-    const item = el("div", "chat-item scout" + (on ? " active" : ""));
+    const item = el("div", "chat-item scout" + (on ? " active" : "") + (isRetired(p) ? " retired" : ""));
     const text = el("span", "scout-text");
     const [state, tone] = stateOf(p);
     text.append(el("span", "chat-name", nameOf(p)), el("span", `scout-line tone-${tone}`, state));
@@ -214,8 +233,11 @@ export function drawHead(box: HTMLElement, p: Json) {
   box.append(keptBuddy("head", p, moodOf(p), 40, { pokeable: true }));
   const text = el("div", "scout-titles");
   const name = el("h1");
-  const leash = el("span", "scout-leash" + (p.status === "paused" ? " paused" : ""), p.status === "paused" ? "Paused" : leashWords(p));
-  leash.title = "Its leash: change it on the right";
+  const gone = isRetired(p);
+  const leash = el("span", "scout-leash" + (p.status === "paused" || gone ? " paused" : ""),
+    gone ? "Retired" : p.status === "paused" ? "Paused" : "");
+  leash.hidden = !gone && p.status !== "paused";
+  leash.title = gone ? "Retired: it doesn't work or send status reports until it's brought back" : "";
   name.append(el("span", "scout-name", nameOf(p)), leash);
   const goal = el("p", "scout-goal", p.goal ?? "");
   const chat = host.chatOf(p);
@@ -225,19 +247,34 @@ export function drawHead(box: HTMLElement, p: Json) {
   more.append(icon("Ellipsis", 16));
   more.title = "More";
   more.onclick = (e) => { e.stopPropagation(); menu(more, p); };
+  if (gone) {
+    const back = el("button", "chip-btn bordered checkin-now", "Bring back") as HTMLButtonElement;
+    back.title = "Make it active again, with its chat, memory and status reports as they were";
+    back.onclick = async () => {
+      back.disabled = true;
+      if (await post(`projects/${p.id}/resume`)) host.toast(`${nameOf(p)} is back`);
+      else back.disabled = false;
+    };
+    const del = el("button", "chip-btn bordered danger", "Delete") as HTMLButtonElement;
+    del.title = "Delete it for good";
+    del.onclick = (e) => { e.stopPropagation(); menu(more, p, true); };
+    box.append(text, back, del, more);
+    return;
+  }
   const running = !!p.checkin?.running;
-  const now = el("button", "chip-btn bordered checkin-now", running ? "Checking in…" : "Check in now") as HTMLButtonElement;
+  const now = el("button", "chip-btn bordered checkin-now", running ? "Reporting…" : "Status report now") as HTMLButtonElement;
   now.disabled = running || p.status === "paused";
-  now.title = p.status === "paused" ? "Resume it to check in" : "Have it look at everything now and report back";
+  now.title = p.status === "paused" ? "Resume it to get a status report" : "Have it look at everything now and report back";
   now.onclick = async () => {
     now.disabled = true;
-    now.textContent = "Checking in…";
-    if (!(await post(`projects/${p.id}/checkin`))) { now.disabled = false; now.textContent = "Check in now"; }
+    now.textContent = "Reporting…";
+    if (!(await post(`projects/${p.id}/checkin`))) { now.disabled = false; now.textContent = "Status report now"; }
   };
   box.append(text, now, more);
 }
 
-function menu(anchor: HTMLElement, p: Json) {
+/** The ⋯ menu; `deleting` opens it straight at the Delete question. */
+function menu(anchor: HTMLElement, p: Json, deleting = false) {
   const pop = document.getElementById("popover")!;
   const box = el("div", "menu");
   const item = (glyph: "Pencil" | "Pause" | "Play" | "Archive" | "Activity", label: string, run: () => void) => {
@@ -248,17 +285,50 @@ function menu(anchor: HTMLElement, p: Json) {
   };
   item("Pencil", "Edit scout", () => openNew(p));
   item("Activity", "All activity", () => host.showBoard());
-  if (p.status === "paused") item("Play", "Resume", () => post(`projects/${p.id}/resume`));
+  if (isRetired(p)) item("Play", "Bring back", () => post(`projects/${p.id}/resume`));
+  else if (p.status === "paused") item("Play", "Resume", () => post(`projects/${p.id}/resume`));
   else item("Pause", "Pause", () => post(`projects/${p.id}/pause`));
-  item("Archive", "Retire scout", () => {
-    if (confirm(`Retire ${nameOf(p)}? Its chat stays as an ordinary one and nothing on disk is deleted.`)) post(`projects/${p.id}`, "DELETE");
-  });
+  // Tauri's webview has no window.confirm (it returns false unseen), so these ask in the menu itself.
+  const ask = (glyph: "Archive" | "Trash2", label: string, question: string, verb: string, doing: string, run: () => Promise<unknown>) => {
+    const b = el("button", "menu-item" + (glyph === "Trash2" ? " danger" : ""));
+    b.append(icon(glyph, 15), el("span", "menu-text", label));
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const box2 = el("div", "menu-confirm");
+      const row = el("div", "menu-confirm-row");
+      const cancel = el("button", "chip-btn bordered", "Cancel");
+      cancel.onclick = (ev) => { ev.stopPropagation(); pop.hidden = true; };
+      const yes = el("button", "chip-btn bordered danger", verb) as HTMLButtonElement;
+      yes.onclick = async (ev) => {
+        ev.stopPropagation();
+        yes.disabled = true;
+        yes.textContent = doing;
+        await run();
+        pop.hidden = true;
+      };
+      row.append(cancel, yes);
+      box2.append(el("p", "menu-confirm-text", question), row);
+      box.replaceChildren(box2);
+    };
+    box.append(b);
+    return b;
+  };
+  const last = isRetired(p) ? ask("Trash2", "Delete for good", deleteQuestion(p), "Delete", "Deleting…", () => remove(p))
+    : ask("Archive", "Retire scout", `Retire ${nameOf(p)}? It stops working and sending status reports until you bring it back. Nothing is deleted.`,
+    "Retire", "Retiring…", async () => { if (await post(`projects/${p.id}`, "DELETE")) host.toast(`${nameOf(p)} retired`); });
   pop.replaceChildren(box);
-  pop.style.width = "220px";
-  pop.hidden = false;
-  const r = anchor.getBoundingClientRect();
-  pop.style.left = `${Math.min(r.right - 220, window.innerWidth - 228)}px`;
-  pop.style.top = `${r.bottom + 6}px`;
+  placeFixed(pop, anchor, { width: 220, align: "right", prefer: "below", gap: 6 });
+  if (deleting) last.click();
+}
+
+const deleteQuestion = (p: Json) =>
+  `Delete ${nameOf(p)} for good? Its chat, threads, memory and status reports go. Files in ${p.folder || "its folder"} stay.`;
+
+/** Delete a retired scout for good, saying so (and which worktrees were kept because they hold work). */
+async function remove(p: Json) {
+  const r = await post(`projects/${p.id}/delete`);
+  if (!r) return;
+  host.toast(r.kept?.length ? `${nameOf(p)} deleted. ${r.kept.join("; ")}` : `${nameOf(p)} deleted`);
 }
 
 async function post(path: string, method = "POST", body?: Json) {
@@ -296,22 +366,9 @@ export function drawRail(box: HTMLElement, p: Json) {
   }
   box.append(s2);
 
-  const s3 = railSection("Leash", "");
-  const seg = el("div", "segmented leash-seg");
-  for (const [leash, , label] of LEASH) {
-    const b = el("button", p.leash === leash ? "on" : "", label);
-    b.onclick = async () => {
-      seg.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
-      b.classList.add("on");
-      await post("projects", "POST", { id: p.id, settings: { leash } });
-    };
-    seg.append(b);
-  }
-  s3.append(seg, el("p", "rail-note", {
-    on_call: "Works only when you give it something.",
-    checkins: "Starts small, clear work by itself; asks before anything big.",
-    autonomous: "Starts, continues and splits work as it sees fit, within its rules.",
-  }[p.leash as string] ?? ""));
+  const s3 = railSection("Schedule", "");
+  s3.append(askSwitch(asksFirst(p.leash), (on) => { void post("projects", "POST", { id: p.id, settings: { leash: leashOf(on) } }); }),
+    el("p", "rail-note", ASK_NOTE));
   s3.append(rulesBox(p));
   const sched = p.checkin?.schedule;
   const row = (label: string, value: HTMLElement | string) => {
@@ -320,7 +377,7 @@ export function drawRail(box: HTMLElement, p: Json) {
     return r;
   };
   const change = el("button", "link-btn", sched ? scheduleWords(sched) : "Off");
-  change.title = "Change when it checks in";
+  change.title = "Change when it sends a status report";
   change.onclick = () => {
     const editor = scheduleEditor(sched, async (body) => {
       const r = await post(`projects/${p.id}/checkins`, "POST", body);
@@ -328,9 +385,8 @@ export function drawRail(box: HTMLElement, p: Json) {
     });
     change.replaceWith(editor);
   };
-  s3.append(row("Check-ins", change));
+  s3.append(row("Status reports", change));
   if (sched?.next_run && p.leash !== "on_call" && p.status !== "paused") s3.append(row("Next", nextWords(sched.next_run)));
-  else if (sched && p.leash === "on_call") s3.append(el("p", "rail-note", "On call: it skips its check-ins until the leash is longer."));
   if (p.checkin?.last) s3.append(row("Last", `${clock(p.checkin.last.started)} · ${p.checkin.last.needs_you ? `${p.checkin.last.needs_you} needed you` : "nothing needed you"}`));
   if (p.tokens_out) s3.append(row("Usage", `${tokens(p.tokens_out)} written by its threads`));
   box.append(s3);
@@ -428,7 +484,7 @@ function rulesBox(p: Json): HTMLElement {
     top.append(el("span", "rule-label", r.label));
     if (r.set) {
       const reset = el("button", "link-btn small", "Default");
-      reset.title = "Back to what the leash says";
+      reset.title = "Back to what its setting says";
       reset.onclick = () => post("projects", "POST", { id: p.id, settings: { rules: { [r.action]: "default" } } });
       top.append(reset);
     }
@@ -527,16 +583,23 @@ function tokens(n: number): string {
   return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M tokens` : n >= 1000 ? `${Math.round(n / 1000)}k tokens` : `${n} tokens`;
 }
 
-/** Off, every morning at a time, weekdays at a time, or every few hours; `save` gets what POST …/checkins takes. */
+/** Off, every morning at a time, weekdays, one day a week, or every few hours; `save` gets what POST …/checkins takes. */
 function scheduleEditor(current: Json | null | undefined, save: (body: Json) => void, live = false): HTMLElement {
   const box = el("div", "sched-editor");
   const kind = el("select", "sched-kind") as HTMLSelectElement;
-  for (const [v, label] of [["off", "Off"], ["daily", "Every day at"], ["weekdays", "Weekdays at"], ["every", "Every"]]) {
+  for (const [v, label] of [["off", "Off"], ["daily", "Every day at"], ["weekdays", "Weekdays at"], ["weekly", "Every week on"], ["every", "Every"]]) {
     const o = el("option", "", label) as HTMLOptionElement;
     o.value = v;
     kind.append(o);
   }
-  kind.value = current && current.enabled !== false ? (current.repeat === "weekly" || current.repeat === "once" ? "daily" : current.repeat) : "off";
+  kind.value = current && current.enabled !== false ? (current.repeat === "once" ? "daily" : current.repeat) : "off";
+  const day = el("select", "sched-day") as HTMLSelectElement;
+  DAY.forEach((d, i) => {
+    const o = el("option", "", d) as HTMLOptionElement;
+    o.value = String(i);
+    day.append(o);
+  });
+  day.value = String(current?.weekday ?? 0);
   const time = el("input", "sched-time") as HTMLInputElement;
   time.type = "time";
   time.value = current?.time ?? "08:00";
@@ -548,12 +611,17 @@ function scheduleEditor(current: Json | null | undefined, save: (body: Json) => 
   }
   hours.value = String(current?.every_minutes && [60, 120, 180, 240, 360, 480, 720].includes(current.every_minutes) ? current.every_minutes : 120);
   const body = (): Json => kind.value === "off" ? { repeat: "off" }
-    : kind.value === "every" ? { repeat: "every", every_minutes: Number(hours.value) } : { repeat: kind.value, time: time.value || "08:00" };
-  const shown = () => { time.hidden = !["daily", "weekdays"].includes(kind.value); hours.hidden = kind.value !== "every"; };
+    : kind.value === "every" ? { repeat: "every", every_minutes: Number(hours.value) }
+    : { repeat: kind.value, time: time.value || "08:00", ...(kind.value === "weekly" ? { weekday: Number(day.value) } : {}) };
+  const shown = () => {
+    time.hidden = !["daily", "weekdays", "weekly"].includes(kind.value);
+    day.hidden = kind.value !== "weekly";
+    hours.hidden = kind.value !== "every";
+  };
   shown();
-  box.append(kind, time, hours);
+  box.append(kind, day, time, hours);
   if (live) {
-    for (const c of [kind, time, hours]) c.addEventListener("change", () => { shown(); save(body()); });
+    for (const c of [kind, day, time, hours]) c.addEventListener("change", () => { shown(); save(body()); });
     save(body());
   } else {
     kind.addEventListener("change", shown);
@@ -569,7 +637,7 @@ export function checkinCard(c: Json, p: Json): HTMLElement {
   const card = el("div", "report-card checkin-card");
   const head = el("div", "report-head");
   const needs = Number(c.needs_you) || 0;
-  head.append(buddy(scoutOf(p), c.text ? (needs ? "needs_you" : "proud") : "waking", 22, { still: true }), el("b", "", c.label || "Check-in"));
+  head.append(buddy(scoutOf(p), c.text ? (needs ? "needs_you" : "proud") : "waking", 22, { still: true }), el("b", "", c.label || "Status report"));
   if (needs) head.append(el("span", "pill ask", `${needs} need${needs === 1 ? "s" : ""} you`));
   if (c.started) {
     const mins = c.ended ? Math.max(1, Math.round((c.ended - c.started) / 60)) : 0;
@@ -585,7 +653,7 @@ export function checkinCard(c: Json, p: Json): HTMLElement {
     card.append(show);
   } else {
     const going = el("div", "checkin-going dim");
-    going.append(el("span", "state running"), el("span", "", "Checking in…"));
+    going.append(el("span", "state running"), el("span", "", "Reporting…"));
     card.append(going);
   }
   return card;
@@ -677,15 +745,14 @@ export function openNew(edit?: Json) {
 
   const goal = el("textarea", "scout-goal-input") as HTMLTextAreaElement;
   goal.rows = 3;
-  goal.placeholder = "What should it work on? A goal it can keep chipping away at.";
+  // One example from the pool sits in the empty box; Tab takes it.
+  const example = EXAMPLES[Math.floor(Math.random() * EXAMPLES.length)];
+  goal.placeholder = edit ? "What should it work on?" : example;
   goal.value = state.goal;
   goal.oninput = () => (state.goal = goal.value);
-  const examples = el("div", "chips small-chips");
-  if (!edit) for (const ex of EXAMPLES) {
-    const b = el("button", "chip", ex);
-    b.onclick = () => { goal.value = state.goal = ex; goal.focus(); };
-    examples.append(b);
-  }
+  goal.onkeydown = (e) => {
+    if (e.key === "Tab" && !e.shiftKey && !edit && !goal.value) { e.preventDefault(); goal.value = state.goal = example; }
+  };
 
   const nameInput = el("input", "scout-name-input") as HTMLInputElement;
   nameInput.value = state.name;
@@ -710,19 +777,18 @@ export function openNew(edit?: Json) {
   }
 
   const folder = el("button", "chip-btn bordered folder-pick") as HTMLButtonElement;
-  const drawFolder = () => folder.replaceChildren(icon("Folder", 14), el("span", "", state.folder || "Choose a folder"));
-  drawFolder();
+  // Optional: with none it works in the default folder (a news brief needs none). How much it does alone only
+  // matters for a scout working on files, so that choice shows once a folder is picked (or when editing).
+  let leashField: HTMLElement | null = null;
+  const drawFolder = () => {
+    folder.replaceChildren(icon("Folder", 14), el("span", "", state.folder || "None: for code or files, pick one"));
+    if (leashField && !edit) leashField.hidden = !state.workdir;
+  };
   folder.disabled = !!edit;
-  folder.title = edit ? "A scout stays in the folder it started in" : "Where it works";
+  folder.title = edit ? "A scout stays in the folder it started in" : "Where it works (optional)";
   folder.onclick = (e) => { e.stopPropagation(); host.pickFolder(folder, (path, label) => { state.workdir = path; state.folder = label; drawFolder(); }); };
-  if (!edit) host.http("GET", "folders").then((f) => { if (!state.workdir) { state.workdir = f.path; state.folder = f.label; drawFolder(); } }).catch(() => {});
 
-  const leash = el("div", "segmented");
-  for (const [value, , label] of LEASH) {
-    const b = el("button", value === state.leash ? "on" : "", label);
-    b.onclick = () => { leash.querySelectorAll("button").forEach((x) => x.classList.remove("on")); b.classList.add("on"); state.leash = value; };
-    leash.append(b);
-  }
+  const leash = askSwitch(asksFirst(state.leash), (on) => (state.leash = leashOf(on)));
 
   let schedule: Json = edit ? { repeat: "keep" } : { repeat: "daily", time: "08:00" };
   const scheduleBox = scheduleEditor(edit ? edit.checkin?.schedule : { repeat: "daily", time: "08:00", enabled: true }, (b) => (schedule = b), true);
@@ -736,7 +802,9 @@ export function openNew(edit?: Json) {
   const whoFields = el("div", "scout-who-fields");
   whoFields.append(field("Name", nameInput), field("Colour", hueRow), field("Look", traitRow));
   who.append(preview, whoFields);
-  body.append(field("Goal", goal, examples), who, field("Folder", folder), field("Leash", leash), field("Check-ins", scheduleBox));
+  leashField = field("", leash);
+  drawFolder();
+  body.append(field("Goal", goal), field("When it runs", scheduleBox), field(edit ? "Folder" : "Folder (optional)", folder), who, leashField);
 
   const foot = el("div", "scout-foot");
   const error = el("p", "error small");
