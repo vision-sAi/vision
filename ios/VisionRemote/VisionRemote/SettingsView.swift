@@ -1,7 +1,7 @@
 import AVFoundation
 import SwiftUI
 
-/// Settings, written for someone who has never seen Vision: Pip and the connection up top, then
+/// Settings, written for someone who has never seen Vision: its scout and the connection up top, then
 /// grouped rows in the style of the system Settings app, each saying what it does in plain words.
 /// Nothing here assumes whose machine Vision runs on or what kind it is.
 struct SettingsView: View {
@@ -687,13 +687,13 @@ private struct StatusLight: View {
     }
 }
 
-/// The top of the page: Pip in the mood of the connection, and one line saying where things stand.
+/// The top of the page: Vision's scout in the mood of the connection, and one line saying where things stand.
 private struct SettingsHero: View {
     @ObservedObject var client: VisionClient
 
     var body: some View {
         VStack(spacing: 14) {
-            PipView(mood: mood, cell: 7)
+            VisionFace(mood: mood, width: 77)
                 .padding(.top, 8)
             VStack(spacing: 6) {
                 Text("Vision")
@@ -710,7 +710,7 @@ private struct SettingsHero: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var mood: PipMood {
+    private var mood: VisionFaceMood {
         guard client.isConfigured else { return .asleep }
         switch client.connection {
         case .online: return .idle
@@ -1007,7 +1007,6 @@ private struct PickerPillButton: View {
     let title: String
     @Binding var isExpanded: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.drawerAway) private var away
 
     var body: some View {
         // The pill stays in the tree while the slider is open (just invisible) so its frame keeps
@@ -1031,8 +1030,8 @@ private struct PickerPillButton: View {
             .foregroundStyle(.primary)
             .opacity(isExpanded ? 0 : 1)
             .background(GeometryReader { geometry in
-                // Nothing while the chat slides for the drawer (SideDrawer.away): read afresh once it is at rest.
-                Color.clear.preference(key: PillFrameKey.self, value: away ? [:] : [kind: geometry.frame(in: .global)])
+                // On the chat card, which a drawer slide doesn't move: on the screen it changed every frame of one.
+                Color.clear.preference(key: PillFrameKey.self, value: [kind: geometry.frame(in: .named(SideDrawerMotion.card))])
             })
             .frame(minHeight: 40)
             .contentShape(Rectangle())
@@ -1119,7 +1118,7 @@ private struct PickerOverlay<Content: View>: View {
         // Always mounted, empty when closed: the `if` has to sit right here so the dim and the
         // picker get their own transitions (a transition buried inside an inserted subtree is ignored).
         GeometryReader { geometry in
-            let frame = geometry.frame(in: .global)
+            let frame = geometry.frame(in: .named(SideDrawerMotion.card))
             // Scale around the pill's centre so nothing travels: the picker just grows out of the pill.
             let anchor = pillFrame == .zero ? UnitPoint.bottom : UnitPoint(
                 x: (pillFrame.midX - frame.minX) / max(1, frame.width),

@@ -285,18 +285,13 @@ struct ProjectSheet: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(project.goal).themeFont(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                 HStack(spacing: 6) {
-                    Text(ScoutWords.leashes.first { $0.0 == project.leash }?.1 ?? "Check-ins")
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background((theme.accent ?? Color.accentColor).opacity(0.14), in: Capsule())
-                        .foregroundStyle(theme.accent ?? Color.accentColor)
-                    if project.leash != "on_call", let checkin = project.checkin, checkin.schedule?.enabled == true {
+                    if let checkin = project.checkin, checkin.schedule?.enabled == true {
                         Text(checkin.words).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
             }
             Spacer(minLength: 0)
-            Button(project.checkin?.running != nil ? "Checking in…" : "Check in") {
+            Button(project.checkin?.running != nil ? "Reporting…" : "Status report") {
                 Task { try? await client.checkInNow(projectID) }
             }
             .buttonStyle(.bordered)
@@ -1625,17 +1620,13 @@ struct ProjectSettingsView: View {
                             ScoutLeashPage(projectID: project.id)
                         } label: {
                             ProjectFormRow(icon: "leaf") {
-                                Text("Leash and check-ins")
+                                Text("Schedule")
                             } trailing: {
-                                HStack(spacing: 8) {
-                                    Text(ScoutWords.leashes.first { $0.0 == live.leash }?.1 ?? "")
-                                    ProjectFormChevron()
-                                }
+                                ProjectFormChevron()
                             }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Leash and check-ins")
-                        .accessibilityValue(ScoutWords.leashes.first { $0.0 == live.leash }?.1 ?? "")
+                        .accessibilityLabel("Schedule")
                         NavigationLink {
                             ProjectRunSettingsPage(settings: $settings)
                         } label: {
@@ -1753,9 +1744,8 @@ struct ProjectSettingsSections: View {
 
     var body: some View {
         Section {
-            Picker("Leash", selection: $settings.leash) {
-                ForEach(ScoutWords.leashes, id: \.0) { Text($0.1).tag($0.0) }
-            }
+            Toggle(ScoutWords.askLabel, isOn: Binding(get: { ScoutWords.asks(settings.leash) },
+                                                      set: { settings.leash = ScoutWords.leash(asking: $0) }))
             Picker("Reports in the chat", selection: $settings.updates) {
                 Text("Everything").tag("all")
                 Text("Milestones").tag("milestones")
@@ -1789,17 +1779,65 @@ struct ProjectSettingsSections: View {
                  + "Its own branch means a git worktree each, landed when you say so.")
         }
         Section {
-            TextField("Coordinator model (blank: the chat's own)", text: $settings.coordinatorModel)
-            TextField("Coordinator effort", text: $settings.coordinatorEffort)
-            TextField("Thread model (blank: the chat's own)", text: $settings.threadModel)
-            TextField("Thread effort", text: $settings.threadEffort)
+            ScoutModelRows(role: "Coordinator", model: $settings.coordinatorModel, effort: $settings.coordinatorEffort)
+            ScoutModelRows(role: "Threads", model: $settings.threadModel, effort: $settings.threadEffort)
         } header: {
             Text("Models")
         } footer: {
-            Text("Names as /model takes them: opus, sonnet, gpt-6-sol… A cheaper thread model makes several threads go further.")
+            Text("A cheaper thread model makes several threads go further.")
+        }
+    }
+}
+
+/// One role's model and effort as menus, from the machine's catalogue; the effort levels are the picked model's.
+/// Text fields while the catalogue can't be had (offline), so a name can still be typed.
+private struct ScoutModelRows: View {
+    @EnvironmentObject private var client: VisionClient
+    let role: String
+    @Binding var model: String
+    @Binding var effort: String
+    @State private var catalogue: ModelCatalogue?
+
+    var body: some View {
+        Group {
+            if let catalogue {
+                Picker("\(role) model", selection: $model) {
+                    Text("The chat's own").tag("")
+                    if !model.isEmpty, !catalogue.tabs.contains(where: { $0.models.contains { $0.id == model } }) {
+                        Text(model).tag(model)  // typed by name elsewhere, or a model no longer set up
+                    }
+                    ForEach(catalogue.tabs.filter { !$0.models.isEmpty }) { provider in
+                        Section(provider.tab) {
+                            ForEach(provider.models) { Text($0.label).tag($0.id) }
+                        }
+                    }
+                }
+                .pickerStyle(.menu)
+                let levels = catalogue.efforts.filter { !$0.id.isEmpty }
+                if !levels.isEmpty {
+                    Picker("\(role) effort", selection: $effort) {
+                        Text("The model's own").tag("")
+                        if !effort.isEmpty, !levels.contains(where: { $0.id == effort }) {
+                            Text(ModelPickerState.effortTitle(effort)).tag(effort)
+                        }
+                        ForEach(levels) { Text(ModelPickerState.effortTitle($0.label)).tag($0.id) }
+                    }
+                    .pickerStyle(.menu)
+                }
+            } else {
+                TextField("\(role) model (blank: the chat's own)", text: $model)
+                TextField("\(role) effort", text: $effort)
+            }
         }
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
+        .task(id: model) {
+            guard let fresh = try? await client.fetchCatalogue(model: model) else { return }
+            let switched = catalogue != nil
+            catalogue = fresh
+            // A level the newly picked model doesn't have goes back to the model's own.
+            if switched, !effort.isEmpty, !fresh.efforts.contains(where: { $0.id == effort }) { effort = "" }
+        }
     }
 }
 

@@ -70,7 +70,7 @@ final class VoiceCall: ObservableObject {
         engine.onAudioEvent = { [weak self] event in self?.audioEvent(event) }
     }
 
-    var mood: PipMood {
+    var mood: VisionFaceMood {
         if engine.muted && phase == .listening { return .idle }
         switch phase {
         case .starting: return .idle

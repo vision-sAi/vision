@@ -16,7 +16,6 @@
 		249E1AE1C132F875ECC87704 /* ProjectViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B650FCE3F10A859861C14467 /* ProjectViews.swift */; };
 		5D3A91C07E2B4F18A6C2D7E1 /* ThreadViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F4B2E6A1C8D4073B5E9A2C6 /* ThreadViews.swift */; };
 		7C1E5A0D93B24F6688D0A1B2 /* MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3F4096B7A5D4C21B8E6F7A9 /* MemoryView.swift */; };
-		00CAD77663B9195E2DC63C5A /* Pip.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2253FF685D0CC9BF6A57592 /* Pip.swift */; };
 		036A172E02EB0D4793D6EB29 /* VisionNotify.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9498DD485F93E7E8B143BA74 /* VisionNotify.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		0AE61FED400C31181EB70FDA /* EmojiPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEE128CDA9004143B2784E7 /* EmojiPanel.swift */; };
 		15CB996555393C8B502EC5D2 /* CallActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = F98B851D44D0BD9A408B4AA8 /* CallActivity.swift */; };
@@ -56,7 +55,6 @@
 		DE9A241535100F26345725A2 /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 912A7BB15D2FA92B16DC70F3 /* CameraView.swift */; };
 		E02EABD73657276830189878 /* ComposerField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6666395A0BD358FDD69D32ED /* ComposerField.swift */; };
 		E209B885B757B33CA1BD5BD9 /* VisionActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 37CEBBD358817F1129D288E5 /* VisionActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		E2907AD305D268D945CAED82 /* Pip.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2253FF685D0CC9BF6A57592 /* Pip.swift */; };
 		E311B0EBC6D3FBB50A841355 /* PushKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF481F389E9C735CDC774ED6 /* PushKey.swift */; };
 		E9C2492FA79ABC83C682EA47 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0852519B555E8C9A67DDFA63 /* Models.swift */; };
 		ECBEA47F3833CF36B4D3D6E1 /* VisionRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0269AB923E7D6ECA818459E6 /* VisionRemoteApp.swift */; };
@@ -149,7 +147,6 @@
 		A8329D047783CCABD0346E1A /* VisionCallLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionCallLiveActivity.swift; sourceTree = "<group>"; };
 		B1B31FEF7D5DD9295E2BDBC6 /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
 		B61A7DD87B99A45FFD5AF129 /* SideDrawer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SideDrawer.swift; sourceTree = "<group>"; };
-		C2253FF685D0CC9BF6A57592 /* Pip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pip.swift; sourceTree = "<group>"; };
 		C365EC43FF959BFB08FB8E92 /* DrawerSwipeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawerSwipeTests.swift; sourceTree = "<group>"; };
 		C6D804F577EFCC748B3897CF /* QuestionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionSheet.swift; sourceTree = "<group>"; };
 		B1C2D3E4F5A60718293A4B5C /* ReplyMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyMarkdown.swift; sourceTree = "<group>"; };
@@ -257,7 +254,6 @@
 				0852519B555E8C9A67DDFA63 /* Models.swift */,
 				388C19847FD6AE9D52DF79FE /* NativeKeyboard.swift */,
 				261AE2D0F556343ABEFAC5E3 /* PairingScanner.swift */,
-				C2253FF685D0CC9BF6A57592 /* Pip.swift */,
 				E3F4096B7A5D4C21B8E6F7A9 /* MemoryView.swift */,
 				6DFC7FECFCB981D84BF14806 /* ProviderStyle.swift */,
 				B650FCE3F10A859861C14467 /* ProjectViews.swift */,
@@ -419,7 +415,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				457CCD3010D57C9D070803AA /* CallActivity.swift in Sources */,
-				00CAD77663B9195E2DC63C5A /* Pip.swift in Sources */,
 				9D180198C1BE6E6051DCA085 /* PushKey.swift in Sources */,
 				723E8E976B8E6C68FB8765F2 /* VisionCallLiveActivity.swift in Sources */,
 				ED2ADD155506C06562F2FA02 /* Glance.swift in Sources */,
@@ -463,7 +458,6 @@
 				E9C2492FA79ABC83C682EA47 /* Models.swift in Sources */,
 				A77CF38FD8B644BB40140CDF /* NativeKeyboard.swift in Sources */,
 				EE012BAA2ACCAF648269489F /* PairingScanner.swift in Sources */,
-				E2907AD305D268D945CAED82 /* Pip.swift in Sources */,
 				9D88C066419A7C61B8B9C03E /* ProviderStyle.swift in Sources */,
 				6AFDD96B05EB366949E533D4 /* PushKey.swift in Sources */,
 				D82D9BA508EAA0735C2EE666 /* QuestionSheet.swift in Sources */,

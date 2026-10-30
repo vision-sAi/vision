@@ -24,14 +24,35 @@ enum Perf {
 @MainActor final class PerfDrive: NSObject {
     /// Posted with the drawer's drag in points, or nil to let go.
     static let drag = Notification.Name("PerfDriveDrag")
+    /// Posted with true or false: open or close the drawer as its button does.
+    static let snap = Notification.Name("PerfDriveSnap")
 
     private var link: CADisplayLink?
     private var gaps: [Double] = []
+    private var stamps: [Double] = []   // ms since reset, per gap: where in the switch the slow frames fell
+    private var began: CFTimeInterval = 0
     private var last: CFTimeInterval = 0
     private var budget: Double = 0
     private var onTick: ((CFTimeInterval) -> Void)?
 
     static func run(_ client: VisionClient) async {
+        if let i = CommandLine.arguments.firstIndex(of: "--swipe-drive") {   // PROFILE-TEMP
+            try? await Task.sleep(for: .seconds(4))
+            // `--swipe-drive <title>` measures on the chat whose title starts so: an idle one, or the sweep of a live
+            // tool row (ScanRenderer) is in the figures too.
+            if i + 1 < CommandLine.arguments.count, let chat = client.chats.first(where: { $0.title.hasPrefix(CommandLine.arguments[i + 1]) }) {
+                client.select(chat: chat.id)
+                try? await Task.sleep(for: .seconds(2))
+            }
+            print("PERF chat \(client.activeChat?.title.prefix(40) ?? "none"): \(client.messages.count) messages")
+            let drive = PerfDrive()
+            drive.start()
+            for _ in 0..<3 { await drive.swipe(cycles: 4, width: 260); drive.report("swipe") }
+            for _ in 0..<2 { await drive.snaps(4) }
+            drive.stop()
+            print("PERF done")
+            return
+        }
         guard let i = CommandLine.arguments.firstIndex(of: "--perf-drive"), i + 1 < CommandLine.arguments.count else { return }
         let title = CommandLine.arguments[i + 1]
         try? await Task.sleep(for: .seconds(4))
@@ -39,18 +60,17 @@ enum Perf {
               let light = client.chats.first(where: { $0.id != heavy.id }) else { print("PERF no chat titled \(title)"); return }
         let drive = PerfDrive()
         drive.start()
-        func open(_ id: String) {
-            var still = Transaction()
-            still.disablesAnimations = true
-            withTransaction(still) { client.select(chat: id) }
-        }
-        for _ in 0..<3 {
+        func open(_ id: String) { client.select(chat: id) }   // as a tap in the drawer does (ChatsView.open)
+        for pass in 0..<4 {
             open(light.id)
             try? await Task.sleep(for: .seconds(2))
+            if pass == 0 { BubbleHeights.forget() }   // the first pass opens the heavy chat as if never seen
             drive.reset()
+            let built = BubbleHeights.builtUnknown
             open(heavy.id)
             try? await Task.sleep(for: .seconds(2))
-            drive.report("switch in")
+            drive.report(pass == 0 ? "switch in (cold)" : "switch in")
+            print("PERF   \(BubbleHeights.builtUnknown - built) bubbles built with no height known, \(client.messages.count) messages")
         }
         for (name, id) in [("swipe heavy", heavy.id), ("swipe light", light.id), ("swipe heavy", heavy.id)] {
             open(id)
@@ -73,11 +93,14 @@ enum Perf {
 
     private func reset() {
         gaps = []
+        stamps = []
+        began = 0
         last = 0
     }
 
     @objc private func tick(_ link: CADisplayLink) {
-        if last > 0 { gaps.append((link.timestamp - last) * 1000) }
+        if began == 0 { began = link.timestamp }
+        if last > 0 { gaps.append((link.timestamp - last) * 1000); stamps.append((link.timestamp - began) * 1000) }
         last = link.timestamp
         budget = (link.targetTimestamp - link.timestamp) * 1000
         onTick?(link.targetTimestamp)
@@ -102,12 +125,34 @@ enum Perf {
         }
     }
 
+    /// Open and close the drawer `count` times as its button would, letting each snap run its course, and prints how
+    /// the frames kept up snap by snap (the median one and the worst), which a total over all of them blurred.
+    private func snaps(_ count: Int) async {
+        var dropped: [Int] = [], late: [Double] = []
+        for _ in 0..<count {
+            for open in [true, false] {
+                reset()
+                NotificationCenter.default.post(name: Self.snap, object: open)
+                try? await Task.sleep(for: .seconds(0.6))
+                let slow = gaps.filter { $0 > budget * 1.5 }
+                dropped.append(slow.count)
+                late.append(slow.reduce(0) { $0 + $1 - budget })
+            }
+        }
+        dropped.sort(); late.sort()
+        print(String(format: "PERF snap: %d snaps, dropped median %d worst %d, late median %.0f ms worst %.0f ms (budget %.1f ms)",
+                     dropped.count, dropped[dropped.count / 2], dropped.last ?? 0, late[late.count / 2], late.last ?? 0, budget))
+        reset()
+    }
+
     private func report(_ name: String) {
         let slow = gaps.filter { $0 > budget * 1.5 }
         let worst = gaps.max() ?? 0
         let late = slow.reduce(0) { $0 + $1 - budget }
         print(String(format: "PERF %@: %d frames, %d dropped, worst %.0f ms, %.0f ms late in all (budget %.1f ms)",
                      name, gaps.count, slow.count, worst, late, budget))
+        let when = zip(stamps, gaps).filter { $0.1 > budget * 1.5 }.map { String(format: "%.0fms +%.0f", $0.0, $0.1) }
+        if !when.isEmpty { print("PERF   slow frames at: " + when.joined(separator: ", ")) }
         reset()
     }
 }
@@ -159,14 +204,14 @@ struct ChatView: View {
     @State private var pendingProjectOpenID: String?
     /// Once the user swipes a project away, background chat updates must not push it back over the list.
     @State private var dismissedProjectIDs: Set<String> = []
-    /// The chat screen is sliding for the drawer: the frames below, all in screen coordinates, aren't followed until
-    /// it comes to rest (see SideDrawer.away).
+    /// The chat screen is sliding for the drawer, until it comes to rest (see SideDrawer.away).
     @State private var drawerAway = false
     @State private var inputFocused = false
     @State private var composerFrame: CGRect = .zero
     /// Shell mode: `!` typed into the empty composer, the next line runs on the computer instead of going to Vision.
     @State private var shellMode = false
-    @State private var composerCard: CGRect = .zero   // the composer card itself in global coordinates; the attach menu lines up with it
+    @State private var composerCard: CGRect = .zero   // the composer card itself on the chat card; the attach menu lines up with it
+    @State private var pageBox: CGRect = .zero        // the chat page on the chat card; the attach menu is placed in it
     /// The user message sent from this screen most recently; it gets pinned to the top so the reply reads downward.
     @State private var pinnedTurn: UUID?
     /// True for a moment after a chat is opened, while its transcript may still be loading.
@@ -175,6 +220,14 @@ struct ChatView: View {
     @State private var openGeneration = 0
     /// Earliest messages not drawn yet while a chat comes on screen (see `stageIn`).
     @State private var heldBack = 0
+    @State private var stagedChat: String?   // the chat `heldBack` was set for (see earlierMessages)
+    /// The transcript as it last drew before a switch (TranscriptShotter), fading out over the next chat's.
+    @State private var swapShot: UIImage?
+    @State private var swapShotOpacity = 1.0
+    /// The new chat's transcript waits out the old one's picture, then rises in (see fadeSwapShot).
+    @State private var incomingOpacity = 1.0
+    @State private var incomingOffset: CGFloat = 0
+    @State private var shotter = TranscriptShotter.Box()
     /// The message a search hit opened the chat at, lit for a moment (see jumpToFound).
     @State private var found: Message.ID?
     /// A chat just opened is still filling in above the fold (its history landing, pictures arriving): the scroll
@@ -190,6 +243,13 @@ struct ChatView: View {
     @State private var gliding = false
     /// Bumped for every scripted scroll and every drag, so a glide's late follow-up knows it was overtaken.
     @State private var glideGeneration = 0
+    /// Where the transcript sat when the finger now dragging it landed; gone once that drag ends. A swipe for the drawer
+    /// scrolls the transcript by its vertical wobble before the drawer claims it, then freezes it there (scrolling is off
+    /// while the drawer is out) until it snapped back on closing; the drawer's pull puts it back here instead. Only a
+    /// drag still under way counts: an earlier scroll's start kept for a moment glided a swipe straight after it back
+    /// to where that scroll began.
+    @State private var dragFrom: CGFloat?
+    @State private var transcriptScroll = ScrollPosition()
 
     /// The plan approval waiting on the user. It is answered from a bar above the composer, never the
     /// question card, which would cover the plan before it could be read.
@@ -211,13 +271,17 @@ struct ChatView: View {
         SideDrawer(isOpen: $showChats, away: $drawerAway, swipeEnabled: !pickerExpanded && attach == nil && projectPath.isEmpty) {
             ChatsView(projectsShown: projectsHome, showProjects: showProjects, openScout: openFromProjects,
                       onClose: { withAnimation(SideDrawerMotion.animation) { showChats = false } })
+                .equatable()
         } content: {
             chatScreen
         }
         #if DEBUG
         .task { await PerfDrive.run(client) }
         #endif
-        .onChange(of: showChats) { _, open in
+        // Read through a binding, here and for drawerAway below: read in this body, every open and close redrew the
+        // whole chat screen (a long transcript's worth) at the start of the snap, and the snap stuttered. For the same
+        // reason the frames below are measured on the chat card (SideDrawerMotion.card), which a slide doesn't move.
+        .onDrawerChange($showChats) { open in
             if open { inputFocused = false }
         }
         .onChange(of: client.editDraft) { _, text in
@@ -232,9 +296,15 @@ struct ChatView: View {
         // owned by the chat that started it, so switching chats must tear it down in the same UI update.
         // A call started on the empty screen opens its chat with the first thing said: that is the
         // call's own chat arriving, not a switch away from it.
+        // Leaving a draft for the chat it was opened over keeps the same chat id: the picture taken of the empty
+        // screen must still fade, or it sits over that chat for good.
+        .onChange(of: client.draft == nil) { _, left in
+            if left, swapShot != nil { fadeSwapShot() }
+        }
         .onChange(of: client.activeChatID) { old, _ in
             shellMode = false
             if old != nil { endVoice(chat: old) }
+            if swapShot != nil { fadeSwapShot() }
             // On the Projects screen: a project's chat arriving (tapped there, just made, or a notification's) is
             // pushed on it; any other chat takes the screen back.
             guard projectsHome, client.activeChatID != nil else { return }
@@ -263,26 +333,35 @@ struct ChatView: View {
     /// The main screen: a chat, or the Projects screen in its place with a project's chat pushed on top of it
     /// (back returns to the list; the edge swipe pops it rather than pulling the drawer out).
     private var chatScreen: some View {
-        NavigationStack(path: $projectPath) {
-            Group {
-                if projectsHome {
+        Group {
+            if projectsHome {
+                // The Scouts screen is the drawer's like the chat (plain SwiftUI, see SideDrawer), with the navigation stack
+                // over it only for the scouts' chats pushed on it: inside the stack UIKit hands a screen the safe area
+                // itself, worked out from where the drawer has it on screen. Empty, the stack is see-through and lets
+                // touches through.
+                ZStack {
                     ProjectsHome(onOpen: openFromProjects)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) { drawerButton }
-                        }
+                        .topBar { scoutsBar }
                         .overlay(alignment: .top) { toastView }
-                } else {
-                    chatPage(pushed: false)
+                    NavigationStack(path: $projectPath) {
+                        Color.clear
+                            .containerBackground(.clear, for: .navigation)
+                            .navigationTitle("Scouts")
+                            .toolbar(.hidden, for: .navigationBar)
+                            .navigationDestination(for: String.self) { id in
+                                if client.activeProject?.id == id {
+                                    chatPage(pushed: true)
+                                } else if let project = client.projects.first(where: { $0.id == id }) {
+                                    ProjectOpeningView(title: project.title)
+                                } else {
+                                    ProjectOpeningView(title: "Project")
+                                }
+                            }
+                    }
+                    .allowsHitTesting(!projectPath.isEmpty)
                 }
-            }
-            .navigationDestination(for: String.self) { id in
-                if client.activeProject?.id == id {
-                    chatPage(pushed: true)
-                } else if let project = client.projects.first(where: { $0.id == id }) {
-                    ProjectOpeningView(title: project.title)
-                } else {
-                    ProjectOpeningView(title: "Project")
-                }
+            } else {
+                chatPage(pushed: false)
             }
         }
         // While the attach menu or a card is open a window-level lid covers everything but it: nav bar, composer and
@@ -297,6 +376,7 @@ struct ChatView: View {
             }
         }
         .onAppear {
+            client.willSwitchChat = { swapShot = shotter.take(); swapShotOpacity = 1 }
             if client.isConfigured {
                 client.connect()
             } else {
@@ -305,6 +385,11 @@ struct ChatView: View {
             #if DEBUG
             if CommandLine.arguments.contains("--compose") { ComposeRequest.pending = true }   // as Message Vision leaves it
             #endif
+            if CommandLine.arguments.contains("--drawer-cycle") {   // PROFILE-TEMP
+                Timer.scheduledTimer(withTimeInterval: 1.2, repeats: true) { _ in
+                    Task { @MainActor in withAnimation(SideDrawerMotion.animation) { showChats.toggle() } }
+                }
+            }
             takeComposeRequest()
             // Development: `--open model|chats` on launch (simulator screenshots).
             if let i = CommandLine.arguments.firstIndex(of: "--open"), i + 1 < CommandLine.arguments.count {
@@ -381,6 +466,15 @@ struct ChatView: View {
     private func chatPage(pushed: Bool) -> some View {
         // The composer floats over the transcript so messages scroll under its translucent card.
         transcript
+            .opacity(incomingOpacity).offset(y: incomingOffset)
+            // Switching chats: the last chat's transcript, as last drawn, goes before the new one comes in.
+            .overlay {
+                if let swapShot {
+                    Image(uiImage: swapShot).resizable().aspectRatio(contentMode: .fill)
+                        .scaleEffect(0.97 + 0.03 * swapShotOpacity)
+                        .opacity(swapShotOpacity).clipped().allowsHitTesting(false)
+                }
+            }
             .scrollDisabled(cardOpen)
             .overlay {
                 // While the camera or photos card is up the transcript is frozen; a tap on it just closes the card.
@@ -389,51 +483,46 @@ struct ChatView: View {
                 }
             }
             .overlay(alignment: .bottom) { note(contextNote, edge: .bottom) { contextNote = nil } }
-            .composerBar { inputBar.environment(\.drawerAway, drawerAway) }
+            .composerBar { inputBar.modifier(DrawerBottomRoom(on: !pushed)) }
             .overlay {
                 // The attach menu grows out of the "+" and covers the composer; tap anywhere off it to close.  It
                 // can't hang over the keyboard the way ChatGPT's does: the system draws the keys above every
                 // window the app owns, so it sits flush with the composer card's left and bottom edges instead.
-                GeometryReader { geo in
-                    let box = geo.frame(in: .global)
-                    // Always mounted, so its glass visibly grows out of the button and shrinks back into it. The
-                    // tap-catcher stays mounted too: without it the ZStack shrinks to the menu.
-                    let open = attach == .menu && !overKeyboard
-                    let menuLeft = composerCard.minX
-                    let menuBottom = composerCard.maxY
-                    let blobOffset = CGSize(width: attachFrame.minX - menuLeft, height: attachFrame.maxY - menuBottom)
-                    ZStack(alignment: .bottomLeading) {
-                        Color.black.opacity(0.001).onTapGesture { closeAttach() }.gesture(swipeToClose).allowsHitTesting(open)
-                        attachMenu(open: open, card: cardOpen && !overKeyboard, blobOffset: blobOffset)
-                            .background(GeometryReader { g in
-                                Color.clear.preference(key: AttachHoleKey.self, value: open ? g.frame(in: .global) : .zero)
-                            })
-                            .allowsHitTesting(open)
-                            .padding(.leading, max(0, menuLeft - box.minX))
-                            .padding(.bottom, max(0, box.maxY - menuBottom))
-                    }
+                // Always mounted, so its glass visibly grows out of the button and shrinks back into it. The
+                // tap-catcher stays mounted too: without it the ZStack shrinks to the menu.
+                let open = attach == .menu && !overKeyboard
+                let menuLeft = composerCard.minX
+                let menuBottom = composerCard.maxY
+                let blobOffset = CGSize(width: attachFrame.minX - menuLeft, height: attachFrame.maxY - menuBottom)
+                ZStack(alignment: .bottomLeading) {
+                    Color.black.opacity(0.001).onTapGesture { closeAttach() }.gesture(swipeToClose).allowsHitTesting(open)
+                    attachMenu(open: open, card: cardOpen && !overKeyboard, blobOffset: blobOffset)
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: AttachHoleKey.self, value: open ? g.frame(in: .global) : .zero)
+                        })
+                        .allowsHitTesting(open)
+                        .padding(.leading, max(0, menuLeft - pageBox.minX))
+                        .padding(.bottom, max(0, pageBox.maxY - menuBottom))
                 }
                 .ignoresSafeArea()
             }
-        .background {
-            ZStack(alignment: .top) {
-                theme.backgroundColor
-                // Panes: a soft violet wash at the top, as the desktop's panes have.
-                if theme.backdrop {
-                    LinearGradient(colors: [(theme.accent ?? .accentColor).opacity(0.13), .clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 260)
-                }
-            }
-            .ignoresSafeArea()
-        }
+            // The page's place, for the menu above: measured on the page itself, not on the overlay. A GeometryReader in
+            // the overlay rebuilt the whole menu on every frame the chat slid for the drawer, and the overlay's own frame
+            // (it ignores the safe area, which SwiftUI works out afresh under the shrink) jittered by fractions of a
+            // point per frame, each one redrawing the whole chat screen. The two are the same box whenever the menu is
+            // up: the chat lays out with no safe area (SideDrawer), and over the keyboard the menu lives elsewhere.
+            .onCardFrame { pageBox = $0 }
+        .background { ChatPageBackground().ignoresSafeArea() }
         .navigationTitle("Vision")
         .navigationBarTitleDisplayMode(.inline)
-        // No bar: just the buttons floating over the chat, no title or background; a soft blur at the top
+        // No bar: just the buttons floating over the chat, no title or background; a fade at the top
         // edge keeps messages scrolling up from clashing with the clock.
         // (A project's chat keeps the title slot: its name and threads sit there.)
         .toolbar(removing: client.activeProject == nil ? .title : nil)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .softScrollEdges()
+        // The main screen fades only the strip under the clock and battery, not down past its buttons.
+        .softScrollEdges(top: pushed)
+        .overlay(alignment: .top) { if !pushed { StatusBarFade() } }
         .onPreferenceChange(PillFrameKey.self) { if !$0.isEmpty { pillFrames = $0 } }
         .overlay {
             // The model and effort buttons each grow into a full-width slider over the dimmed chat,
@@ -444,19 +533,17 @@ struct ChatView: View {
         // One slider at a time: opening the other pill swaps them.
         .onChange(of: modelsExpanded) { _, open in if open { effortsExpanded = false } }
         .onChange(of: effortsExpanded) { _, open in if open { modelsExpanded = false } }
+        // On the main screen the buttons are a top bar of the chat's own (`chatBar`), not the navigation bar's, which
+        // under the drawer's shrink laid itself out lower and snapped back as the chat landed. A project's chat pushed
+        // over the Scouts screen keeps the navigation bar, for its back button.
         .toolbar {
-            if !pushed {
-                ToolbarItem(placement: .topBarLeading) { drawerButton }
-            }
-            // A project's chat: its name and threads as the title; a tap opens the project.
-            ToolbarItem(placement: .principal) { ThreadStrip() }
-            // Usage, earlier conversations and settings live in the chats drawer.
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { client.openOnMachine() } label: { ChromeGlyph { Image(systemName: "apple.terminal") }.drawerSwipeGuard() }
-                    .accessibilityLabel("Open on computer")
-                    .disabled(client.connection != .online || client.activeChat == nil || client.activeChat?.source == "terminal")
+            if pushed {
+                // A project's chat: its name and threads as the title; a tap opens the project.
+                ToolbarItem(placement: .principal) { ThreadStrip() }
+                ToolbarItem(placement: .topBarTrailing) { terminalButton(glass: false) }
             }
         }
+        .topBar(!pushed) { chatBar }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .fullScreenCover(isPresented: $showWelcome) { WelcomeView() }
         .sheet(isPresented: $showFolders) {
@@ -500,10 +587,46 @@ struct ChatView: View {
         }
     }
 
+    /// A chat's top bar: the drawer, the project's name and threads, and the terminal.
+    private var chatBar: some View {
+        ChromeBar {
+            drawerButton
+        } title: {
+            // A project's chat: its name and threads as the title; a tap opens the project.
+            ThreadStrip()
+        } trailing: {
+            // Usage, earlier conversations and settings live in the chats drawer.
+            terminalButton(glass: true)
+        }
+    }
+
+    /// The Scouts screen's top bar: the drawer and its title.
+    private var scoutsBar: some View {
+        ChromeBar {
+            drawerButton
+        } title: {
+            Text("Scouts").themeFont(.headline)
+        } trailing: {
+            EmptyView()
+        }
+    }
+
     /// ☰: opens the drawer, from a chat or from the Projects screen.
     private var drawerButton: some View {
-        Button { withAnimation(SideDrawerMotion.animation) { showChats = true } } label: { ChromeGlyph { chatsButtonLabel }.drawerSwipeGuard() }
+        Button { withAnimation(SideDrawerMotion.animation) { showChats = true } } label: { ChromeGlyph { chatsButtonLabel }.chromeButtonLabel() }
+            .chromeButton()
             .accessibilityLabel("Chats")
+    }
+
+    /// Opens the chat in the computer's terminal: the top bar's glass button, or a plain one in the navigation bar,
+    /// which draws its own glass.
+    @ViewBuilder private func terminalButton(glass: Bool) -> some View {
+        let button = Button { client.openOnMachine() } label: {
+            ChromeGlyph { Image(systemName: "apple.terminal") }.modifier(ChromeLabel(sized: glass))
+        }
+        .accessibilityLabel("Open on computer")
+        .disabled(client.connection != .online || client.activeChat == nil || client.activeChat?.source == "terminal")
+        if glass { button.chromeButton() } else { button }
     }
 
     /// The drawer's Projects row (true) or a chat picked there (false): the main screen swaps at once, still,
@@ -565,13 +688,13 @@ struct ChatView: View {
     /// streaming reply never shoves them down, and land here when their turn starts.
     private var shown: [Message] { client.messages.filter { !$0.queued } }
 
-    /// The folder picked from an empty chat: a chat's folder is fixed when it opens, so a new one is
-    /// opened there, and the empty one it replaces is closed rather than left behind in the list. A
-    /// chat in a terminal is left alone: closing it would quit that terminal.
+    /// The folder picked from the empty screen: a draft just takes it. An open chat's folder is fixed when
+    /// it opened, so a draft starts in the new one instead, and the empty chat it replaces is closed rather
+    /// than left behind in the list. A chat in a terminal is left alone: closing it would quit that terminal.
     private func moveEmptyChat(to path: String) {
         let old = client.active
         let unused = client.messages.isEmpty
-        client.newConversation(in: path)
+        client.startNewChat(in: path)
         if let old, unused, !old.busy, old.source != "terminal" {
             client.close(chat: old.id)
         }
@@ -584,10 +707,14 @@ struct ChatView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     if shown.isEmpty {
                         EmptyChatView(onSetUp: { showWelcome = true },
-                                      onFolder: client.connection == .online ? { showFolders = true } : nil)
+                                      // The chip rides along under a drawer swipe, so the finger lifts on it: that's a swipe, not a tap.
+                                      onFolder: client.connection == .online ? { if !drawerAway { showFolders = true } } : nil)
                     }
-                    ForEach(earlierMessages) { message in
-                        MessageBubble(message: message, client: client).id(message.id)
+                    // A chat seen before: its bubbles stand in at their height until scrolled near (BubbleSlot), so
+                    // switching back in builds a screen of bubbles, not the thread. The last few draw at once (on
+                    // screen when there is no pinned turn to fill it); the rest within reach follow a frame later.
+                    ForEach(Array(earlierMessages.enumerated()), id: \.element.id) { i, message in
+                        BubbleSlot(message: message, client: client, drawn: earlierMessages.count - i <= 3).id(message.id)
                             .background { FoundFlash(on: found == message.id) }
                     }
                     // Claude-app style: the sent message scrolls to the top and the reply streams into the space
@@ -606,7 +733,7 @@ struct ChatView: View {
                             }
                             // The end of what's written, not of the turn's screen-tall frame: the jump arrow aims here.
                             Color.clear.frame(height: 0).id("end")
-                                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { y in
+                                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(SideDrawerMotion.card)).maxY } action: { y in
                                     endMark.y = y
                                     endMoved(proxy)
                                 }
@@ -617,6 +744,12 @@ struct ChatView: View {
                 .padding(.horizontal, 12)
                 // None under the bottom marker: scrolled to it is scrolled to the very end, where the settle anchor holds.
                 .padding(.top, 8)
+                // A chat coming on screen draws still: no inherited animation fades its bubbles in or slides the
+                // earlier ones into place as they land. On the content, not the scroll view: there it also took
+                // the animation off the scroll view's own cross-fade in. (Before `openAtBottom` has run, `opening`
+                // is still the last chat's: the staging check covers the first frame.)
+                .transaction { if opening || stagedChat != client.activeChatID { $0.animation = nil } }
+                .background { TranscriptShotter(box: shotter) }
             }
             // Whatever room it's offered, decided here: asked for its size (the composer bar asks on every layout), a
             // scroll view measures everything in it, and a long transcript took most of a chat switch measuring.
@@ -638,9 +771,6 @@ struct ChatView: View {
             .onScrollGeometryChange(for: CGFloat.self) { $0.containerSize.height } action: { _, _ in
                 if settling && pinnedTurn == nil { scrollToBottom(proxy, animated: false) }
             }
-            // A chat coming on screen draws still: no inherited animation fades its bubbles in or slides the
-            // earlier ones into place as they land.
-            .transaction { if opening { $0.animation = nil } }
             .scrollDismissesKeyboard(.interactively)
             .simultaneousGesture(SpatialTapGesture(coordinateSpace: .global).onEnded { tap in
                 // The safe-area composer can share this recogniser; only taps outside it dismiss typing.
@@ -650,8 +780,16 @@ struct ChatView: View {
                 settling = false   // a row opened by the tap grows downwards, not shoving what's above it up
             })
             // A drag lets go of a followed reply, and of any glide still under way.
-            .onScrollPhaseChange { _, phase in
-                guard phase == .interacting else { return }
+            .scrollPosition($transcriptScroll)
+            .onDrawerChange($drawerAway) { away in
+                // A pull that began as a drag on the transcript, claimed by the drawer while the finger is still down.
+                guard away, let from = dragFrom else { return }
+                dragFrom = nil
+                withAnimation(SideDrawerMotion.animation) { transcriptScroll.scrollTo(y: from) }
+            }
+            .onScrollPhaseChange { _, phase, context in
+                guard phase == .interacting else { dragFrom = nil; return }
+                dragFrom = context.geometry.contentOffset.y
                 glideGeneration += 1
                 gliding = false
                 following = false
@@ -697,17 +835,41 @@ struct ChatView: View {
                 if !busy { following = false }
             }
             .onAppear { openAtBottom(proxy) }
-            // A fresh scroll view per chat: the old one's indicator and offset never animate across the swap.
+            // A fresh scroll view per chat: the old one's indicator and offset never animate across the swap. (A
+            // picture of the old one fades out over the new, see `swapShot`: SwiftUI's own transition never ran here.)
             .id(client.activeChatID)
         }
     }
+
+    /// Fade-through from the chat that was on screen: its picture (taken in `select`, before anything changed) is
+    /// over the new transcript already. It goes first, quickly, and only then does the new one rise in, so two
+    /// screens of text never sit on top of each other half-faded.
+    private func fadeSwapShot() {
+        swapShotOpacity = 1
+        incomingOpacity = 0
+        incomingOffset = 14
+        DispatchQueue.main.async {
+            withAnimation(.easeIn(duration: Self.swapOut)) { swapShotOpacity = 0 }
+            withAnimation(.easeOut(duration: Self.swapIn).delay(Self.swapOut * 0.6)) {
+                incomingOpacity = 1
+                incomingOffset = 0
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.swapOut + 0.1) { if swapShotOpacity == 0 { swapShot = nil } }
+        }
+    }
+    static let swapOut: TimeInterval = 0.16
+    static let swapIn: TimeInterval = 0.32
 
     /// A chat coming on screen always starts at its bottom: scroll now, again once the new transcript has laid
     /// out, keep snapping there while its history is still arriving from the machine, and hold the bottom still
     /// while its pictures arrive.
     private func openAtBottom(_ proxy: ScrollViewProxy) {
+        stagedChat = client.activeChatID
         pinnedTurn = nil
         following = false
+        // No restore point from the last chat's transcript for this one to land on.
+        dragFrom = nil
+        transcriptScroll = ScrollPosition()
         glideGeneration += 1
         gliding = false
         opening = true
@@ -753,14 +915,20 @@ struct ChatView: View {
         guard heldBack > 0 else { return }
         // The generation, not the chat id: hopping A → B → A quickly must not let A's first timer land early.
         let generation = openGeneration
-        DispatchQueue.main.asyncAfter(deadline: .now() + SideDrawerMotion.duration + 0.1) {
-            guard openGeneration == generation, heldBack > 0 else { return }
-            let landed = Perf.begin("Land history")
-            var still = Transaction()
-            still.disablesAnimations = true
-            withTransaction(still) { heldBack = 0 }
-            DispatchQueue.main.async { Perf.end("Land history", landed) }
-        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + SideDrawerMotion.duration + 0.1) { land(generation) }
+    }
+
+    /// The held-back bubbles, a batch a frame, nearest the bottom first: in one go a long thread stalled the
+    /// screen for as long as all of them took to build. Bubbles seen before stand in (BubbleSlot), so a batch of
+    /// those costs nothing much.
+    private func land(_ generation: Int) {
+        guard openGeneration == generation, heldBack > 0 else { return }
+        let landed = Perf.begin("Land history")
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) { heldBack = max(0, heldBack - 16) }
+        DispatchQueue.main.async { Perf.end("Land history", landed) }
+        if heldBack > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { land(generation) } }
     }
 
     /// A user turn that has just landed and is not pinned yet.  Sent from the phone it arrives alone; sent from the
@@ -781,7 +949,10 @@ struct ChatView: View {
     }
 
     private var earlierMessages: ArraySlice<Message> {
-        shown[..<(pinnedIndex ?? shown.count)].dropFirst(heldBack)
+        // The frame a chat comes on screen draws before `openAtBottom` has staged it (onChange runs after the
+        // body): held back here too, else the whole thread was built, torn down and built again.
+        let held = stagedChat == client.activeChatID ? heldBack : max(0, shown.count - 12)
+        return shown[..<(pinnedIndex ?? shown.count)].dropFirst(held)
     }
 
     private var pinnedMessages: ArraySlice<Message> {
@@ -896,14 +1067,14 @@ struct ChatView: View {
                     composer
                 }
             }
-            .onGeometryChange(for: CGRect?.self) { drawerAway ? nil : $0.frame(in: .global) } action: { if let card = $0 { composerCard = card } }
+            .onCardFrame { composerCard = $0 }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         // Measured with its padding: the transcript's dismiss tap treats this whole strip as "not outside".  Read
-        // straight off its geometry: as a bar, its preferences never reach the screen.  None of these frames is
-        // followed while the screen slides for the drawer (SideDrawer.away); they're read afresh once it is at rest.
-        .onGeometryChange(for: CGRect?.self) { drawerAway ? nil : $0.frame(in: .global) } action: { if let frame = $0 { composerFrame = frame } }
+        // straight off its geometry: as a bar, its preferences never reach the screen.  Measured on the chat card, which the
+        // drawer's slide doesn't move (SideDrawerMotion.card).
+        .onCardFrame { composerFrame = $0 }
         .photosPicker(isPresented: $showPhotos, selection: $pickedPhotos, maxSelectionCount: max(1, mediaRoom), selectionBehavior: .ordered, matching: .any(of: [.images, .videos]))
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
@@ -1083,10 +1254,7 @@ struct ChatView: View {
                 .blur(radius: attach == .menu ? 4 : 0)
                 .animation(attach == .menu ? .easeOut(duration: 0.08) : .easeOut(duration: 0.12).delay(0.2), value: attach == .menu)
                 .contentShape(Rectangle())
-                .background(GeometryReader { g in
-                    Color.clear.preference(key: AttachFrameKey.self, value: drawerAway ? .zero : g.frame(in: .global))
-                })
-                .onPreferenceChange(AttachFrameKey.self) { if $0 != .zero { attachFrame = $0 } }
+                .onCardFrame { attachFrame = $0 }
         }
         .buttonStyle(PressHapticButtonStyle())
         .disabled(client.connection != .online || uploading)
@@ -1389,6 +1557,8 @@ struct ChatView: View {
     }
 
     @ViewBuilder
+    /// Every icon here is held to the voice disc's 38 points: a 38-point symbol's line runs a few points taller, which
+    /// grew the row, and so the composer, the moment the send arrow took the disc's place.
     private var trailingButton: some View {
         if uploading {
             ProgressView().frame(width: 38, height: 38)
@@ -1398,12 +1568,12 @@ struct ChatView: View {
                 draft = ""
                 shellMode = false
             } label: {
-                Image(systemName: "arrow.up.circle.fill").font(.system(size: 38)).foregroundStyle(Color.shellPink)
+                Image(systemName: "arrow.up.circle.fill").font(.system(size: 38)).frame(width: 38, height: 38).foregroundStyle(Color.shellPink)
             }
             .accessibilityLabel("Run command")
         } else if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty {
             Button { sendDraft() } label: {
-                Image(systemName: "arrow.up.circle.fill").font(.system(size: 38))
+                Image(systemName: "arrow.up.circle.fill").font(.system(size: 38)).frame(width: 38, height: 38)
                     .foregroundStyle(planMode ? AnyShapeStyle(Color.green) : AnyShapeStyle(.tint))
             }
             .accessibilityLabel(client.busy ? "Send, queued until the reply ends" : "Send")
@@ -1415,21 +1585,21 @@ struct ChatView: View {
             }
         } else if client.shellRunning && !client.busy {
             Button(action: client.stopShell) {
-                Image(systemName: "stop.circle.fill").font(.system(size: 38)).foregroundStyle(Color.shellPink)
+                Image(systemName: "stop.circle.fill").font(.system(size: 38)).frame(width: 38, height: 38).foregroundStyle(Color.shellPink)
             }
             .accessibilityLabel("Stop command")
         } else if !suggestion.isEmpty {
             // The empty composer's grey text is the machine's guess at the next message: the arrow sends it
             // (tapping the text puts it in the composer to change, ComposerField).
             Button { client.send(suggestion) } label: {
-                Image(systemName: "arrow.up.circle.fill").font(.system(size: 38))
+                Image(systemName: "arrow.up.circle.fill").font(.system(size: 38)).frame(width: 38, height: 38)
                     .foregroundStyle(planMode ? AnyShapeStyle(Color.green) : AnyShapeStyle(.tint))
                     .opacity(0.45)
             }
             .accessibilityLabel("Send suggestion: \(suggestion)")
         } else if client.busy {
             Button(action: client.cancel) {
-                Image(systemName: "stop.circle.fill").font(.system(size: 38))
+                Image(systemName: "stop.circle.fill").font(.system(size: 38)).frame(width: 38, height: 38)
             }
             .accessibilityLabel("Stop")
         }
@@ -1544,11 +1714,6 @@ struct ChatView: View {
     }
 }
 
-private struct AttachFrameKey: PreferenceKey {
-    static let defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
-}
-
 private struct AttachHoleKey: PreferenceKey {
     static let defaultValue: CGRect = .zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
@@ -1635,6 +1800,117 @@ private struct ChromeGlyph<Label: View>: View {
         } else {
             label()
         }
+    }
+}
+
+/// The main screen's top bar: a button at each end and a title in the middle, where the navigation bar put them.
+private struct ChromeBar<Leading: View, Title: View, Trailing: View>: View {
+    @ViewBuilder let leading: () -> Leading
+    @ViewBuilder let title: () -> Title
+    @ViewBuilder let trailing: () -> Trailing
+
+    var body: some View {
+        HStack(spacing: 0) {
+            leading()
+            Spacer(minLength: 8)
+            trailing()
+        }
+        .overlay { title() }
+        .padding(.horizontal, 20)
+        .frame(height: ChromeBarHeight.value)
+    }
+}
+
+private enum ChromeBarHeight {
+    static let value: CGFloat = 44
+}
+
+/// A top bar button's glyph, sized as the navigation bar's were (`sized`), or left to the navigation bar.
+private struct ChromeLabel: ViewModifier {
+    let sized: Bool
+
+    func body(content: Content) -> some View {
+        if sized {
+            content
+                .font(.system(size: 20, weight: .medium))
+                .frame(width: 30, height: 30)
+                .contentShape(Circle())
+                .drawerSwipeGuard()
+        } else {
+            content.drawerSwipeGuard()
+        }
+    }
+}
+
+extension View {
+    fileprivate func chromeButtonLabel() -> some View {
+        modifier(ChromeLabel(sized: true))
+    }
+
+    /// The top bar's round glass button.
+    fileprivate func chromeButton() -> some View {
+        drawerGlassButton()
+    }
+
+    /// The main screen's top bar, pinned over the top of the content; on iOS 26 as a bar, which earns the soft scroll
+    /// edge under it.
+    @ViewBuilder
+    fileprivate func topBar<Bar: View>(_ shown: Bool = true, @ViewBuilder _ bar: () -> Bar) -> some View {
+        if !shown {
+            self
+        } else if #available(iOS 26.0, *) {
+            safeAreaBar(edge: .top, spacing: 0) { DrawerLifted(content: bar()) }
+        } else {
+            safeAreaInset(edge: .top, spacing: 0) { DrawerLifted(content: bar()) }
+        }
+    }
+}
+
+/// The top bar, kept clear of the status bar by padding (the drawer lays the screen out with no safe area, see
+/// SideDrawer). Its buttons ease a little lower as the drawer shrinks the chat out, to sit as the navigation bar's did
+/// on the shrunk card: drawn lower only, the bar keeps its place in the layout.
+private struct DrawerLifted<Content: View>: View {
+    let content: Content
+    @Environment(\.drawerBars) private var bars
+
+    var body: some View {
+        content
+            .visualEffect { content, geo in content.offset(y: 12 * SideDrawerMotion.shrink(of: geo)) }
+            .padding(.top, bars?.top ?? 0)
+    }
+}
+
+/// The drawer's state watched without ChatView's body reading it: read there, a change redrew the whole chat screen.
+private struct OnDrawerChange: ViewModifier {
+    @Binding var value: Bool
+    let action: (Bool) -> Void
+
+    func body(content: Content) -> some View {
+        content.onChange(of: value) { _, now in action(now) }
+    }
+}
+
+extension View {
+    /// Reports this view's frame on the chat card (SideDrawerMotion.card), which the drawer's slide doesn't move: it only
+    /// changes when the chat's own layout does. Measured on the screen, it changed every frame of a slide, and following
+    /// it redrew the whole chat screen each time.
+    fileprivate func onCardFrame(_ action: @escaping (CGRect) -> Void) -> some View {
+        onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(SideDrawerMotion.card)) }, action: action)
+    }
+
+    fileprivate func onDrawerChange(_ value: Binding<Bool>, perform action: @escaping (Bool) -> Void) -> some View {
+        modifier(OnDrawerChange(value: value, action: action))
+    }
+}
+
+/// Room under the composer for the home indicator, as padding: in the drawer the screen lays out with no safe area
+/// (see SideDrawer).
+private struct DrawerBottomRoom: ViewModifier {
+    let on: Bool
+    @Environment(\.drawerBars) private var bars
+
+    func body(content: Content) -> some View {
+        content.padding(.bottom, on ? bars?.bottom ?? 0 : 0)
     }
 }
 
@@ -1774,6 +2050,40 @@ private struct PlanGlowLine: UIViewRepresentable {
     }
 }
 
+/// The chat page's background: the theme's colour, and under Panes a soft violet wash at the top, as the desktop's
+/// panes have. The strip under the clock (StatusBarFade) draws the same, so messages fade into it without a seam.
+private struct ChatPageBackground: View {
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            theme.backgroundColor
+            if theme.backdrop {
+                LinearGradient(colors: [(theme.accent ?? .accentColor).opacity(0.13), .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 260)
+            }
+        }
+    }
+}
+
+/// A fade under the status bar alone: messages dissolve into the page's own background beneath the clock and
+/// battery, and stay crisp behind the top bar's buttons. The page's background rather than a system material,
+/// whose own tint turned the strip grey over Panes' violet. The drawer lays the chat out with no safe area, so the
+/// height is its bars' top.
+private struct StatusBarFade: View {
+    @Environment(\.drawerBars) private var bars
+
+    var body: some View {
+        ChatPageBackground()
+            .frame(height: bars?.top ?? 0, alignment: .top)
+            .clipped()
+            .mask(LinearGradient(stops: [.init(color: .black, location: 0.6), .init(color: .clear, location: 1)],
+                                 startPoint: .top, endPoint: .bottom))
+            .ignoresSafeArea(edges: .top)
+            .allowsHitTesting(false)
+    }
+}
+
 /// Where the transcript's latest line ends on screen.  A plain box, so writing it on every scroll frame redraws nothing.
 final class EndMark {
     var y: CGFloat = 0
@@ -1783,9 +2093,10 @@ extension View {
     /// The soft scroll-edge blur iOS 26 draws under the bars: messages fade out under the clock and buttons at the
     /// top, and soften into the composer at the bottom instead of running crisp beneath it.
     @ViewBuilder
-    func softScrollEdges() -> some View {
+    func softScrollEdges(top: Bool = true) -> some View {
         if #available(iOS 26.0, *) {
-            scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+            scrollEdgeEffectStyle(.soft, for: top ? [.top, .bottom] : .bottom)
+                .scrollEdgeEffectHidden(!top, for: .top)
         } else {
             self
         }
@@ -1868,4 +2179,39 @@ private struct FoundFlash: View {
             .animation(.easeOut(duration: on ? 0.2 : 1.2), value: on)
             .allowsHitTesting(false)
     }
+}
+
+/// A view of no size inside the transcript's content, which can picture the scroll view it sits in as it last drew
+/// on screen: what a chat switch fades out from.
+private struct TranscriptShotter: UIViewRepresentable {
+    final class Box {
+        /// Every transcript's marker, held weakly: across a switch the old chat's and the new one's are both alive
+        /// for a moment and either may report in last, so the one on screen is picked when a picture is wanted.
+        private let views = NSHashTable<UIView>.weakObjects()
+
+        func add(_ view: UIView) { views.add(view) }
+
+        func take() -> UIImage? {
+            for view in views.allObjects where view.window != nil {
+                var v = view.superview
+                while let next = v, !(next is UIScrollView) { v = next.superview }
+                guard let scroll = v as? UIScrollView, scroll.bounds.width > 0, scroll.bounds.height > 0 else { continue }
+                let box = CGRect(origin: .zero, size: scroll.bounds.size)
+                return UIGraphicsImageRenderer(bounds: box).image { _ in scroll.drawHierarchy(in: box, afterScreenUpdates: false) }
+            }
+            return nil
+        }
+    }
+
+    let box: Box
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        box.add(view)
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) { box.add(view) }
 }

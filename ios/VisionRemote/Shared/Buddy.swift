@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// A scout's avatar: a small squishy creature in the scout's colour, with a trait of its own and a mood that says
-/// what its project is doing. The same drawing as the desktop app's buddy.ts,
-/// on a 100 × 100 canvas: keyframes, eyes, mouths, traits and props.
+/// A scout's avatar: a soft little capsule in the scout's colour (the shape from the app icon), lit from above with a
+/// gentle gradient, a rim of light and a shadow on the ground; never glossy. A trait of its own on top and a mood that
+/// says what its project is doing. The same drawing as the desktop app's buddy.ts, on a 100 × 100 canvas.
 /// Shared by the app and the widgets; a widget, or Reduce Motion, holds one pose.
 struct BuddyView: View {
     var hue: Double
@@ -11,8 +11,10 @@ struct BuddyView: View {
     var size: CGFloat
     /// False: one still pose (the widgets, quiet rows). Reduce Motion holds it still too.
     var animated = true
-    /// A tap squishes it and it giggles.
+    /// A tap makes it hop and look proud.
     var pokeable = false
+    /// The badges and bubbles around it; nil leaves them to the size (dropped under 48 points).
+    var props: Bool? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pokedAt: Date?
@@ -29,22 +31,22 @@ struct BuddyView: View {
             }
         }
         .frame(width: size, height: size)
-        .scaleEffect(squish)
+        .offset(y: hopped ? -size * 0.1 : 0)
         .contentShape(Rectangle())
         .onTapGesture {
             guard pokeable, !reduceMotion else { return }
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.35)) { pokedAt = Date() }
+            pokedAt = Date()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-                withAnimation(.easeOut(duration: 0.2)) { pokedAt = nil }
+                pokedAt = nil
             }
         }
         .allowsHitTesting(pokeable)
         .accessibilityLabel(BuddyMood(mood).label)
     }
 
-    private var squish: CGSize {
-        guard let pokedAt, Date().timeIntervalSince(pokedAt) < 0.3 else { return CGSize(width: 1, height: 1) }
-        return CGSize(width: 1.12, height: 0.88)
+    private var hopped: Bool {
+        guard let pokedAt else { return false }
+        return Date().timeIntervalSince(pokedAt) < 0.2
     }
 
     private func canvas(at time: Double?, now: Date) -> some View {
@@ -52,20 +54,57 @@ struct BuddyView: View {
         return Canvas { ctx, canvasSize in
             let scale = canvasSize.width / 100
             ctx.scaleBy(x: scale, y: scale)
-            BuddyPainter(hue: hue, trait: trait, mood: shown, props: size >= 48,
+            BuddyPainter(hue: hue, trait: trait, mood: shown, props: props ?? (size >= 48),
                          time: time ?? shown.still).draw(in: &ctx)
         }
     }
 }
 
+// MARK: - Vision's own
+
+/// Vision itself, wherever it shows its face: a violet scout with a sprout, the one on the app icon.
+enum VisionFaceMood: Equatable {
+    case idle, thinking, listening, speaking, error, asleep
+
+    fileprivate var buddy: String {
+        switch self {
+        case .idle, .listening: return "curious"
+        case .thinking: return "focused"
+        case .speaking: return "proud"
+        case .error: return "worried"
+        case .asleep: return "asleep"
+        }
+    }
+}
+
+/// The scout drawn at `width` points across its body; the frame hugs the scout rather than the square canvas.
+struct VisionFace: View {
+    static let hue = 248.0
+
+    var mood: VisionFaceMood
+    var width: CGFloat
+    var animated = true
+
+    var body: some View {
+        let canvas = width / 0.7
+        BuddyView(hue: Self.hue, trait: "sprout", mood: mood.buddy, size: canvas, animated: animated, props: mood == .asleep)
+            .frame(width: width, height: canvas * 0.66)
+    }
+}
+
+/// Vision's colours outside the scout: the icon's dark backdrop, the antenna's glow, and a warm red for trouble.
+enum VisionPalette {
+    static let backdrop = buddyHSL(VisionFace.hue, 35, 12)
+    static let glow = buddyHSL(VisionFace.hue, 60, 86)
+    static let trouble = Color(red: 0.85, green: 0.63, blue: 0.57)
+}
+
 // MARK: - moods
 
-/// One keyframe: when (0–1), scale x and y, lift, gaze x and y, tilt in degrees.
-struct BuddyKey {
-    var t, sx, sy, lift, gx, gy, tilt: Double
-    init(_ t: Double, _ sx: Double, _ sy: Double, _ lift: Double, _ gx: Double, _ gy: Double, _ tilt: Double) {
-        (self.t, self.sx, self.sy, self.lift, self.gx, self.gy, self.tilt) = (t, sx, sy, lift, gx, gy, tilt)
-    }
+/// A step: at `t` (0–1 through the cycle), `x` and `y` in steps of 4 units; the body eases from one to the next.
+struct BuddyStep {
+    var t, x, y: Double
+    init(_ t: Double, _ x: Double, _ y: Double) { (self.t, self.x, self.y) = (t, x, y) }
 }
 
 struct BuddyMood {
@@ -73,62 +112,30 @@ struct BuddyMood {
     var label: String
     var dur: Double
     var still: Double
-    var keys: [BuddyKey]
     var eyes: String
-    var mouth: String
-    var brows: [(Double, Double)]? = nil
-    /// Each arm's angle: one value held, or one per keyframe.
-    var left: [Double] = [25]
-    var right: [Double] = [-25]
-    var wave = false
-    var blush = false
+    var hop: [BuddyStep] = []
+    var look: [BuddyStep] = []
+    var blink = false
     var dim = false
-    var droop = false
+    var sad = false
     var extras: [String] = []
 
     static let moods: [String: BuddyMood] = {
-        let rest: [BuddyKey] = [.init(0, 1, 1, 0, 0, 0, 0), .init(0.5, 1.05, 0.94, 0, 0, 0, 0), .init(1, 1, 1, 0, 0, 0, 0)]
-        let hop: [BuddyKey] = [.init(0, 1, 1, 0, 0, 0, 0), .init(0.14, 1.12, 0.86, 0, 0, 1, 0), .init(0.32, 0.92, 1.1, 10, 0, -1, 0),
-                               .init(0.48, 0.96, 1.05, 3, 0, 0, 0), .init(0.58, 1.1, 0.9, 0, 0, 1, 0), .init(0.72, 1, 1, 0, 0, 0, 0),
-                               .init(1, 1, 1, 0, 0, 0, 0)]
         let list: [BuddyMood] = [
-            .init(id: "asleep", label: "Asleep", dur: 5, still: 2.6, keys: rest, eyes: "closed", mouth: "tiny", dim: true,
-                  extras: ["zz", "bubble"]),
-            .init(id: "waking", label: "Waking up", dur: 3.2, still: 1.3,
-                  keys: [.init(0, 1, 1, 0, 0, 0, 0), .init(0.3, 0.9, 1.12, 1, 0, -1, 0), .init(0.6, 0.9, 1.12, 1, 0, -1, 0),
-                         .init(0.78, 1.07, 0.93, 0, 0, 0, 0), .init(1, 1, 1, 0, 0, 0, 0)],
-                  eyes: "squeeze", mouth: "yawn", left: [25, 150, 150, 25, 25], right: [-25, -150, -150, -25, -25]),
-            .init(id: "curious", label: "Curious", dur: 3.6, still: 0.9,
-                  keys: [.init(0, 1, 1, 0, -4, -1, -7), .init(0.42, 1, 1, 0, -4, -1, -7), .init(0.5, 1, 1, 0, 4, -1, 7),
-                         .init(0.92, 1, 1, 0, 4, -1, 7), .init(1, 1, 1, 0, -4, -1, -7)],
-                  eyes: "open", mouth: "o", brows: [(0, 0), (-5, -3)], extras: ["question"]),
-            .init(id: "focused", label: "Focused", dur: 0.8, still: 0.2,
-                  keys: [.init(0, 1, 1, 0, 0, 3, 0), .init(0.5, 1.03, 0.97, 0, 0, 3, 0), .init(1, 1, 1, 0, 0, 3, 0)],
-                  eyes: "narrow", mouth: "tongue", brows: [(-1.5, 2.5), (2.5, -1.5)], left: [40, 60, 40], right: [-60, -40, -60],
-                  extras: ["sparks"]),
-            .init(id: "found_it", label: "Found it", dur: 1.5, still: 0.5,
-                  keys: [.init(0, 1, 1, 0, 0, 0, 0), .init(0.15, 1.12, 0.85, 0, 0, 1, 0), .init(0.35, 0.9, 1.12, 14, 0, -2, 0),
-                         .init(0.55, 1, 1, 6, 0, 0, 0), .init(0.7, 1.1, 0.88, 0, 0, 1, 0), .init(0.82, 1, 1, 0, 0, 0, 0),
-                         .init(1, 1, 1, 0, 0, 0, 0)],
-                  eyes: "star", mouth: "open", left: [25, 30, 150, 140, 40, 25, 25], right: [-25, -30, -150, -140, -40, -25, -25],
-                  blush: true, extras: ["stars"]),
-            .init(id: "needs_you", label: "Needs you", dur: 1.8, still: 0.6, keys: hop, eyes: "big", mouth: "smile",
-                  brows: [(-3.5, -2.5), (-2.5, -3.5)], wave: true, extras: ["bang", "ring"]),
-            .init(id: "still_waiting", label: "Still waiting", dur: 4.6, still: 2.3,
-                  keys: [.init(0, 1, 1, 0, 0, 3, 0), .init(0.5, 1.07, 0.91, 0, 0, 4, -3), .init(1, 1, 1, 0, 0, 3, 0)],
-                  eyes: "glossy", mouth: "frown", brows: [(1, -3.5), (-3.5, 1)], left: [12], right: [-12], droop: true,
-                  extras: ["dots"]),
-            .init(id: "proud", label: "Proud", dur: 1.4, still: 0.35,
-                  keys: [.init(0, 1, 1, 0, 0, 0, -6), .init(0.25, 1.06, 0.94, 0, 0, 0, 0), .init(0.5, 1, 1, 3, 0, 0, 6),
-                         .init(0.75, 1.06, 0.94, 0, 0, 0, 0), .init(1, 1, 1, 0, 0, 0, -6)],
-                  eyes: "happy", mouth: "open", left: [140, 165, 140, 165, 140], right: [-165, -140, -165, -140, -165],
-                  blush: true, extras: ["confetti"]),
-            .init(id: "worried", label: "Worried", dur: 0.35, still: 0.1,
-                  keys: [.init(0, 1, 1, 0, -1, 0, -2), .init(0.5, 1, 1, 0, 1, 0, 2), .init(1, 1, 1, 0, -1, 0, -2)],
-                  eyes: "small", mouth: "wobbly", brows: [(1.5, -3), (-3, 1.5)], left: [55], right: [-55], droop: true,
-                  extras: ["sweat"]),
-            .init(id: "out_cold", label: "Out cold", dur: 5, still: 2.6, keys: rest, eyes: "closed", mouth: "o-small", dim: true,
-                  extras: ["zz", "nightcap", "moon"]),
+            .init(id: "asleep", label: "Asleep", dur: 4, still: 1, eyes: "closed", hop: [.init(0, 0, 0), .init(0.5, 0, 0.25)], dim: true, extras: ["zz"]),
+            .init(id: "waking", label: "Waking up", dur: 3, still: 1.2, eyes: "squeeze", hop: [.init(0, 0, 0), .init(0.4, 0, -1), .init(0.7, 0, 0)]),
+            .init(id: "curious", label: "Curious", dur: 3.2, still: 0.8, eyes: "open", blink: true,
+                  extras: ["question"]),
+            .init(id: "focused", label: "Focused", dur: 1.6, still: 0.2, eyes: "focused", look: [.init(0, 0, 0.5)], blink: true),
+            .init(id: "found_it", label: "Found it", dur: 1.4, still: 0.3, eyes: "star",
+                  hop: [.init(0, 0, 0), .init(0.2, 0, -2), .init(0.45, 0, -1), .init(0.6, 0, 0)], extras: ["sparks"]),
+            .init(id: "needs_you", label: "Needs you", dur: 1.6, still: 0.5, eyes: "big",
+                  hop: [.init(0, 0, 0), .init(0.15, 0, -1), .init(0.3, 0, 0), .init(0.45, 0, -1), .init(0.6, 0, 0)], blink: true,
+                  extras: ["bang"]),
+            .init(id: "still_waiting", label: "Still waiting", dur: 4, still: 2, eyes: "sad", blink: true, sad: true, extras: ["dots"]),
+            .init(id: "proud", label: "Proud", dur: 1, still: 0.3, eyes: "happy", hop: [.init(0, 0, 0), .init(0.5, 0, -1)]),
+            .init(id: "worried", label: "Worried", dur: 0.5, still: 0.1, eyes: "small", hop: [.init(0, -0.4, 0), .init(0.5, 0.4, 0)], sad: true),
+            .init(id: "out_cold", label: "Out cold", dur: 4, still: 1, eyes: "x", dim: true, extras: ["zz"]),
         ]
         return Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
     }()
@@ -137,12 +144,10 @@ struct BuddyMood {
         self = Self.moods[id] ?? Self.moods["asleep"]!
     }
 
-    private init(id: String, label: String, dur: Double, still: Double, keys: [BuddyKey], eyes: String, mouth: String,
-                 brows: [(Double, Double)]? = nil, left: [Double] = [25], right: [Double] = [-25], wave: Bool = false,
-                 blush: Bool = false, dim: Bool = false, droop: Bool = false, extras: [String] = []) {
-        (self.id, self.label, self.dur, self.still, self.keys, self.eyes, self.mouth) = (id, label, dur, still, keys, eyes, mouth)
-        (self.brows, self.left, self.right, self.wave, self.blush, self.dim, self.droop, self.extras) =
-            (brows, left, right, wave, blush, dim, droop, extras)
+    private init(id: String, label: String, dur: Double, still: Double, eyes: String, hop: [BuddyStep] = [], look: [BuddyStep] = [],
+                 blink: Bool = false, dim: Bool = false, sad: Bool = false, extras: [String] = []) {
+        (self.id, self.label, self.dur, self.still, self.eyes) = (id, label, dur, still, eyes)
+        (self.hop, self.look, self.blink, self.dim, self.sad, self.extras) = (hop, look, blink, dim, sad, extras)
     }
 }
 
@@ -168,52 +173,94 @@ func buddyHSL(_ h: Double, _ s: Double, _ l: Double, _ a: Double = 1) -> Color {
 
 private let amber = Color(red: 0.96, green: 0.65, blue: 0.14)
 private let green = Color(red: 0.25, green: 0.81, blue: 0.43)
-private let ink = Color(red: 0.086, green: 0.086, blue: 0.114)
-private let pink = Color(red: 1, green: 0.48, blue: 0.6)
-private let tearBlue = Color(red: 0.62, green: 0.85, blue: 1)
+private let spark = Color(red: 1, green: 0.84, blue: 0.42)
 
-private let radius = 31.0, bottom = 82.0
-private func centreY(_ sy: Double, _ lift: Double) -> Double { bottom - lift - 0.85 * radius * sy }
-private let c0 = centreY(1, 0), top0 = c0 - radius, eyeY = c0 - 3, mouthY = eyeY + 10.5, browY = eyeY - 10.5
-private let eyeXs = [39.0, 61.0]
-
-/// The SVG's `.42 0 .58 1` spline between keyframes, near enough.
-private func ease(_ x: Double) -> Double { x * x * (3 - 2 * x) }
-/// A value swinging between two over `period` seconds, eased at each end.
-private func swing(_ time: Double, _ period: Double, _ a: Double, _ b: Double, offset: Double = 0) -> Double {
-    let p = ((time + offset) / period).truncatingRemainder(dividingBy: 1)
-    return a + (b - a) * (0.5 - 0.5 * cos(p * 2 * .pi))
+/// SVG path data as buddy.ts writes it: M L H V Q C Z, absolute or relative, nothing else.
+private func svgPath(_ d: String) -> Path {
+    var path = Path()
+    var tokens: [String] = []
+    let scanner = Scanner(string: d)
+    scanner.charactersToBeSkipped = CharacterSet(charactersIn: " ,\n")
+    while !scanner.isAtEnd {
+        if let cmd = scanner.scanCharacter(), "MmLlHhVvQqCcZz".contains(cmd) {
+            tokens.append(String(cmd))
+        } else {
+            scanner.currentIndex = scanner.string.index(before: scanner.currentIndex)
+            guard let n = scanner.scanDouble() else { break }
+            tokens.append(String(n))
+        }
+    }
+    var i = 0, cmd = "M", cur = CGPoint.zero, start = CGPoint.zero
+    func num() -> Double { defer { i += 1 }; return Double(tokens[i]) ?? 0 }
+    func pt(_ rel: Bool) -> CGPoint { let x = num(), y = num(); return rel ? CGPoint(x: cur.x + x, y: cur.y + y) : CGPoint(x: x, y: y) }
+    while i < tokens.count {
+        if Double(tokens[i]) == nil { cmd = tokens[i]; i += 1 }
+        let rel = cmd == cmd.lowercased()
+        switch cmd.uppercased() {
+        case "M":
+            cur = pt(rel); start = cur; path.move(to: cur)
+            cmd = rel ? "l" : "L" // further pairs are lines
+        case "L": cur = pt(rel); path.addLine(to: cur)
+        case "H": let x = num(); cur.x = rel ? cur.x + x : x; path.addLine(to: cur)
+        case "V": let y = num(); cur.y = rel ? cur.y + y : y; path.addLine(to: cur)
+        case "Q": let c = pt(rel), e = pt(rel); path.addQuadCurve(to: e, control: c); cur = e
+        case "C": let c1 = pt(rel), c2 = pt(rel), e = pt(rel); path.addCurve(to: e, control1: c1, control2: c2); cur = e
+        case "Z": path.closeSubpath(); cur = start
+        default: i += 1
+        }
+    }
+    return path
 }
+
+private func circle(_ x: Double, _ y: Double, _ r: Double) -> Path { Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)) }
+
+private func sparkle(_ r: Double) -> Path {
+    let k = r * 0.18
+    return svgPath("M0 \(-r)Q\(k) \(-k) \(r) 0Q\(k) \(k) 0 \(r)Q\(-k) \(k) \(-r) 0Q\(-k) \(-k) 0 \(-r)Z")
+}
+
+/// The shapes, as buddy.ts has them. The body spans 15–85 across and 38–78 down; the eyes sit at 37.5 and 62.5.
+private enum Shape {
+    static let step = 4.0, eyeY = 57.0, eyeX = 12.5, eyeScale = 1.35
+    static let body = svgPath("M30 38H70C78.28 38 85 44.72 85 53V63C85 71.28 78.28 78 70 78H30C21.72 78 15 71.28 15 63V53C15 44.72 21.72 38 30 38Z")
+    static let rim = svgPath("M21.5 46Q24.5 41 31 41H69Q75.5 41 78.5 46")
+    static let underside = svgPath("M24 74.5Q50 79 76 74.5")
+    static let feet = svgPath("M25 74h11v5q0 3.5-3.5 3.5h-4q-3.5 0-3.5-3.5ZM64 74h11v5q0 3.5-3.5 3.5h-4q-3.5 0-3.5-3.5Z")
+
+    struct Eye { var path: Path; var line = false; var shine: [(Double, Double)] = [] }
+    /// Each eye drawn as the left one about its centre (+x is toward the nose).
+    static let eyes: [String: Eye] = [
+        "open": .init(path: svgPath("M-3.5 -1.5C-3.5 -6.17 3.5 -6.17 3.5 -1.5V1.5C3.5 6.17 -3.5 6.17 -3.5 1.5Z"), shine: [(1.2, -2.2)]),
+        "big": .init(path: svgPath("M-4 -3C-4 -8.33 4 -8.33 4 -3V3C4 8.33 -4 8.33 -4 3Z"), shine: [(1.4, -3.6), (-1.6, 2.6)]),
+        "closed": .init(path: svgPath("M-4 0.5Q0 3.5 4 0.5"), line: true),
+        "focused": .init(path: svgPath("M-3.5 -0.5H3.5V1.5C3.5 6.17 -3.5 6.17 -3.5 1.5Z"), shine: [(1.4, 0.6)]),
+        "sad": .init(path: svgPath("M-3.5 -1L3.5 -3.6V1C3.5 5.67 -3.5 5.67 -3.5 1Z"), shine: [(1.2, -1.6)]),
+        "small": .init(path: svgPath("M-2 0C-2 -2.67 2 -2.67 2 0C2 2.67 -2 2.67 -2 0Z")),
+        "squeeze": .init(path: svgPath("M-3 -3.5L2.5 0L-3 3.5"), line: true),
+        "happy": .init(path: svgPath("M-4 2Q0 -4 4 2"), line: true),
+        "star": .init(path: sparkle(5)),
+        "x": .init(path: svgPath("M-3 -3L3 3M3 -3L-3 3"), line: true),
+    ]
+
+    static let leaves = svgPath("M50 31Q43 21 36 25Q41 32 50 31ZM50 30Q57 18 66 21Q61 30 50 30Z")
+    static let leavesDown = svgPath("M50 31Q42 27 37 33Q44 36 50 31ZM50 31Q58 27 63 33Q56 36 50 31Z")
+    static let ears = svgPath("M19 44Q17 30 22 26Q29 32 33 40ZM81 44Q83 30 78 26Q71 32 67 40Z")
+    static let earsDown = svgPath("M19 44Q19 35 26 33Q31 37 33 40ZM81 44Q81 35 74 33Q69 37 67 40Z")
+    static let earsInner = svgPath("M22 40Q21 33 23 30Q27 34 29 39ZM78 40Q79 33 77 30Q73 34 71 39Z")
+    static let curl = svgPath("M49 39C45 31 52 25 57 28C61 31 57 36 53 33")
+    static let zed = svgPath("M77 26h6l-6 7h6")
+    static let question = svgPath("M82 19.5C82 15 89 15 89 19.5C89 21.5 87.5 22.3 86.5 22.8C85.5 23.3 85.5 24 85.5 25")
+}
+
 /// 0–1 through a cycle of `period` seconds, started `begin` seconds in.
 private func cycle(_ time: Double, _ period: Double, begin: Double = 0) -> Double {
     let p = ((time - begin) / period).truncatingRemainder(dividingBy: 1)
     return p < 0 ? p + 1 : p
 }
-/// A piecewise-linear value at `p` through (key, value) points.
-private func through(_ p: Double, _ points: [(Double, Double)]) -> Double {
-    for i in 1..<points.count where p <= points[i].0 {
-        let (t0, v0) = points[i - 1], (t1, v1) = points[i]
-        return t1 > t0 ? v0 + (v1 - v0) * (p - t0) / (t1 - t0) : v1
-    }
-    return points.last!.1
-}
 
-private func pt(_ x: Double, _ y: Double) -> CGPoint { CGPoint(x: x, y: y) }
-
-private func ellipse(_ cx: Double, _ cy: Double, _ rx: Double, _ ry: Double) -> Path {
-    Path(ellipseIn: CGRect(x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2))
-}
-
-/// The four-point sparkle the props and star eyes use, `r` from the middle to a point.
-private func sparkle(_ x: Double, _ y: Double, _ r: Double) -> Path {
-    var p = Path()
-    p.move(to: pt(x, y - r))
-    p.addQuadCurve(to: pt(x + r, y), control: pt(x, y))
-    p.addQuadCurve(to: pt(x, y + r), control: pt(x, y))
-    p.addQuadCurve(to: pt(x - r, y), control: pt(x, y))
-    p.addQuadCurve(to: pt(x, y - r), control: pt(x, y))
-    p.closeSubpath()
-    return p
+/// Which of `n` equal steps a cycle is on.
+private func stepOf(_ time: Double, _ period: Double, _ n: Int, begin: Double = 0) -> Int {
+    min(n - 1, Int(cycle(time, period, begin: begin) * Double(n)))
 }
 
 struct BuddyPainter {
@@ -223,391 +270,128 @@ struct BuddyPainter {
     let props: Bool
     let time: Double
 
-    private var sad: Bool { mood.droop }
-    private var sleepy: Bool { mood.id == "asleep" || mood.id == "out_cold" }
+    private struct Colours { var top, bottom, low, glow, inner, ink: Color }
+    private var c: Colours {
+        let h = hue
+        return mood.dim
+            ? Colours(top: buddyHSL(h, 24, 52), bottom: buddyHSL(h, 26, 40), low: buddyHSL(h, 24, 36), glow: buddyHSL(h, 30, 70),
+                      inner: buddyHSL(h, 30, 62), ink: buddyHSL(h, 35, 12))
+            : Colours(top: buddyHSL(h, 58, 70), bottom: buddyHSL(h, 54, 55), low: buddyHSL(h, 48, 44), glow: buddyHSL(h, 70, 88),
+                      inner: buddyHSL(h, 70, 82), ink: buddyHSL(h, 35, 12))
+    }
 
-    /// Where the mood's keyframes have it now: (interpolated key, segment index, fraction through it).
-    private var pose: (key: BuddyKey, index: Int, frac: Double) {
+    /// Where a list of steps has the body now, eased between steps, in canvas units.
+    private func eased(_ steps: [BuddyStep]) -> CGSize {
+        guard let first = steps.first else { return .zero }
+        let all = steps.last!.t < 1 ? steps + [BuddyStep(1, first.x, first.y)] : steps
         let p = cycle(time, mood.dur)
-        let keys = mood.keys
-        for i in 1..<keys.count where p <= keys[i].t {
-            let a = keys[i - 1], b = keys[i]
-            let f = b.t > a.t ? ease((p - a.t) / (b.t - a.t)) : 1
-            func mix(_ x: Double, _ y: Double) -> Double { x + (y - x) * f }
-            let k = BuddyKey(p, mix(a.sx, b.sx), mix(a.sy, b.sy), mix(a.lift, b.lift), mix(a.gx, b.gx), mix(a.gy, b.gy), mix(a.tilt, b.tilt))
-            return (k, i - 1, f)
-        }
-        return (keys.last!, keys.count - 2, 1)
+        let i = max(0, (all.lastIndex { $0.t <= p } ?? 0))
+        let a = all[i], b = all[min(i + 1, all.count - 1)]
+        let u = b.t > a.t ? (p - a.t) / (b.t - a.t) : 0
+        let e = u * u * (3 - 2 * u)
+        return CGSize(width: (a.x + (b.x - a.x) * e) * Shape.step, height: (a.y + (b.y - a.y) * e) * Shape.step)
     }
 
-    private func armAngle(_ values: [Double], _ pose: (key: BuddyKey, index: Int, frac: Double)) -> Double {
-        guard values.count == mood.keys.count else { return values.first ?? 0 }
-        let a = values[pose.index], b = values[min(pose.index + 1, values.count - 1)]
-        return a + (b - a) * pose.frac
-    }
+    private func round(_ width: Double) -> StrokeStyle { StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round) }
 
     func draw(in ctx: inout GraphicsContext) {
-        let pose = self.pose
-        let k = pose.key
-        let cy = centreY(k.sy, k.lift)
-        let topShift = cy - radius * k.sy - top0
-        let gradient = bodyGradient(cy)
-
-        // The shadow on the ground, smaller as it jumps.
-        let shadow = max(10, 23 * k.sx - k.lift * 1.1)
-        ctx.fill(ellipse(50, 88, shadow, 3.2), with: .color(.black.opacity(0.3)))
-
-        var body = ctx
-        body.opacity = mood.dim ? 0.88 : 1
-        body.translateBy(x: 50, y: bottom)
-        body.rotate(by: .degrees(k.tilt))
-        body.translateBy(x: -50, y: -bottom)
-
-        // Arms behind the body, then the trait's back (ears), the body, the trait's front, the face.
-        var arms = body
-        arms.translateBy(x: 0, y: cy - c0)
-        drawArm(&arms, side: -1, angle: armAngle(mood.left, pose))
-        drawArm(&arms, side: 1, angle: mood.wave ? swing(time, 0.55, -150, -105) : armAngle(mood.right, pose))
-
-        var top = body
-        top.translateBy(x: 0, y: topShift)
-        if trait == "ears" { drawEars(&top, gradient: gradient) }
-        body.fill(bodyPath(k), with: gradient)
-        drawTrait(&top)
-        if mood.extras.contains("nightcap") { drawNightcap(&top) }
-
-        var face = body
-        face.translateBy(x: k.gx, y: cy - c0 + k.gy)
-        drawFace(&face)
-
-        if props { drawProps(&ctx) }
-    }
-
-    private func bodyGradient(_ cy: Double) -> GraphicsContext.Shading {
-        .radialGradient(Gradient(stops: [.init(color: buddyHSL(hue, 95, 80), location: 0),
-                                         .init(color: buddyHSL(hue, 85, 61), location: 0.45),
-                                         .init(color: buddyHSL(hue + 8, 70, 42), location: 1)]),
-                        center: pt(50 - radius * 0.24, cy - radius * 0.4), startRadius: 0, endRadius: radius * 1.6)
-    }
-
-    private func bodyPath(_ k: BuddyKey) -> Path {
-        let c = centreY(k.sy, k.lift)
-        let points: [CGPoint] = (0..<12).map { i in
-            let a = Double(i) / 12 * 2 * .pi - .pi / 2, s = sin(a)
-            return pt(50 + radius * k.sx * cos(a), c + radius * k.sy * s * (s > 0 ? 0.85 : 1))
+        let c = c
+        var shadow = ctx
+        shadow.translateBy(x: 50, y: 83)
+        shadow.scaleBy(x: 1, y: 4.0 / 31)
+        shadow.fill(circle(0, 0, 31), with: .radialGradient(Gradient(colors: [.black.opacity(0.3), .black.opacity(0)]),
+                                                            center: .zero, startRadius: 0, endRadius: 31))
+        var me = ctx
+        let hop = eased(mood.hop)
+        me.translateBy(x: hop.width, y: hop.height)
+        drawTrait(&me, c)
+        me.fill(Shape.feet, with: .color(c.low))
+        me.fill(Shape.body, with: .linearGradient(Gradient(colors: [c.top, c.bottom]), startPoint: CGPoint(x: 0, y: 38), endPoint: CGPoint(x: 0, y: 78)))
+        me.stroke(Shape.rim, with: .color(.white.opacity(mood.dim ? 0.14 : 0.32)), style: round(1.6))
+        me.stroke(Shape.underside, with: .color(c.low.opacity(0.55)), style: round(1.6))
+        var face = me
+        let look = eased(mood.look)
+        face.translateBy(x: look.width, y: look.height)
+        let blinking = mood.blink && cycle(time, 3.7) >= 0.94 && cycle(time, 3.7) < 0.97
+        let eye = Shape.eyes[blinking ? "closed" : mood.eyes] ?? Shape.eyes["open"]!
+        for side in [-1.0, 1.0] {
+            var one = face
+            one.translateBy(x: 50 + side * Shape.eyeX, y: Shape.eyeY)
+            one.scaleBy(x: -side * Shape.eyeScale, y: Shape.eyeScale)
+            if eye.line {
+                one.stroke(eye.path, with: .color(c.ink), style: round(1.8))
+            } else {
+                one.fill(eye.path, with: .color(c.ink))
+                for (n, (x, y)) in eye.shine.enumerated() {
+                    one.fill(circle(x, y, n == 0 ? 1.15 : 0.7), with: .color(.white.opacity(n == 0 ? 0.85 : 0.45)))
+                }
+            }
         }
-        var path = Path()
-        path.move(to: points[0])
-        let n = points.count
-        for i in 0..<n {
-            let p0 = points[(i - 1 + n) % n], p1 = points[i], p2 = points[(i + 1) % n], p3 = points[(i + 2) % n]
-            path.addCurve(to: p2, control1: pt(p1.x + (p2.x - p0.x) / 6, p1.y + (p2.y - p0.y) / 6),
-                          control2: pt(p2.x - (p3.x - p1.x) / 6, p2.y - (p3.y - p1.y) / 6))
-        }
-        path.closeSubpath()
-        return path
+        drawProps(&ctx)
     }
 
-    private func drawArm(_ ctx: inout GraphicsContext, side: Double, angle: Double) {
-        var arm = ctx
-        arm.translateBy(x: 50 + side * 25, y: c0 + 5)
-        arm.rotate(by: .degrees(angle))
-        arm.fill(ellipse(0, 10.5, 5, 9), with: .color(buddyHSL(hue, 75, 50)))
-    }
-
-    // MARK: traits
-
-    private func drawTrait(_ ctx: inout GraphicsContext) {
-        let t = top0
-        func swung(_ a: Double, _ b: Double, _ period: Double) -> GraphicsContext {
-            var c = ctx
-            c.translateBy(x: 50, y: t + 1)
-            c.rotate(by: .degrees(swing(time, period, a, b)))
-            c.translateBy(x: -50, y: -(t + 1))
-            return c
-        }
-        let stroke = StrokeStyle(lineWidth: 2.2, lineCap: .round)
+    private func drawTrait(_ ctx: inout GraphicsContext, _ c: Colours) {
+        let sleepy = mood.dim, droop = mood.sad || sleepy
         switch trait {
         case "sprout":
-            var c = sad ? swung(38, 42, 3) : swung(-7, 7, 2.2)
-            var stem = Path()
-            stem.move(to: pt(50, t + 2))
-            stem.addQuadCurve(to: pt(51, t - 9), control: pt(48, t - 4))
-            c.stroke(stem, with: .color(Color(red: 0.25, green: 0.6, blue: 0.32)), style: stroke)
-            let leaf = sleepy ? Color(red: 0.29, green: 0.6, blue: 0.35) : Color(red: 0.37, green: 0.82, blue: 0.48)
-            for (x, y, rx, ry, rot) in [(45.0, t - 10, 6.0, 3.2, -28.0), (56.5, t - 12, 6.5, 3.4, 32.0)] {
-                var l = c
-                l.translateBy(x: x, y: y)
-                l.rotate(by: .degrees(rot))
-                l.fill(ellipse(0, 0, rx, ry), with: .color(leaf))
-            }
-        case "curl":
-            var curl = Path()
-            curl.move(to: pt(48, t + 2))
-            curl.addCurve(to: pt(57, t - 4), control1: pt(44, t - 7), control2: pt(57, t - 11))
-            curl.addCurve(to: pt(52, t - 4), control1: pt(57, t), control2: pt(51, t))
-            ctx.stroke(curl, with: .color(buddyHSL(hue, 70, sad ? 34 : 38)), style: StrokeStyle(lineWidth: 2.6, lineCap: .round))
+            ctx.stroke(svgPath("M50 39V30"), with: .color(Color(red: 0.23, green: 0.55, blue: 0.31)), style: round(2.2))
+            let leaves = droop ? Shape.leavesDown : Shape.leaves
+            let box = leaves.boundingRect
+            let colours = sleepy ? [Color(red: 0.31, green: 0.6, blue: 0.38), Color(red: 0.18, green: 0.43, blue: 0.25)]
+                                 : [Color(red: 0.49, green: 0.89, blue: 0.58), Color(red: 0.25, green: 0.68, blue: 0.35)]
+            ctx.fill(leaves, with: .linearGradient(Gradient(colors: colours), startPoint: CGPoint(x: 0, y: box.minY), endPoint: CGPoint(x: 0, y: box.maxY)))
         case "ears":
-            break   // drawn behind the body (drawEars)
-        default:   // antenna
-            var c = sad ? swung(24, 28, 3) : swung(-9, 9, mood.id == "focused" ? 0.5 : 1.4)
-            var stem = Path()
-            stem.move(to: pt(50, t + 2))
-            stem.addQuadCurve(to: pt(50, t - 10), control: pt(49, t - 5))
-            c.stroke(stem, with: .color(buddyHSL(hue, 50, 35)), style: stroke)
-            let bulb = mood.id == "needs_you" ? amber : ["proud", "found_it"].contains(mood.id) ? green
-                : sad || sleepy ? buddyHSL(hue, 20, 58) : buddyHSL(hue + 30, 95, 78)
-            if !(sad || sleepy) { c.fill(ellipse(50, t - 13, 7, 7), with: .color(bulb.opacity(0.3))) }
-            c.fill(ellipse(50, t - 13, 3.6, 3.6), with: .color(bulb))
+            ctx.fill(droop ? Shape.earsDown : Shape.ears, with: .color(c.top))
+            if !droop { ctx.fill(Shape.earsInner, with: .color(c.inner)) }
+        case "curl":
+            ctx.stroke(Shape.curl, with: .color(c.top), style: round(3.2))
+        default: // antenna
+            ctx.stroke(svgPath("M67.5 39V27"), with: .color(c.low), style: round(2.2))
+            let bulb = mood.id == "needs_you" ? amber : mood.id == "proud" || mood.id == "found_it" ? green : droop ? c.low : c.glow
+            var lamp = ctx
+            if mood.id == "needs_you" && stepOf(time, 0.8, 2) == 0 { lamp.opacity = 0.35 }
+            lamp.fill(circle(67.5, 24.5, 3.6), with: .radialGradient(
+                Gradient(stops: [.init(color: .white.opacity(0.9), location: 0), .init(color: bulb, location: 0.35), .init(color: bulb, location: 1)]),
+                center: CGPoint(x: 66.4, y: 23.1), startRadius: 0, endRadius: 5.8))
         }
     }
-
-    private func drawEars(_ ctx: inout GraphicsContext, gradient: GraphicsContext.Shading) {
-        let t = top0
-        for side in [-1.0, 1.0] {
-            let x = 50 + side * 17
-            var ear = ctx
-            ear.translateBy(x: x, y: t + 8)
-            var angle = sad || sleepy ? side * 38 : 0
-            if side > 0 && !(sad || sleepy) { angle += through(cycle(time, 3), [(0, 0), (0.82, 0), (0.88, 16), (1, 0)]) }
-            ear.rotate(by: .degrees(angle))
-            ear.translateBy(x: -x, y: -(t + 8))
-            if side > 0 {   // the right ear is the left one mirrored about its own middle
-                ear.translateBy(x: 2 * x, y: 0)
-                ear.scaleBy(x: -1, y: 1)
-            }
-            var outer = Path()
-            outer.move(to: pt(x - 9, t + 10))
-            outer.addQuadCurve(to: pt(x + 9, t + 6), control: pt(x - 4, t - 14))
-            outer.closeSubpath()
-            ear.fill(outer, with: gradient)
-            var inner = Path()
-            inner.move(to: pt(x - 5, t + 7))
-            inner.addQuadCurve(to: pt(x + 5, t + 4), control: pt(x - 2, t - 7))
-            inner.closeSubpath()
-            ear.fill(inner, with: .color(pink.opacity(0.55)))
-        }
-    }
-
-    private func drawNightcap(_ ctx: inout GraphicsContext) {
-        let t = top0
-        var cap = Path()
-        cap.move(to: pt(27, t + 13))
-        cap.addQuadCurve(to: pt(58, t - 9), control: pt(30, t - 10))
-        cap.addQuadCurve(to: pt(86, t + 17), control: pt(78, t - 8))
-        cap.addQuadCurve(to: pt(72, t + 9), control: pt(75, t + 3))
-        cap.closeSubpath()
-        ctx.fill(cap, with: .color(buddyHSL(hue + 200, 45, 42)))
-        var trim = Path()
-        trim.move(to: pt(26, t + 14))
-        trim.addQuadCurve(to: pt(74, t + 10), control: pt(50, t - 1))
-        let cream = Color(red: 0.945, green: 0.933, blue: 0.9)
-        ctx.stroke(trim, with: .color(cream), style: StrokeStyle(lineWidth: 5, lineCap: .round))
-        ctx.fill(ellipse(86.5, t + 19, 4.2, 4.2), with: .color(cream))
-    }
-
-    // MARK: face
-
-    private var blinking: Bool {
-        let p = cycle(time, 3.7)
-        return p > 0.93
-    }
-
-    private func drawFace(_ ctx: inout GraphicsContext) {
-        // The highlight on the body, then cheeks, brows, eyes and mouth.
-        var shine = ctx
-        shine.translateBy(x: 34, y: c0 - 17)
-        shine.rotate(by: .degrees(-25))
-        shine.fill(ellipse(0, 0, 7, 4.2), with: .color(.white.opacity(0.42)))
-        if mood.blush {
-            for x in eyeXs { ctx.fill(ellipse(x + (x < 50 ? -9 : 9), eyeY + 8, 5, 3), with: .color(pink.opacity(0.5))) }
-        }
-        if let brows = mood.brows {
-            for (i, x) in eyeXs.enumerated() {
-                var b = Path()
-                b.move(to: pt(x - 5, browY + brows[i].0))
-                b.addLine(to: pt(x + 5, browY + brows[i].1))
-                ctx.stroke(b, with: .color(ink), style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
-            }
-        }
-        for (i, x) in eyeXs.enumerated() { drawEye(&ctx, x: x, right: i == 1) }
-        drawMouth(&ctx)
-        if props && mood.extras.contains("bubble") {
-            let r = through(cycle(time, 5), [(0, 0), (0.75, 5.5), (0.8, 6), (0.81, 0), (1, 0)])
-            if r > 0.1 {
-                ctx.fill(ellipse(57, mouthY + 1, r, r), with: .color(.white.opacity(0.25)))
-                ctx.stroke(ellipse(57, mouthY + 1, r, r), with: .color(.white.opacity(0.7)), lineWidth: 0.8)
-            }
-        }
-        if mood.extras.contains("sweat") {
-            let p = cycle(time, 1.4)
-            var drop = Path()
-            let x = 74 + p, y = eyeY - 10 + 9 * p
-            drop.move(to: pt(x, y))
-            drop.addCurve(to: pt(x, y + 7), control1: pt(x + 3, y + 4), control2: pt(x + 3, y + 7))
-            drop.addCurve(to: pt(x, y), control1: pt(x - 3, y + 7), control2: pt(x - 3, y + 4))
-            ctx.fill(drop, with: .color(tearBlue.opacity(p < 0.6 ? 1 : (1 - p) / 0.4)))
-        }
-    }
-
-    private func drawEye(_ ctx: inout GraphicsContext, x: Double, right: Bool) {
-        let line = StrokeStyle(lineWidth: 2.8, lineCap: .round, lineJoin: .round)
-        let blink = blinking
-        func open(_ rx: Double, _ ry: Double, _ dy: Double = 0, shine: (Double, Double, Double)? = nil, second: (Double, Double, Double)? = nil) {
-            ctx.fill(ellipse(x, eyeY + dy, rx, blink ? 0.6 : ry), with: .color(ink))
-            guard !blink else { return }
-            if let s = shine { ctx.fill(ellipse(x + s.0, eyeY + s.1, s.2, s.2), with: .color(.white)) }
-            if let s = second { ctx.fill(ellipse(x + s.0, eyeY + s.1, s.2, s.2), with: .color(.white)) }
-        }
-        switch mood.eyes {
-        case "closed":
-            var p = Path()
-            p.move(to: pt(x - 5, eyeY))
-            p.addQuadCurve(to: pt(x + 5, eyeY), control: pt(x, eyeY + 4.5))
-            ctx.stroke(p, with: .color(ink), style: line)
-        case "happy":
-            var p = Path()
-            p.move(to: pt(x - 5, eyeY + 2))
-            p.addLine(to: pt(x, eyeY - 3.5))
-            p.addLine(to: pt(x + 5, eyeY + 2))
-            ctx.stroke(p, with: .color(ink), style: line)
-        case "squeeze":
-            var p = Path()
-            let d = right ? -1.0 : 1.0
-            p.move(to: pt(x - 4 * d, eyeY - 4))
-            p.addLine(to: pt(x + 3 * d, eyeY))
-            p.addLine(to: pt(x - 4 * d, eyeY + 4))
-            ctx.stroke(p, with: .color(ink), style: line)
-        case "star":
-            let s = swing(time, 0.6, 1, 1.3)
-            ctx.fill(sparkle(x, eyeY, 8 * s), with: .color(ink))
-            ctx.fill(ellipse(x, eyeY, 1.6, 1.6), with: .color(.white))
-        case "narrow": open(5, 4.6, 1, shine: (1.6, 0.4, 1.3))
-        case "small":
-            ctx.fill(ellipse(x, eyeY, 3.8, 5.6), with: .color(ink))
-            ctx.fill(ellipse(x + 1.2, eyeY - 2, 1.2, 1.2), with: .color(.white))
-        case "big": open(6.5, 9, shine: (2, -3.2, 2.4), second: (-2.2, 3.4, 1.1))
-        case "glossy":
-            ctx.fill(ellipse(x, eyeY + 1, 6.8, 8.6), with: .color(ink))
-            ctx.fill(ellipse(x + 2, eyeY - 2.4, 2.8, 2.8), with: .color(.white))
-            ctx.fill(ellipse(x - 2.4, eyeY + 3, 1.3, 1.3), with: .color(.white))
-            var tear = Path()
-            tear.move(to: pt(x - 5, eyeY + 6))
-            tear.addQuadCurve(to: pt(x + 5, eyeY + 6), control: pt(x, eyeY + 9.5))
-            ctx.stroke(tear, with: .color(tearBlue.opacity(swing(time, 1.8, 0.4, 1))), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
-        default: open(5, 7.5, shine: (1.8, -2.8, 1.7))
-        }
-    }
-
-    private func drawMouth(_ ctx: inout GraphicsContext) {
-        let line = StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
-        let y = mouthY
-        func curve(_ x0: Double, _ y0: Double, _ cx: Double, _ cy: Double, _ x1: Double, _ y1: Double) {
-            var p = Path()
-            p.move(to: pt(x0, y0))
-            p.addQuadCurve(to: pt(x1, y1), control: pt(cx, cy))
-            ctx.stroke(p, with: .color(ink), style: line)
-        }
-        switch mood.mouth {
-        case "tiny": curve(48, y, 49, y + 1.8, 52, y)
-        case "smile": curve(45.5, y, 50, y + 4, 54.5, y)
-        case "o": ctx.fill(ellipse(50, y + 1, 2.4, 3), with: .color(ink))
-        case "o-small": ctx.fill(ellipse(50, y + 1, 1.6, 1.9), with: .color(ink))
-        case "frown": curve(46.5, y + 2.5, 50, y - 0.7, 53.5, y + 2.5)
-        case "wobbly":
-            var p = Path()
-            p.move(to: pt(44, y + 1))
-            for i in 0..<4 {
-                let x = 44 + Double(i) * 3
-                p.addQuadCurve(to: pt(x + 3, y + 1), control: pt(x + 1.5, y + (i % 2 == 0 ? -1 : 3)))
-            }
-            ctx.stroke(p, with: .color(ink), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-        case "tongue":
-            ctx.fill(ellipse(54, y + 2.6, 2.2, 3), with: .color(pink))
-            curve(45, y, 50, y + 3, 54.5, y - 0.5)
-        case "open":
-            var p = Path()
-            p.move(to: pt(44, y - 1))
-            p.addQuadCurve(to: pt(56, y - 1), control: pt(50, y + 8))
-            p.closeSubpath()
-            ctx.fill(p, with: .color(ink))
-            ctx.fill(ellipse(50, y + 3.4, 3, 1.6), with: .color(pink))
-        case "yawn":
-            let wide = through(cycle(time, mood.dur), [(0, 0), (0.3, 1), (0.6, 1), (0.78, 0), (1, 0)])
-            ctx.fill(ellipse(50, y + 2, 2.2 + 2 * wide, 1.6 + 4.9 * wide), with: .color(ink))
-        default: break
-        }
-    }
-
-    // MARK: props (48 pt and up)
 
     private func drawProps(_ ctx: inout GraphicsContext) {
-        let extras = mood.extras
-        if extras.contains("ring") {
-            let p = cycle(time, 1.8)
-            ctx.stroke(ellipse(50, c0, 33 + 15 * p, 33 + 15 * p), with: .color(amber.opacity(0.8 * (1 - p))), lineWidth: 2.5)
-        }
-        if extras.contains("zz") {
-            for begin in [0.0, 1.6] {
-                let p = cycle(time, 3.2, begin: begin)
-                let text = Text("z").font(.system(size: 13, weight: .bold)).foregroundColor(buddyHSL(hue, 60, 82))
-                var z = ctx
-                z.opacity = through(p, [(0, 0), (0.5, 0.9), (1, 0)])
-                z.draw(text, at: pt(79 + 8 * p, 20 - 13 * p))
+        let small: Set = ["zz", "question", "sparks", "bang", "dots"]
+        for e in mood.extras where props || !small.contains(e) {
+            var p = ctx
+            switch e {
+            case "zz":
+                for begin in [0.0, 1.5] {
+                    let u = cycle(time, 3, begin: begin)
+                    var z = ctx
+                    z.opacity = u < 0.2 ? u / 0.2 : u < 0.7 ? 1 : (1 - u) / 0.3
+                    z.translateBy(x: 9 * u, y: -10 * u)
+                    z.stroke(Shape.zed, with: .color(buddyHSL(hue, 40, 78)), style: round(1.8))
+                }
+            case "question":
+                let colour = buddyHSL(hue, 60, 85)
+                p.stroke(Shape.question, with: .color(colour), style: round(2.2))
+                p.fill(circle(85.5, 30, 1.3), with: .color(colour))
+            case "bang":
+                p.opacity = stepOf(time, 0.8, 4) == 3 ? 0.35 : 1
+                p.stroke(svgPath("M87 17v8"), with: .color(amber), style: round(3))
+                p.fill(circle(87, 30.5, 1.7), with: .color(amber))
+            case "dots":
+                let lit = stepOf(time, 2.4, 4)
+                for i in 0..<3 {
+                    var d = ctx
+                    d.opacity = lit == i ? 1 : 0.3
+                    d.fill(circle(79 + Double(i) * 6, 28, 1.7), with: .color(buddyHSL(hue, 20, 72)))
+                }
+            case "sparks":
+                for (x, y, d) in [(84.0, 22.0, 0.0), (13, 30, 0.35), (89, 44, 0.7)] where stepOf(time, 1.05, 3, begin: d) == 1 {
+                    var s = ctx
+                    s.translateBy(x: x, y: y)
+                    s.fill(sparkle(4), with: .color(spark))
+                }
+            default: break
             }
-        }
-        if extras.contains("question") {
-            let text = Text("?").font(.system(size: 17, weight: .heavy)).foregroundColor(buddyHSL(hue, 70, 82))
-            ctx.draw(text, at: pt(82, 19 + swing(time, 1.8, 0, -3)))
-        }
-        if extras.contains("sparks") {
-            for (x, y, begin) in [(80.0, 26.0, 0.0), (86, 40, 0.25), (72, 16, 0.5)] {
-                var s = ctx
-                s.opacity = through(cycle(time, 0.75, begin: begin), [(0, 0), (0.5, 1), (1, 0)])
-                s.fill(sparkle(x, y, 4), with: .color(buddyHSL(hue, 90, 82)))
-            }
-        }
-        if extras.contains("stars") {
-            for (x, y, begin) in [(16.0, 30.0, 0.0), (84, 24, 0.2), (12, 60, 0.45), (88, 58, 0.65), (50, 4, 0.3)] {
-                let s = through(cycle(time, 0.9, begin: begin), [(0, 0), (0.5, 1.2), (1, 0)])
-                ctx.fill(sparkle(x, y, 6 * s), with: .color(Color(red: 1, green: 0.84, blue: 0.42)))
-            }
-        }
-        if extras.contains("bang") {
-            var b = ctx
-            let s = swing(time, 0.9, 1, 1.15)
-            b.translateBy(x: 81, y: 21)
-            b.scaleBy(x: s, y: s)
-            b.fill(ellipse(0, 0, 8.5, 8.5), with: .color(amber))
-            var mark = Path()
-            mark.move(to: pt(0, -4.5))
-            mark.addLine(to: pt(0, 1))
-            b.stroke(mark, with: .color(.white), style: StrokeStyle(lineWidth: 2.6, lineCap: .round))
-            b.fill(ellipse(0, 4.3, 1.5, 1.5), with: .color(.white))
-        }
-        if extras.contains("dots") {
-            ctx.fill(Path(roundedRect: CGRect(x: 68, y: 15.5, width: 22, height: 13), cornerRadius: 6.5), with: .color(buddyHSL(hue, 15, 60, 0.25)))
-            for i in 0..<3 {
-                let o = through(cycle(time, 2.4, begin: Double(i) * 0.4), [(0, 0.3), (0.2, 1), (0.4, 0.3), (1, 0.3)])
-                ctx.fill(ellipse(74 + Double(i) * 5, 22, 1.7, 1.7), with: .color(amber.opacity(o)))
-            }
-        }
-        if extras.contains("confetti") {
-            let colours: [Color] = [amber, green, pink, Color(red: 0.24, green: 0.68, blue: 0.91), .white, Color(red: 0.7, green: 0.55, blue: 1)]
-            for i in 0..<9 {
-                let p = cycle(time, 1.6, begin: (Double(i) * 0.37).truncatingRemainder(dividingBy: 1.6))
-                let x = 8 + Double(i) * 10.5 + (i % 2 == 1 ? 4 : -4) * p, y = -2 + 94 * p
-                var c = ctx
-                c.opacity = p < 0.7 ? 1 : (1 - p) / 0.3
-                c.fill(Path(roundedRect: CGRect(x: x - 1.6, y: y - 2.6, width: 3.2, height: 5.2), cornerRadius: 0.8),
-                       with: .color(colours[i % colours.count]))
-            }
-        }
-        if extras.contains("moon") {
-            var m = ctx
-            m.opacity = swing(time, 4, 0.6, 1)
-            m.clip(to: ellipse(19, 15, 6, 6), options: .inverse)
-            m.fill(ellipse(15, 18, 7, 7), with: .color(Color(red: 1, green: 0.88, blue: 0.54)))
         }
     }
 }

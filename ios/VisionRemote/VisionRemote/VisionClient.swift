@@ -92,6 +92,14 @@ final class VisionClient: ObservableObject {
     /// The saved default (Settings) is left alone.
     @Published private(set) var nextModel: String?
     @Published private(set) var nextEffort: String?
+    /// A new chat being started here ("New chat", or a folder picked for one): the empty screen, with nothing
+    /// opened on the machine until its first message is sent. So a tap that never gets a message leaves no
+    /// empty chat behind on every device. `folder`: the one picked for it (nil: the folder last picked on
+    /// this machine, else the machine's own).
+    struct Draft: Equatable { var folder: String? }
+    @Published private(set) var draft: Draft?
+    /// The machine's own folder (where a chat opens when none is picked), fetched the first time it's needed.
+    @Published private(set) var machineFolder: String?
     private var questionsByChat: [String: QuestionForm] = [:]
     /// Chats closed while this app ran: a late frame about one (its reply still winding down) can't bring it back.
     private var closedChats: Set<String> = []
@@ -115,8 +123,11 @@ final class VisionClient: ObservableObject {
     /// Bumped when the machine says the scheduled tasks changed (or one ran), so an open list refetches.
     @Published private(set) var scheduledVersion = 0
 
-    // The chat on screen.
-    var active: ChatInfo? { chats.first { $0.id == activeChatID } ?? chats.last }
+    // The chat on screen: none while a new one is being drafted.
+    var active: ChatInfo? { draft != nil ? nil : chats.first { $0.id == activeChatID } ?? chats.last }
+    /// Where the chat the next message opens will work, with no chat on screen: the draft's folder, else the
+    /// one last picked on this machine, else the machine's own. Home written as ~, like a chat's `folder`.
+    var nextFolder: String? { (draft?.folder ?? lastFolder).map(homeAsTilde) ?? machineFolder }
     var messages: [Message] { active.flatMap { transcripts[$0.id] } ?? [] }
     var busy: Bool { active?.busy ?? false }
     var modelLabel: String { active?.model ?? "" }
@@ -129,7 +140,7 @@ final class VisionClient: ObservableObject {
     /// "auto" or "plan" for the chat on screen; "" with no chat open, or from an older Vision.
     var mode: String { active?.mode ?? "" }
     var sessionID: String? { active?.sessionID }
-    var chatTitle: String { active.map { $0.title.isEmpty ? "New chat" : $0.title } ?? "Vision" }
+    var chatTitle: String { active.map { $0.title.isEmpty ? "New chat" : $0.title } ?? (draft != nil ? "New chat" : "Vision") }
     /// The project whose chat is on screen, if it is one's.
     var activeProject: ProjectInfo? {
         guard let id = active?.project, !id.isEmpty else { return nil }
@@ -316,6 +327,8 @@ final class VisionClient: ObservableObject {
         chats.removeAll()
         transcripts.removeAll()
         activeChatID = nil
+        draft = nil
+        machineFolder = nil
         questionsByChat.removeAll()
         pendingQuestions = nil
         nextModel = nil
@@ -589,9 +602,9 @@ final class VisionClient: ObservableObject {
             return
         }
         guard let chat = active else {
-            // Nothing open (the last chat was closed): the first message opens one.
-            newConversation()
+            // Nothing open (a draft, or the last chat was closed): this first message opens one.
             pendingSend = (text, voice, images, thumbnails)
+            openChat(in: draft?.folder)
             return
         }
         // A message sent during a reply is queued by the machine.  Keep current speech playing;
@@ -683,16 +696,27 @@ final class VisionClient: ObservableObject {
 
     var shellRunning: Bool { active?.shellRunning ?? false }
 
-    /// Open a fresh chat on the machine; the reply (`opened`) makes it the active one. `folder`: the
-    /// machine folder it should work in (from the picker), remembered for later chats; nil opens it in
-    /// the folder last picked on this machine, or the machine's own if none was.
-    func newConversation(in folder: String? = nil) {
+    /// "New chat": the empty screen, with nothing opened on the machine until the first message. `folder`: the
+    /// machine folder it should work in (from the picker), remembered for later chats once it opens there; nil
+    /// keeps the folder a draft already has, else the one last picked on this machine, else the machine's own.
+    func startNewChat(in folder: String? = nil) {
+        player.stop()
         pendingSend = nil
+        pendingQuestions = nil
+        draft = Draft(folder: folder.flatMap { $0.isEmpty ? nil : $0 } ?? draft?.folder)
+        if machineFolder == nil {
+            Task { if let listing = try? await fetchFolders() { machineFolder = listing.label } }
+        }
+    }
+
+    /// Open a fresh chat on the machine, for the message waiting in `pendingSend`; the reply (`opened`) makes it
+    /// the active one and sends that message. `folder`: the one picked for it; nil opens it in the folder last
+    /// picked on this machine, or the machine's own if none was.
+    private func openChat(in folder: String?) {
         wantsNewChat = true
-        let picked = folder.flatMap { $0.isEmpty ? nil : $0 }
-        pickedFolder = picked
-        let workdir = picked ?? lastFolder
-        newChatInLastFolder = picked == nil && workdir != nil
+        pickedFolder = folder
+        let workdir = folder ?? lastFolder
+        newChatInLastFolder = folder == nil && workdir != nil
         var frame: [String: Any] = ["type": "new"]
         if let nextModel { frame["model"] = nextModel }
         if let nextEffort { frame["effort"] = nextEffort }
@@ -960,9 +984,15 @@ final class VisionClient: ObservableObject {
         sendFrame(frame)
     }
 
+    /// Called just before the chat on screen changes, with nothing changed yet: the chat screen pictures the
+    /// transcript going, to cross-fade from.
+    var willSwitchChat: (() -> Void)?
+
     func select(chat id: String) {
-        guard id != activeChatID else { return }
+        guard id != activeChatID || draft != nil else { return }
+        willSwitchChat?()
         player.stop()   // only the chat on screen is heard
+        draft = nil
         activeChatID = id
         pendingQuestions = questionsByChat[id]
         if transcripts[id] == nil { Task { await fetchHistory(chat: id) } }
@@ -1051,14 +1081,12 @@ final class VisionClient: ObservableObject {
             let text = ev["text"] as? String ?? "error"
             // These are the texts of `usable_folder` in vision/server.py: reword them there and this stops matching.
             let folderGone = ["no such folder", "not a folder", "Vision can't open"].contains(where: text.hasPrefix)
-            if wantsNewChat && folderGone { pickedFolder = nil }   // a folder that failed is not remembered
+            if wantsNewChat && folderGone { pickedFolder = nil; draft?.folder = nil }   // a folder that failed is not remembered
             if wantsNewChat && newChatInLastFolder && folderGone {
                 // The remembered folder has gone from the machine: forget it and open the chat in the
-                // machine's own folder, keeping the message that was waiting for it.
-                let waiting = pendingSend
+                // machine's own folder, for the message still waiting in `pendingSend`.
                 lastFolder = nil
-                newConversation()
-                pendingSend = waiting
+                openChat(in: nil)
                 return
             }
             toast = text
@@ -1349,12 +1377,13 @@ final class VisionClient: ObservableObject {
         // so say so, rather than leave stop, model and answers aimed at no chat. Not while a chat of our
         // own is on its way (`new` sent, `opened` not back): adopting a stranger then would make our
         // chat's arrival look like a switch away, which ends a call started on the empty screen.
-        if activeChatID == nil && !wantsNewChat { activeChatID = info.id }
+        if activeChatID == nil && !wantsNewChat && draft == nil { activeChatID = info.id }
         syncQuestions(for: info, from: ev)
         let opened = ev["opened"] as? Bool ?? false
         if opened && wantsNewChat {
             wantsNewChat = false
             newChatInLastFolder = false
+            draft = nil
             if let pickedFolder { lastFolder = pickedFolder }
             pickedFolder = nil
             nextModel = nil      // spent on this chat
@@ -1827,7 +1856,7 @@ final class VisionClient: ObservableObject {
             if item.role == "checkin" {
                 // A scout's check-in: one card with its report (and how many things need you after it).
                 var row = Message(role: .note, text: item.text)
-                row.checkin = CheckinCard(label: item.label ?? "Check-in", started: item.started, ended: item.ended,
+                row.checkin = CheckinCard(label: item.label ?? "Status report", started: item.started, ended: item.ended,
                                           needsYou: item.needs_you ?? 0)
                 row.durationMs = item.duration_ms
                 return row
@@ -1929,6 +1958,12 @@ final class VisionClient: ObservableObject {
     /// The model and effort new chats start on (config.toml on the machine), with every model to choose from.
     func fetchDefaults() async throws -> ModelCatalogue {
         try await JSONDecoder().decode(ModelCatalogue.self, from: perform(request("defaults")))
+    }
+
+    /// Every model to choose from, with the given model's effort levels (the default model's when empty).
+    func fetchCatalogue(model: String) async throws -> ModelCatalogue {
+        let query = model.isEmpty ? [:] : ["model": model]
+        return try await JSONDecoder().decode(ModelCatalogue.self, from: perform(request("models", query: query)))
     }
 
     /// Save a new default; the machine fits the effort to the model and answers with what it saved.

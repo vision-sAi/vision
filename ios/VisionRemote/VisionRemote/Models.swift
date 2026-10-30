@@ -753,6 +753,7 @@ struct ScoutCheckins: Equatable {
         var everyMinutes: Int
         var enabled: Bool
         var nextRun: Double?
+        var weekday: Int = 0   // 0 = Monday, weekly only
     }
 
     var schedule: Schedule?
@@ -764,7 +765,7 @@ struct ScoutCheckins: Equatable {
         if let s = d["schedule"] as? [String: Any] {
             schedule = Schedule(repeatKind: s["repeat"] as? String ?? "daily", time: s["time"] as? String ?? "08:00",
                                 everyMinutes: s["every_minutes"] as? Int ?? 120, enabled: s["enabled"] as? Bool ?? true,
-                                nextRun: s["next_run"] as? Double)
+                                nextRun: s["next_run"] as? Double, weekday: s["weekday"] as? Int ?? 0)
         }
         let last = d["last"] as? [String: Any]
         lastStarted = last?["started"] as? Double
@@ -1442,17 +1443,21 @@ struct ScheduledTask: Codable, Identifiable, Hashable {
     var lastRun: Double? = nil
     var nextRun: Double? = nil
     var lastChat: String? = nil
-    var kind: String? = nil            // "reminder": the words come back as they are, no model runs (set from a chat)
+    var workdir: String? = nil         // the folder a run works in; nil or "" is the machine's default
+    var kind: String? = nil            // "reminder": the words come back as they are, no model runs (set from a chat);
+                                       // "checkin": a scout's status report, kept and edited on the scout, not here
 
     var isReminder: Bool { kind == "reminder" }
+    var isScoutReport: Bool { kind == "checkin" }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, prompt, time, date, weekday, enabled, kind
+        case id, title, prompt, time, date, weekday, enabled, kind, workdir
         case repeatRule = "repeat", lastRun = "last_run", nextRun = "next_run", lastChat = "last_chat"
     }
 
     var body: [String: Any] {
-        var b: [String: Any] = ["title": title, "prompt": prompt, "repeat": repeatRule, "time": time, "enabled": enabled]
+        var b: [String: Any] = ["title": title, "prompt": prompt, "repeat": repeatRule, "time": time, "enabled": enabled,
+                                "workdir": workdir ?? ""]
         if !id.isEmpty { b["id"] = id }
         if let date { b["date"] = date }
         if let weekday { b["weekday"] = weekday }
