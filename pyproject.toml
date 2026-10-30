@@ -83,6 +83,8 @@ serve = [
   "python-multipart>=0.0.9",
   "qrcode>=7",
   "cryptography>=42",  # seals push notifications for the phone (vision/push.py)
+  "pillow>=10",  # Library thumbnails (vision/library.py)
+  "imageio-ffmpeg>=0.5",  # a static ffmpeg, so videos from the phone digest on any machine (vision/server.py)
 ]
 # `vision weather`: ES256 signing of Apple WeatherKit tokens (needs an Apple Developer account)
 weather = ["cryptography>=42"]
