@@ -15,7 +15,7 @@ import { IconName, icon, placeIcons } from "./icons";
 import { closeSetup, firstRun, setupInit, step, subscriptions } from "./setup";
 import {
   Agent, Json, Msg, agentOf, drawMsg, el, markdown, planOf, setPictureLoader, setPictureViewer, splitAttachments, toolOf,
-  updateAgent, updateTool,
+  placeFixed, updateAgent, updateTool,
 } from "./render";
 
 interface Question { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string }[] }
@@ -40,6 +40,7 @@ let updateHow: string | null = null;            // hello.update: what to run, wh
 let serverProtocol: number | null = null;
 const PROTOCOL = 1;                             // vision/server.py PROTOCOL this app speaks
 let system: Json = {};                          // the system's appearance (lib.rs `appearance`)
+const closing = new Set<string>();             // chats closed here: closing the one on screen moves to the newest
 let wantNew = false;                            // a `new` went out: switch to the chat it opens
 let pendingSend: { text: string; images: string[]; mode: string } | null = null; // the draft's first message
 let paired: { url: string; name: string } | null = null; // the computer this window talks to
@@ -69,14 +70,55 @@ function row(r: Json): Msg {
   };
 }
 
-async function loadHistory(chat: string) {
+const liveStart = new Map<string, number>(); // where the running turn begins in a chat's transcript
+const fetched = new Map<string, Map<string, Msg[]>>(); // chat → its last /history rows, as messages, by row
+
+/** Load a chat's transcript ahead of its opening (hovered in the list, or one of the latest), so it opens at once. */
+const prefetching = new Set<string>();
+async function prefetch(chat: string) {
+  if (transcripts.has(chat) || prefetching.has(chat) || !chats.has(chat)) return;
+  prefetching.add(chat);
+  try { await loadHistory(chat); } finally { prefetching.delete(chat); }
+}
+
+/** Fetch the latest chats one after another, once the list has come in. */
+async function prefetchRecent() {
+  const scoutChats = new Set(projects.map((p) => p.chat));
+  const recent = [...chats.values()].filter((c) => !scoutChats.has(c.chat) && !c.project)
+    .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || (b.updated ?? 0) - (a.updated ?? 0)).slice(0, 8);
+  for (const c of recent) await prefetch(c.chat);
+}
+
+/** `rejoined`: the socket just came back, so the server's picture of the running reply is the fuller one.
+ * Otherwise the reply streamed so far stays as it is: the chat summary held here is from the turn's start,
+ * with none of the text or steps since. */
+async function loadHistory(chat: string, rejoined = false) {
   try {
     const rows: Json[] = await http("GET", "history", { chat, limit: "200" });
-    const list = rows.map(row);
+    // A row the last fetch already turned into a message keeps that message, so its drawn bubble is reused
+    // rather than its markdown rebuilt; when nothing changed the transcript isn't redrawn at all.
+    const before = fetched.get(chat);
+    const next = new Map<string, Msg[]>();
+    const list = rows.map((r) => {
+      const sig = JSON.stringify(r);
+      const m = before?.get(sig)?.shift() ?? row(r);
+      next.has(sig) ? next.get(sig)!.push(m) : next.set(sig, [m]);
+      return m;
+    });
+    fetched.set(chat, next);
+    const was = transcripts.get(chat);
     const c = chats.get(chat);
-    if (c?.busy) list.push(...liveFrom(c));
-    transcripts.set(chat, list);
-    if (chat === active) { drawTranscript(true); findInChat = ""; } // a search hit stays wanted until the fresh history is drawn
+    if (c?.busy) {
+      const have = transcripts.get(chat) ?? [];
+      const from = liveStart.get(chat);
+      const held = from !== undefined && from < have.length && have.slice(from).some((m) => m.streaming) ? have.slice(from) : [];
+      liveStart.set(chat, list.length);
+      list.push(...(held.length && !rejoined ? held : liveFrom(c)));
+    } else liveStart.delete(chat);
+    const same = !!was && was.length === list.length && list.every((m, i) => m === was[i]);
+    if (!same) transcripts.set(chat, list);
+    if (chat === active) { if (!same || findInChat) drawTranscript(true); findInChat = ""; }
+    else if (!same) warm(chat); // a search hit stays wanted until the fresh history is drawn
   } catch (e) {
     if (chat === active) findInChat = "";
     toast(`Couldn't load that chat: ${e}`);
@@ -92,6 +134,43 @@ function liveFrom(c: Json): Msg[] {
     tools: (c.tools ?? []).map(toolOf), agents: (c.agents ?? []).map(agentOf),
   });
   return out;
+}
+
+// ---------------------------------------------------------------- reveal
+// Text arrives in chunks of whatever size the stream happens to carry, so pasting each one in whole makes the
+// reply jump. Each chunk is held and let out a little every frame instead, faster the more is waiting, so the
+// words flow at a steady pace yet never fall far behind the stream.
+
+const held = new Map<Msg, { chat: string; text: string }>();
+let revealing = false;
+
+function hold(m: Msg, chat: string, text: string) {
+  const h = held.get(m);
+  if (h) h.text += text; else held.set(m, { chat, text });
+  if (!revealing) { revealing = true; requestAnimationFrame(reveal); }
+}
+
+function reveal() {
+  revealing = false;
+  for (const [m, h] of held) {
+    // ~8 frames to drain whatever is waiting, never fewer than two characters a frame; breaks fall on a word end
+    const n = Math.min(h.text.length, Math.max(2, Math.ceil(h.text.length / 8)));
+    let cut = n;
+    if (cut < h.text.length) { const sp = h.text.lastIndexOf(" ", n); if (sp > n / 2) cut = sp + 1; }
+    m.text += h.text.slice(0, cut);
+    h.text = h.text.slice(cut);
+    if (!h.text) held.delete(m);
+    if (h.chat === active) scheduleDraw();
+  }
+  if (held.size) { revealing = true; requestAnimationFrame(reveal); }
+}
+
+/** Let out whatever a reply still holds, at once: it has ended, or something else now needs its full text. */
+function settle(m: Msg) {
+  const h = held.get(m);
+  if (!h) return;
+  m.text += h.text;
+  held.delete(m);
 }
 
 function streamingMsg(chat: string): Msg | undefined {
@@ -118,20 +197,22 @@ function handle(ev: Json) {
       serverProtocol = typeof ev.protocol === "number" ? ev.protocol : null;
       drawNotice();
       projects = ev.projects ?? [];
+      loadRetired();
       const seen = new Set<string>();
       for (const c of ev.chats ?? []) { chats.set(c.chat, c); seen.add(c.chat); }
-      for (const id of [...chats.keys()]) if (!seen.has(id)) { chats.delete(id); transcripts.delete(id); }
+      for (const id of [...chats.keys()]) if (!seen.has(id)) { chats.delete(id); transcripts.delete(id); fetched.delete(id); }
       for (const c of ev.chats ?? []) {
         if (c.waiting && c.questions?.length) questions.set(c.chat, c.questions); else questions.delete(c.chat);
       }
       agents.setAsleep(ev.asleep ?? []);
       agents.loadAll();
       if (view === "scout" && !scouts.project(scouts.current)) view = "chat";
-      if (active && !chats.has(active)) active = null;
+      if (active && !chats.has(active)) { active = null; if (view !== "scout") startDraft(); } // gone while away: never another chat in its place
       if (view === "scout" && scouts.current && !active) { openScout(scouts.current); return; }
       if (!active && !draft) { active = newestChat(); if (!active) startDraft(); }
-      if (active) loadHistory(active);
+      if (active) loadHistory(active, true);
       drawAll();
+      prefetchRecent();
       return;
     }
     case "chat": {
@@ -143,17 +224,19 @@ function handle(ev: Json) {
       return;
     }
     case "chat_closed":
-      chats.delete(ev.chat); transcripts.delete(ev.chat); questions.delete(ev.chat);
-      if (active === ev.chat) { active = newestChat(); if (active) loadHistory(active); else startDraft(); }
+      chats.delete(ev.chat); transcripts.delete(ev.chat); fetched.delete(ev.chat); liveStart.delete(ev.chat); questions.delete(ev.chat);
+      // The chat on screen: closed here, the newest takes its place; moved (its conversation opened in a
+      // terminal), follow it; gone any other way, a new chat rather than someone else's.
+      if (active === ev.chat) {
+        const next = ev.moved_to && chats.has(ev.moved_to) ? ev.moved_to : closing.has(ev.chat) ? newestChat() : null;
+        if (next) { active = next; loadHistory(next); } else { active = null; startDraft(); }
+      }
+      closing.delete(ev.chat);
       drawAll();
       return;
-    case "project": {
-      const p = ev.project;
-      projects = [...projects.filter((x) => x.id !== p.id), p];
-      drawSidebar();
-      if (view === "scout" && p.id === scouts.current) drawScout();
+    case "project":
+      keepProject(ev.project);
       return;
-    }
     case "activity":
       scouts.onActivity(ev.project, ev.event ?? {});
       return;
@@ -168,7 +251,7 @@ function handle(ev: Json) {
       scouts.onCheckin(ev);
       if (ev.state === "done" && !document.hasFocus()) {
         const p = scouts.project(ev.project);
-        if (p) notify(`${scouts.nameOf(p)} checked in`, ev.needs_you ? `${ev.needs_you} need${ev.needs_you === 1 ? "s" : ""} you` : String(ev.summary ?? "").split("\n")[0].slice(0, 160));
+        if (p) notify(`${scouts.nameOf(p)} sent a status report`, ev.needs_you ? `${ev.needs_you} need${ev.needs_you === 1 ? "s" : ""} you` : String(ev.summary ?? "").split("\n")[0].slice(0, 160));
       }
       return;
     case "thread":
@@ -182,9 +265,12 @@ function handle(ev: Json) {
       scouts.onSlept();
       return;
     case "project_removed":
-      projects = projects.filter((x) => x.id !== ev.project);
-      if (view === "scout" && scouts.current === ev.project) { view = "chat"; scouts.setCurrent(null); drawAll(); }
-      else drawSidebar();
+      // Retired: it stays, dimmed, with a Bring back (it's gone for good only if the server no longer has it).
+      http("GET", `projects/${ev.project}`).then((p) => keepProject(p), () => {
+        projects = projects.filter((x) => x.id !== ev.project);
+        if (view === "scout" && scouts.current === ev.project) { view = "chat"; scouts.setCurrent(null); drawAll(); }
+        else drawSidebar();
+      });
       return;
     case "update":
       updateHow = ev.update ?? null;
@@ -205,20 +291,25 @@ function handle(ev: Json) {
     case "start": {
       const c = chats.get(chat);
       if (c) { c.busy = true; c.suggestion = ""; }
+      if (chat === active) drawDock();
       if (!list) break;
+      let from = list.length;
       if (ev.note) list.push(blank("note", ev.note));
       else {
         const last = [...list].reverse().find((m) => m.role !== "note");
         const sent = splitAttachments(ev.text ?? "");
-        if (!(last?.role === "user" && sameTurn(last.text, sent.text))) list.push({ ...blank("user", sent.text), images: sent.images });
+        if (last?.role === "user" && sameTurn(last.text, sent.text)) from = list.indexOf(last);
+        else list.push({ ...blank("user", sent.text), images: sent.images });
       }
+      liveStart.set(chat, from);
       list.push({ ...blank("assistant"), streaming: true, status: "Thinking…" });
       break;
     }
-    case "delta": { const m = streamingMsg(chat); if (m) { m.text += ev.text ?? ""; m.status = "Writing…"; } break; }
+    case "delta": { const m = streamingMsg(chat); if (m) { hold(m, chat, ev.text ?? ""); m.status = "Writing…"; } break; }
     case "steered": {
       const m = streamingMsg(chat);
       if (!list || !m) break;
+      settle(m);
       m.streaming = false; m.status = "";
       list.push(blank("user", ev.text ?? ""));
       list.push({ ...blank("assistant"), streaming: true, status: "Working…" });
@@ -252,6 +343,7 @@ function handle(ev: Json) {
     case "done": {
       const m = streamingMsg(chat);
       if (m) {
+        settle(m);
         m.streaming = false; m.status = "";
         if (!m.text && ev.text) m.text = ev.text;
         m.error = ev.error || undefined;
@@ -301,8 +393,25 @@ function sameTurn(sent: string, echoed: string | undefined) {
   return !!echoed && (sent === echoed || echoed.startsWith(sent));
 }
 
+/** A project as the server has it now (a retired one too): in the list, and drawn wherever it shows. */
+function keepProject(p: Json) {
+  projects = [...projects.filter((x) => x.id !== p.id), p];
+  drawSidebar();
+  if (view === "scout" && p.id === scouts.current) drawScout();
+}
+
+/** The hello frame has the live scouts only; the retired ones come from the full list. */
+async function loadRetired() {
+  try {
+    const all: Json[] = await http("GET", "projects", { all: "true" });
+    const known = new Set(projects.map((p) => p.id));
+    const gone = all.filter((p) => p.status === "archived" && !known.has(p.id));
+    if (gone.length) { projects = [...projects, ...gone]; drawSidebar(); }
+  } catch { /* an older server: retired scouts just don't show */ }
+}
+
 function newestChat(): string | null {
-  const scoutChats = new Set(scouts.live().map((p) => p.chat));
+  const scoutChats = new Set(projects.map((p) => p.chat));
   const all = [...chats.values()].filter((c) => !scoutChats.has(c.chat)).sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0));
   return all[0]?.chat ?? null;
 }
@@ -337,10 +446,16 @@ async function startDraft() {
   } catch { /* the chips stay blank until the server answers */ }
 }
 
+/** An effort level as people read it: "High", "xHigh", "Ultracode". */
+function effortTitle(level: string): string {
+  if (level === "xhigh") return "xHigh";
+  return level ? level[0].toUpperCase() + level.slice(1) : "Off";
+}
+
 function modelLabel(data: Json, model: string, effort: string): string {
   for (const tab of data.tabs ?? []) for (const m of tab.models ?? []) if (m.id === model) {
-    const e = (data.efforts ?? []).find((x: Json) => x.id === effort);
-    return [m.label, e?.label].filter(Boolean).join(" · ");
+    const e = (data.efforts ?? []).find((x: Json) => x.id && x.id === effort);
+    return [m.label, e && effortTitle(e.label)].filter(Boolean).join(" · ");
   }
   return [model, effort].filter(Boolean).join(" · ");
 }
@@ -429,11 +544,10 @@ function drawSidebar() {
   const query = $<HTMLInputElement>("search").value.trim().toLowerCase();
 
   scouts.drawSidebar(nav, query, view === "scout");
-  const live = scouts.live();
-  const scoutChats = new Set(live.map((p) => p.chat).filter(Boolean));
+  const scoutChats = new Set(projects.map((p) => p.chat).filter(Boolean));
 
   const all = [...chats.values()]
-    .filter((c) => !scoutChats.has(c.chat) && !(c.project && live.some((p) => p.id === c.project)))
+    .filter((c) => !scoutChats.has(c.chat) && !(c.project && projects.some((p) => p.id === c.project)))
     .filter((c) => !query || `${c.title ?? ""} ${c.folder ?? ""}`.toLowerCase().includes(query))
     .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || (b.updated ?? 0) - (a.updated ?? 0));
   let heading = "";
@@ -457,9 +571,10 @@ function drawSidebar() {
     const close = el("button", "icon-btn close");
     close.append(icon("X", 14));
     close.title = c.source === "terminal" ? "Quit this chat in its terminal" : "Close this chat";
-    close.onclick = (e) => { e.stopPropagation(); send({ type: "close", chat: c.chat }); };
+    close.onclick = (e) => { e.stopPropagation(); closing.add(c.chat); send({ type: "close", chat: c.chat }); };
     item.append(close);
     item.onclick = () => select(c.chat);
+    item.onmouseenter = () => prefetch(c.chat);
     nav.append(item);
   }
   const said = query ? messageHits(query, new Set(all.map((c) => c.chat))) : [];
@@ -501,7 +616,7 @@ function messageHits(query: string, shown: Set<string>): Json[] {
 /** One hit: the chat's title, and the line that matched with the words picked out. */
 function hitRow(h: Json, query: string): HTMLElement {
   const c = chats.get(h.chat);
-  const p = scouts.live().find((x) => x.chat === h.chat);
+  const p = projects.find((x) => x.chat === h.chat);
   const item = el("div", "chat-item hit" + (h.chat === active ? " active" : ""));
   const text = el("span", "chat-text");
   text.append(el("span", "chat-name", p ? scouts.nameOf(p) : c?.title || h.title || "Chat"));
@@ -733,9 +848,8 @@ function drawWelcome() {
 function drawRecent() {
   const box = $("home-recent");
   box.replaceChildren();
-  const live = scouts.live();
   const recent = [...chats.values()]
-    .filter((c) => c.title && !(c.project && live.some((p) => p.id === c.project)))
+    .filter((c) => c.title && !(c.project && projects.some((p) => p.id === c.project)))
     .sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0)).slice(0, 3);
   if (!recent.length) return;
   const list = el("div", "home-recent");
@@ -758,6 +872,33 @@ const nearBottom = (b: HTMLElement) => b.scrollHeight - b.scrollTop - b.clientHe
 const follow = new ResizeObserver(() => { const b = $("transcript"); if (stuck) b.scrollTop = b.scrollHeight; });
 $("transcript").addEventListener("scroll", (e) => { stuck = nearBottom(e.currentTarget as HTMLElement); }, { passive: true });
 
+function msgActions() {
+  return {
+    retry: retryFrom, readAloud: readAloudOn ? readAloud : undefined,
+    stopShell: () => active && send({ type: "shell_stop", chat: active }),
+  };
+}
+
+/** Draw a chat's finished bubbles while the window is idle, so opening it later only has to place them.
+ * Not a scout's: its notes and check-ins draw as cards of their own. */
+function warm(chat: string) {
+  if (projects.some((p) => p.chat === chat) || chats.get(chat)?.project) return;
+  // WebKit may lack requestIdleCallback: then a few milliseconds' work every other frame or so
+  const idle = window.requestIdleCallback ?? ((f: (d: { timeRemaining(): number }) => void) => {
+    setTimeout(() => { const end = performance.now() + 6; f({ timeRemaining: () => end - performance.now() }); }, 30);
+  });
+  const list = transcripts.get(chat) ?? [];
+  let i = list.length;
+  const step = (deadline: { timeRemaining(): number }) => {
+    while (i > 0 && deadline.timeRemaining() > 2) {
+      const m = list[--i];
+      if (!m.streaming && !m.shellRunning && !rendered.has(m)) rendered.set(m, drawMsg(m, msgActions()));
+    }
+    if (i > 0 && transcripts.get(chat) === list) idle(step);
+  };
+  idle(step);
+}
+
 function drawTranscript(jump: boolean) {
   const box = $("transcript");
   const pinned = jump || stuck;
@@ -770,16 +911,13 @@ function drawTranscript(jump: boolean) {
       el("p", "dim", "Tell it what to do first, or just say hello. It keeps working on its goal in the background and reports back here."));
     box.append(empty);
   }
-  const actions = {
-    retry: retryFrom, readAloud: readAloudOn ? readAloud : undefined,
-    stopShell: () => active && send({ type: "shell_stop", chat: active }),
-  };
+  const actions = msgActions();
   const before = active ? drawnCount.get(active) : undefined;
   if (active) drawnCount.set(active, list.length);
   list.forEach((m, i) => {
     const live = m.streaming || m.shellRunning;
     let node = live ? undefined : rendered.get(m);
-    const owner = scout ?? (active ? scouts.live().find((p) => p.chat === active) : undefined);
+    const owner = scout ?? (active ? projects.find((p) => p.chat === active) : undefined);
     if (!node && owner && m.checkin) node = scouts.checkinCard(m.checkin, owner);
     if (!node && scout && m.role === "note") node = scouts.reportCard(m.text, scout) ?? undefined;
     if (!node) {
@@ -927,9 +1065,19 @@ function drawDock() {
   $("folder").title = draft ? "Choose the folder this chat works in" : "A chat stays in the folder it started in";
   $("model-text").textContent = draft ? draft.modelLabel || "Model" : [c?.model, c?.effort].filter(Boolean).join(" · ") || "Model";
   $("model").hidden = !draft && !c;
+  // Model and mode hold still while a reply runs: the chips grey out rather than refuse a click.
+  for (const id of ["model", "mode"]) $<HTMLButtonElement>(id).disabled = busy && !draft;
+  $("model").title = busy && !draft ? "Switch models once this reply has finished" : "Model and effort";
   const mode = draft ? draft.mode : c?.mode ?? "auto";
-  for (const b of $("mode").querySelectorAll<HTMLElement>("button")) b.classList.toggle("on", b.dataset.mode === mode);
+  $("mode").classList.toggle("on", mode === "plan");
+  $("mode").setAttribute("aria-pressed", String(mode === "plan"));
+  if ($("mode-text").textContent !== (mode === "plan" ? "Plan" : "Auto")) {
+    $("mode-text").textContent = mode === "plan" ? "Plan" : "Auto";
+    $("mode-icon").replaceChildren(icon(mode === "plan" ? "ListTodo" : "Zap"));
+  }
   $("mode").hidden = !draft && !c;
+  $("mode").title = busy && !draft ? "Switch modes once this reply has finished"
+    : "Auto runs tools as it goes; Plan proposes a plan first (Shift+Tab)";
   drawSendReady();
   drawAttachments();
 }
@@ -999,22 +1147,20 @@ function toast(text: string) {
 
 // ---------------------------------------------------------------- popovers: model, folder
 
+/** The button the open popover hangs from, so pressing it again closes it. */
+let popAnchor: HTMLElement | null = null;
+
 function closePopover() {
   $("popover").hidden = true;
+  popAnchor = null;
 }
 
 /** A menu above (or below) the button that opened it. */
 function popover(anchor: HTMLElement, content: HTMLElement, width = 320) {
   const pop = $("popover");
+  popAnchor = anchor;
   pop.replaceChildren(content);
-  pop.style.width = `${width}px`;
-  pop.hidden = false;
-  const r = anchor.getBoundingClientRect();
-  const h = pop.offsetHeight;
-  const left = Math.min(Math.max(8, r.left), window.innerWidth - width - 8);
-  const top = r.top - h - 8 > 8 ? r.top - h - 8 : r.bottom + 8;
-  pop.style.left = `${left}px`;
-  pop.style.top = `${top}px`;
+  placeFixed(pop, anchor, { width });
 }
 
 /**
@@ -1028,21 +1174,57 @@ function modelMenu(anchor: HTMLElement, data: Json, levels: (model: string) => P
   const box = el("div", "menu");
   const efforts = el("div", "efforts");
   const apply = () => pick(model, effort, modelLabel({ ...data, efforts: lastEfforts }, model, effort));
-  const drawEfforts = (list: Json[]) => {
-    efforts.replaceChildren();
-    for (const e of list) {
-      const b = el("button", "effort" + (e.id === effort ? " on" : ""), e.label);
-      b.title = e.description ?? "";
-      b.onclick = (ev) => { ev.stopPropagation(); effort = e.id; drawEfforts(list); apply(); };
-      efforts.append(b);
+  // A slider over the levels this model offers, weakest first as the server lists them: the selected
+  // level's name shows above it as it moves, and letting go picks it.
+  const drawEfforts = (all: Json[]) => {
+    const list = all.filter((e) => e.id);
+    const name = el("div", "effort-name");
+    efforts.replaceChildren(name);
+    if (!list.length) { name.textContent = "No effort levels for this model"; name.classList.add("dim"); return; }
+    if (list.length === 1) {
+      name.textContent = effortTitle(list[0].label);
+      efforts.append(el("div", "dim small", "The only level for this model"));
+      return;
     }
+    // Drawn like Apple's slider: a rail filled to the thumb, a dot at each inner stop, and the input on top
+    // with only its thumb showing, so the thumb covers the dot it sits on.
+    const track = el("div", "effort-track");
+    const notches = el("div", "effort-notches");
+    list.forEach((_, j) => {
+      if (j === 0 || j === list.length - 1) return;
+      const n = el("span", "effort-notch");
+      n.dataset.stop = String(j);
+      n.style.setProperty("--p", String(j / (list.length - 1)));
+      notches.append(n);
+    });
+    const range = document.createElement("input");
+    range.type = "range"; range.className = "effort-slider";
+    range.min = "0"; range.max = String(list.length - 1); range.step = "1";
+    range.value = String(Math.max(0, list.findIndex((e) => e.id === effort)));
+    track.append(el("div", "effort-rail"), notches, range);
+    const show = () => {
+      const i = +range.value, e = list[i];
+      name.textContent = effortTitle(e.label);
+      name.title = e.description ?? "";
+      track.style.setProperty("--f", String(i / (list.length - 1)));
+      for (const n of notches.querySelectorAll<HTMLElement>(".effort-notch")) n.classList.toggle("past", +n.dataset.stop! < i);
+    };
+    const commit = () => {
+      const id = list[+range.value].id;
+      if (id !== effort) { effort = id; apply(); }
+    };
+    range.oninput = show;
+    range.onchange = commit;
+    efforts.append(track);
+    show();
   };
   for (const tab of data.tabs ?? []) {
     box.append(el("div", "menu-label", tab.tab));
     for (const m of tab.models ?? []) {
-      const b = el("button", "menu-item" + (m.id === model ? " on" : ""));
+      const b = el("button", "menu-item model-item" + (m.id === model ? " on" : ""));
       const text = el("span", "menu-text");
-      text.append(el("span", "", m.label), el("span", "dim small", m.description ?? ""));
+      text.append(el("span", "", m.label));
+      if (m.description) b.title = m.description;
       b.append(text, icon("Check", 14));
       b.onclick = async (ev) => {
         ev.stopPropagation();
@@ -1060,16 +1242,17 @@ function modelMenu(anchor: HTMLElement, data: Json, levels: (model: string) => P
       box.append(b);
     }
   }
-  box.append(el("div", "menu-label", "Effort"), efforts);
+  box.append(efforts);
   drawEfforts(lastEfforts);
   popover(anchor, box, 340);
 }
 
 /** The composer's model button: the open chat's model, or the draft's. */
 async function openModels() {
+  if (!$("popover").hidden && popAnchor === $("model")) { closePopover(); return; }
   const forDraft = !!draft;
   if (!forDraft && !active) return;
-  if (!forDraft && chats.get(active!)?.busy) { toast("Switch models once this reply has finished."); return; }
+  if (!forDraft && chats.get(active!)?.busy) return;
   let data: Json;
   try {
     data = forDraft ? await http("GET", "models", { model: draft!.model ?? "", effort: draft!.effort ?? "" })
@@ -1457,7 +1640,7 @@ function setMode(mode: string) {
   if (draft) { draft.mode = mode; drawDock(); return; }
   const c = active ? chats.get(active) : undefined;
   if (!c || c.mode === mode) return;
-  if (c.busy) { toast("Switch modes once this reply has finished."); return; }
+  if (c.busy) return;
   send({ type: "mode", chat: active, mode });
 }
 
@@ -1596,6 +1779,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   const input = $<HTMLTextAreaElement>("input");
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
+    if (e.key === "Tab" && e.shiftKey && !$("mode").hidden) { e.preventDefault(); $("mode").click(); }
     if (e.key === "Tab" && !e.shiftKey && suggested && !input.value) {
       e.preventDefault();
       input.value = suggested;
@@ -1628,7 +1812,27 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (f.files?.length) attach(f.files);
     f.value = "";
   });
-  for (const b of $("mode").querySelectorAll<HTMLElement>("button")) b.onclick = () => setMode(b.dataset.mode!);
+  $("mode").onclick = () => setMode($("mode").classList.contains("on") ? "auto" : "plan");
+
+  // ⌘+ / ⌘− / ⌘0 zoom the whole window, and the level is kept between launches.
+  let zoom = Number(localStorage.getItem("zoom")) || 1;
+  // CSS zoom re-lays the page out at the new size, so text stays crisp; the webview's own setZoom scales
+  // the rendered bitmap and leaves every glyph soft at anything but 1.
+  const applyZoom = () => {
+    const root = document.documentElement.style;
+    root.zoom = zoom === 1 ? "" : String(zoom);
+    if (zoom === 1) root.removeProperty("--zoom"); else root.setProperty("--zoom", String(zoom));
+    localStorage.setItem("zoom", String(zoom));
+  };
+  if (zoom !== 1) applyZoom();
+  window.addEventListener("keydown", (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    const step = e.key === "=" || e.key === "+" ? 1 : e.key === "-" || e.key === "_" ? -1 : e.key === "0" ? 0 : null;
+    if (step === null) return;
+    e.preventDefault();
+    zoom = step === 0 ? 1 : Math.min(2, Math.max(0.6, Math.round((zoom + step * 0.1) * 10) / 10));
+    applyZoom();
+  }, true);
 
   // Files dropped from outside the window come natively, as paths (dragDropEnabled): WebKitGTK hands the page
   // none from a file manager. The page's own drop below still takes what a browser-style drag carries.
@@ -1661,6 +1865,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.addEventListener("click", (e) => {
     if (!$("popover").hidden && !$("popover").contains(e.target as Node)) closePopover();
   });
+  window.addEventListener("resize", closePopover);
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || e.defaultPrevented) return;
     if (!$("viewer").hidden) $("viewer").hidden = true;

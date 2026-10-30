@@ -197,6 +197,25 @@
       { check: "the queued message waits at the bottom", fn: () => !!document.querySelector(".queued-wrap .bubble") },
     ] },
 
+    // The chat summary held here is from the turn's start (no text, no steps): a reload of the history
+    // mid-reply (clicking the chat again) must keep what streamed since, as the phone does.
+    "streaming-reload": { ...base, steps: (() => {
+      const p1 = "To keep the shrink with no jump, the card needs its own layer.";
+      const p2 = "\n\nThe border needs to sit on top of the chat.";
+      return [
+      { wait: 200, frame: { type: "chat", ...CHATS[0], busy: true, partial: "", tools: [] } },
+      { frame: { type: "start", chat: "c1", text: "I want no edge jump" } },
+      { frame: { type: "delta", chat: "c1", text: p1 } },
+      { frame: { type: "tool", chat: "c1", id: "r1", name: "Bash", detail: "sed -n 108,175p SideDrawer.swift", done: true, at: [...p1].length, output: "…" } },
+      { frame: { type: "delta", chat: "c1", text: p2 } },
+      { frame: { type: "tool", chat: "c1", id: "r2", name: "Bash", detail: "git checkout -- SideDrawer.swift", done: false, at: [...(p1 + p2)].length } },
+      { wait: 100, run: () => [...document.querySelectorAll("#chats .chat-item")].find((i) => i.textContent.includes("Fix the flaky")).click() },
+      { wait: 300, check: "the reply keeps the text streamed before the reload", fn: () => document.querySelector(".msg.streaming")?.textContent.includes("The border needs to sit") },
+      { check: "and the steps around it", fn: () => document.querySelectorAll(".msg.streaming .card").length === 2 },
+      { frame: { type: "delta", chat: "c1", text: "\n\nStill clipped." } },
+      { check: "and goes on from there", fn: () => document.querySelector(".msg.streaming")?.textContent.includes("Still clipped") },
+    ]; })() },
+
     question: { ...base, steps: [
       { wait: 200, frame: { type: "chat", ...CHATS[0], busy: true, waiting: true } },
       { frame: { type: "start", chat: "c1", text: "commit it" } },
@@ -346,12 +365,12 @@
       { check: "a scout's own chat isn't listed with the chats", fn: () => ![...document.querySelectorAll(".chat-item:not(.scout) .chat-name")].some((n) => n.textContent === "Vision desktop app") },
       { check: "the Scouts heading adds up what each scout's row says", fn: () => document.querySelector(".scouts-head b")?.textContent === "3 need you" && document.querySelector(".chat-item.scout .scout-line")?.textContent === "3 need you" },
       openAtlas,
-      { wait: 300, check: "a scout's page shows its name and goal", fn: () => document.querySelector(".scout-titles .scout-name")?.textContent === "Atlas" && document.querySelector(".scout-leash")?.textContent === "Check-ins" && !!document.querySelector(".scout-goal")?.textContent },
-      { check: "the rail has its four sections", fn: () => [...document.querySelectorAll(".rail-head h3")].map((h) => h.textContent).join(",") === "Needs you,Activity,Leash,Remembers" },
+      { wait: 300, check: "a scout's page shows its name and goal", fn: () => document.querySelector(".scout-titles .scout-name")?.textContent === "Atlas" && document.querySelector(".scout-leash")?.hidden && !!document.querySelector(".scout-goal")?.textContent },
+      { check: "the rail has its four sections", fn: () => [...document.querySelectorAll(".rail-head h3")].map((h) => h.textContent).join(",") === "Needs you,Activity,Schedule,Remembers" },
       { check: "a thread report shows as a card", fn: () => document.querySelectorAll(".report-card .report-list li").length === 3 },
       { check: "what needs you is listed", fn: () => document.querySelectorAll(".need-card:not(.approval-card)").length === 2 },
       { check: "today's activity is listed", fn: () => document.querySelectorAll(".timeline .ev").length === 5 },
-      { check: "the leash shows its setting", fn: () => document.querySelector(".leash-seg .on")?.textContent === "Check-ins" },
+      { check: "it asks before big changes", fn: () => document.querySelector(".ask-row .toggle")?.classList.contains("on") },
       { check: "the composer speaks to the scout", fn: () => document.querySelector("#input").placeholder === "Tell Atlas what to do next…" },
       { frame: { type: "activity", project: "p1", event: { at: now, kind: "finished", text: "“Write the Agents board tests” finished: 12 scenes pass" } } },
       { wait: 100, check: "a finished thread makes the buddy cheer", fn: () => document.querySelector(".scout-head .buddy")?.dataset.mood === "found_it" },

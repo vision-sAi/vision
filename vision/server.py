@@ -3218,7 +3218,7 @@ def create_app(hub: Hub) -> FastAPI:
         return await asyncio.get_running_loop().run_in_executor(None, models_payload, c, model, effort)
 
     def models_payload(c, model: str | None, effort: str | None) -> dict:
-        from vision.models import effort_choices
+        from vision.models import coerce_effort, effort_choices, find
         from vision.providers import model_tabs
 
         if c is None:
@@ -3231,8 +3231,11 @@ def create_app(hub: Hub) -> FastAPI:
             {"tab": tab, "models": [{"id": v, "label": label, "description": desc} for v, label, desc in entries]}
             for tab, entries, _ in model_tabs(hub.cfg, setup_rows=False)  # enabled + set up: the phone can't install
         ]
-        efforts = [{"id": v, "label": label, "description": desc} for v, label, desc in effort_choices(c.model_id)]
-        return {"tabs": tabs, "efforts": efforts, "current": c.model_id, "effort": c.effort}
+        # `model`: one being looked at in the picker, so its own levels show before the switch is made.
+        shown = model if model and find(model) else c.model_id
+        efforts = [{"id": v, "label": label, "description": desc} for v, label, desc in effort_choices(shown)]
+        effort = c.effort if shown == c.model_id else coerce_effort(shown, c.effort)[0]
+        return {"tabs": tabs, "efforts": efforts, "current": c.model_id, "effort": effort}
 
     def defaults_payload(model: str, effort: str) -> dict:
         from vision.models import effort_choices
