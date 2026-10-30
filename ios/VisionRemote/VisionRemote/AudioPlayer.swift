@@ -70,8 +70,10 @@ final class AudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSp
     }
 
     func stop() {
-        finish()
-        stopped?()
+        // Nothing playing, queued or winding down: nothing to stop. (Asking the synthesiser to stop regardless
+        // cost a chat switch some 30 ms, with the voice silent.)
+        if isPlaying || !idle || !queue.isEmpty || sessionActive || holdOpen || finishWork != nil { finish() }
+        stopped?()   // always: a reply being read aloud may still be fetching its first piece
     }
 
     private func finish() {

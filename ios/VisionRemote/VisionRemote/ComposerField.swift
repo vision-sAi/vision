@@ -108,8 +108,33 @@ struct ComposerField: UIViewRepresentable {
         let lineHeight = view.font?.lineHeight ?? 20
         let fitted = max(view.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height,
                          (view as? PlaceholderTextView)?.displayHeight(for: width) ?? 0)
-        let height = min(max(fitted, ceil(lineHeight)), ceil(lineHeight * CGFloat(maxLines)))
+        let height = min(max(fitted, Self.oneLine(like: view)), ceil(lineHeight * CGFloat(maxLines)))
         return CGSize(width: width, height: height)
+    }
+
+    /// One laid-out line is a touch taller than `font.lineHeight`, which is all an empty field measures: floored on
+    /// that, the composer jumped up a few points at the first key and back down when the draft was cleared.
+    /// The floor is a real line instead, measured on a twin of the field, once per font and inset: SwiftUI asks the
+    /// field's size several times a layout pass, and laying the twin out afresh every time stalled the drawer's snap.
+    private static let measure = UITextView()
+    private struct LineKey: Hashable {
+        let font: UIFont?
+        let top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat, padding: CGFloat
+    }
+    private static var lines: [LineKey: CGFloat] = [:]
+    static func oneLine(like view: UITextView) -> CGFloat {
+        let inset = view.textContainerInset
+        let key = LineKey(font: view.font, top: inset.top, left: inset.left, bottom: inset.bottom, right: inset.right,
+                          padding: view.textContainer.lineFragmentPadding)
+        if let line = lines[key] { return line }
+        measure.font = view.font
+        measure.textContainerInset = inset
+        measure.textContainer.lineFragmentPadding = key.padding
+        measure.isScrollEnabled = false
+        measure.text = "Wg"
+        let line = ceil(measure.sizeThatFits(CGSize(width: 1000, height: CGFloat.greatestFiniteMagnitude)).height)
+        lines[key] = line
+        return line
     }
 
     /// Scrolling switches on once the text is taller than `maxLines`, judged on the text's own height: with scrolling

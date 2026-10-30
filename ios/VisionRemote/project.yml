@@ -93,7 +93,6 @@ targets:
     sources:
       - path: VisionActivity
       - path: Shared
-      - path: VisionRemote/Pip.swift                 # the island draws Pip too
     info:
       path: VisionActivity/Info.plist
       properties:

@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Bottom sheet: prompts the machine runs on its own (every morning, weekdays, once…), each run in a
-/// new chat. Toggle one off to pause it, swipe to delete, tap to edit, + to add.
+/// Bottom sheet (a Next Up widget's tap): what's set to come back to a chat later, reminders and prompts set
+/// from that chat ("in an hour, check the deploy"). A timed job of its own is a scout, on the scout's page.
+/// Toggle one off to pause it, swipe to delete, tap to edit.
 struct ScheduledView: View {
     @EnvironmentObject private var client: VisionClient
     @Environment(\.dismiss) private var dismiss
@@ -12,13 +13,9 @@ struct ScheduledView: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Scheduled")
+                .navigationTitle("Coming up")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button { editing = ScheduledTask() } label: { Image(systemName: "plus") }
-                            .accessibilityLabel("New scheduled task")
-                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { dismiss() } label: { Image(systemName: "xmark") }
                             .accessibilityLabel("Close")
@@ -44,11 +41,9 @@ struct ScheduledView: View {
     @ViewBuilder private var content: some View {
         if let tasks, tasks.isEmpty {
             ContentUnavailableView {
-                Label("Nothing scheduled", systemImage: "clock")
+                Label("Nothing coming up", systemImage: "clock")
             } description: {
-                Text("Have Vision run a prompt on its own, like a morning brief or a weekly check-in. Each run opens a new chat.")
-            } actions: {
-                Button("New task") { editing = ScheduledTask() }.buttonStyle(.borderedProminent)
+                Text("Ask in a chat (\"remind me at six\", \"in an hour, check the deploy\") and it shows here. For a job that runs every day or week, send a scout.")
             }
         } else if tasks == nil, let error {
             ContentUnavailableView {
@@ -111,7 +106,7 @@ struct ScheduledView: View {
     private func load() async {
         do {
             let fresh = try await client.fetchScheduled()
-            withAnimation(.snappy(duration: 0.25)) { tasks = fresh }
+            withAnimation(.snappy(duration: 0.25)) { tasks = fresh.filter { !$0.isScoutReport } }  // a scout keeps its own
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -158,7 +153,8 @@ private struct ScheduledEditor: View {
                         .lineLimit(4...10)
                         .focused($promptFocused)
                 } footer: {
-                    Text("Sent as a message in a new chat, on your default model.")
+                    Text(task.isReminder ? "Sent back to you as it is: a notification and a note in its chat."
+                         : "Sent as a message in the chat it was set from.")
                 }
                 Section {
                     Picker("Repeat", selection: $task.repeatRule) {

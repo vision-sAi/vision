@@ -22,12 +22,30 @@ enum SideDrawerMotion {
         let cap = 2 * .pi / duration
         return .interpolatingSpring(Spring(duration: duration, bounce: 0), initialVelocity: max(0, min(velocity, cap)))
     }
+
+    /// How much smaller Panes draws the chat once the drawer is fully out.
+    static let shrinkScale: CGFloat = 0.08
+    /// The screen the chat slides across, unscaled: what `shrink(of:)` measures the chat against.
+    static let screen = "SideDrawer.screen"
+    /// The chat card's own coordinates, which a slide or shrink doesn't move; at rest they are the screen's. Frames the
+    /// chat keeps for lining things up are measured here: measured on the screen, they changed every frame of a slide
+    /// and redrew the whole chat screen each time.
+    static let card = "SideDrawer.card"
+
+    /// How far Panes has shrunk the chat for the drawer, 0 (home) to 1 (out), read off how much smaller a view in the
+    /// chat now draws on the screen than it lays out. For `visualEffect`, which runs every frame of a slide without
+    /// redrawing anything: handed down the environment, the same number changed every view in the chat each frame.
+    static func shrink(of geo: GeometryProxy) -> CGFloat {
+        guard geo.size.width > 0 else { return 0 }
+        let scale = geo.frame(in: .named(screen)).width / geo.size.width
+        return max(0, min(1, (1 - scale) / shrinkScale))
+    }
 }
 
 extension EnvironmentValues {
-    /// The chat screen is sliding for the drawer (SideDrawer.away), for views deep in the composer that track
-    /// their own place on screen. Set on the composer alone: changed over the whole transcript, it cost a frame.
-    @Entry var drawerAway = false
+    /// The screen's bars, for the chat screen to keep room for as padding: in the drawer it lays out with no safe area
+    /// (see SideDrawer's `content`). nil outside the drawer.
+    @Entry var drawerBars: EdgeInsets? = nil
 }
 
 /// Buttons on the chat screen, and anything there that scrolls sideways itself. A pull starting inside one of these is theirs; the drawer keeps its hands off.
@@ -40,9 +58,19 @@ extension View {
     /// Mark a button on the chat screen (or something there that scrolls sideways) that a slide must not
     /// pull the drawer out from under.
     func drawerSwipeGuard() -> some View {
-        background(GeometryReader { geo in
-            Color.clear.preference(key: DrawerSwipeGuardKey.self, value: [geo.frame(in: .global)])
-        })
+        modifier(DrawerSwipeGuard())
+    }
+}
+
+/// The guarded view's frame on the chat card (SideDrawerMotion.card), where it holds still while the chat slides:
+/// measured on the screen, every guard changed on every frame of a slide, and reporting them cost the frame.
+private struct DrawerSwipeGuard: ViewModifier {
+    @State private var frame = CGRect.zero
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SideDrawerMotion.card)) } action: { frame = $0 }
+            .preference(key: DrawerSwipeGuardKey.self, value: [frame])
     }
 }
 
@@ -51,11 +79,10 @@ extension View {
 /// (no grey dim). Swipe right anywhere on the screen to open, swipe left or tap the card to close.
 struct SideDrawer<Drawer: View, Content: View>: View {
     @Binding var isOpen: Bool
-    /// True from the moment the chat starts to slide until it comes to rest, home or out. Whatever the chat tracks in
-    /// screen coordinates holds still meanwhile: every point it measures moves on every frame of a slide, and
-    /// following them redrew the whole chat screen per frame, which a long transcript can't keep up with.  Not held
-    /// while the drawer sits open: with the chat screen never redrawn, a tap on the drawer's bottom buttons only
-    /// showed its sheet once the drawer was closed.
+    /// True from the moment the chat starts to slide until it comes to rest, home or out, for the chat's own handling
+    /// of touches meanwhile: a tap the finger lifts on mid-slide was the swipe, and a transcript drag that became a
+    /// pull lets the transcript go. Nothing the chat lays out or measures may depend on it: the frames it keeps are on
+    /// the card (SideDrawerMotion.card), where a slide changes nothing, so the slide redraws none of it.
     @Binding var away: Bool
     /// Off while something on screen owns horizontal drags (the model slider), so a slide there
     /// does not also pull the drawer out.
@@ -69,16 +96,21 @@ struct SideDrawer<Drawer: View, Content: View>: View {
     /// Travel already spent before the gesture was recognised; subtracted so the panel starts moving
     /// from under the finger instead of snapping forward by the recogniser's threshold.
     @State private var dragSlack: CGFloat = 0
-    /// Bumped the moment the drawer commits to opening or closing, so the tap lands with the snap
-    /// starting rather than when it settles.
-    @State private var snaps = 0
-    /// Frames of the chat screen's buttons: a slide that starts on one never opens the drawer.
+    /// Frames of the chat screen's buttons, on the card: a slide that starts on one never opens the drawer. Only checked
+    /// with the drawer closed, when the card's coordinates are the screen's.
     @State private var contentGuards: [CGRect] = []
     /// Set on a gesture's first change when it started on a button; the rest of that gesture is ignored.
     @State private var dragChecked = false
     @State private var dragBlocked = false
     /// Bumped on every move, so a settle timer left over from an earlier one does nothing.
     @State private var moves = 0
+    /// The home indicator's inset, kept for while the keyboard is up (see `body`).
+    @State private var homeBar: CGFloat = 0
+    /// A finger is on each gesture. These reset however a gesture finishes, including when the system cancels it
+    /// (a scroll view or another recogniser taking the touch), which skips `onEnded` and left a half-done drag behind:
+    /// the next slide blocked by a stale check, or the chat stuck part way out.
+    @GestureState private var contentTouched = false
+    @GestureState private var panelTouched = false
 
     /// The wash over the chat once the drawer is fully out. Dark mode's is measured off the ChatGPT app:
     /// black comes up to #131313 and white text goes down to about 68%.
@@ -109,6 +141,17 @@ struct SideDrawer<Drawer: View, Content: View>: View {
             // The display's own curve from the first point of the swipe, so the border hugs it; at rest the
             // mask matches the glass exactly and changes nothing.
             let radius = DisplayCorner.radius
+            let shrink = theme.backdrop ? progress : 0
+            // The screen's bars. A bottom inset past 100 pt is the keyboard, not the home indicator: then the last
+            // home indicator's.
+            let keyboardUp = geo.safeAreaInsets.bottom > 100
+            let bars = EdgeInsets(top: geo.safeAreaInsets.top, leading: geo.safeAreaInsets.leading,
+                                  bottom: keyboardUp ? homeBar : geo.safeAreaInsets.bottom, trailing: geo.safeAreaInsets.trailing)
+            // The card is the whole screen at rest and draws in to the space between the bars as Panes shrinks the
+            // chat out, shrinking about that space's middle: out it is that space made 8% smaller.
+            let pull = EdgeInsets(top: bars.top * shrink, leading: 0, bottom: bars.bottom * shrink, trailing: 0)
+            let tall = geo.size.height + geo.safeAreaInsets.top + geo.safeAreaInsets.bottom
+            let middle = tall > 0 ? (bars.top + (tall - bars.top - bars.bottom) / 2) / tall : 0.5
             ZStack(alignment: .leading) {
                 drawer
                     .frame(width: width)
@@ -119,8 +162,17 @@ struct SideDrawer<Drawer: View, Content: View>: View {
                     // Nor is it there for VoiceOver (or a UI test) while it's away under the chat.
                     .accessibilityHidden(progress < 0.5)
                     // Swipe left on the panel itself to put it away, not just on the sliver of chat beside it.
-                    .simultaneousGesture(dragGesture(width: width, closeOnly: true))
+                    .simultaneousGesture(dragGesture(width: width, closeOnly: true, touched: $panelTouched))
                 content
+                    .coordinateSpace(.named(SideDrawerMotion.card))
+                    // The chat lays out over the whole screen with no safe area, keeping room for the bars as plain
+                    // padding (drawerBars), the same out as home: the shrink only scales it and the card crops it. Under
+                    // a shrink SwiftUI works the safe area out afresh from where the chat sits on screen, so with it the
+                    // chat laid out inside the bars, couldn't draw under the clock or the home indicator, and its
+                    // blurred messages there (with its buttons and the card's edges) snapped in as it landed. With the
+                    // keyboard up the chat ends at the keyboard, so it keeps no room for the home indicator.
+                    .environment(\.drawerBars, EdgeInsets(top: bars.top, leading: bars.leading,
+                                                          bottom: keyboardUp ? 0 : bars.bottom, trailing: bars.trailing))
                     // No scrolling the transcript once the drawer is out or a sideways pull has started:
                     // a diagonal swipe used to drag the chat up while the drawer came in.
                     .scrollDisabled(progress > 0 || dragAxis == .horizontal)
@@ -131,17 +183,16 @@ struct SideDrawer<Drawer: View, Content: View>: View {
                         // A wash of the background colour, so the chat fades back rather than greying out; in dark
                         // mode it lifts the black to a dark grey card, as the ChatGPT app's does.
                         wash.opacity(progress)
-                            .ignoresSafeArea()
+                            .padding(pull)
                             .onTapGesture { close() }
                             .allowsHitTesting(progress > 0)
                     }
-                    // The mask ignores the safe area so the corners land on the screen's, not the bars'.
-                    .mask { RoundedRectangle(cornerRadius: radius, style: .continuous).ignoresSafeArea() }
+                    .mask { RoundedRectangle(cornerRadius: radius, style: .continuous).padding(pull) }
                     .overlay {
                         RoundedRectangle(cornerRadius: radius, style: .continuous)
                             // At full strength within the first few points of the swipe, not faded in with it.
                             .strokeBorder(Color.primary.opacity(0.18 * min(1, progress * 20)), lineWidth: 1)
-                            .ignoresSafeArea()
+                            .padding(pull)
                             .allowsHitTesting(false)
                     }
                     // The shadow is cast by a plain card behind the chat, not by the chat itself: shadowing the
@@ -150,18 +201,21 @@ struct SideDrawer<Drawer: View, Content: View>: View {
                         RoundedRectangle(cornerRadius: radius, style: .continuous)
                             .fill(theme.backgroundColor)
                             .shadow(color: .black.opacity((theme.backdrop ? 0.24 : 0.14) * progress), radius: theme.backdrop ? 26 : 18)
-                            .ignoresSafeArea()
+                            .padding(pull)
                             .allowsHitTesting(false)
                     }
                     // Panes: the chat shrinks a little as it slides, so it floats on the glow with room above and below.
-                    .scaleEffect(theme.backdrop ? 1 - 0.08 * progress : 1, anchor: .leading)
+                    .scaleEffect(1 - SideDrawerMotion.shrinkScale * shrink, anchor: UnitPoint(x: 0, y: middle))
+                    // The safe area stops here, outside the shrink, where it holds still (see `content`).
+                    .ignoresSafeArea(.container)
                     .offset(x: offset)
                     // When the drawer swipe is disabled (notably over a pushed project chat), don't leave
                     // its recogniser attached at all: it can compete with NavigationStack's edge-back swipe
                     // even though dragGesture ignores the updates.
-                    .simultaneousGesture(dragGesture(width: width), including: swipeEnabled || isOpen ? .all : .none)
-                    .onPreferenceChange(DrawerSwipeGuardKey.self) { if !away { contentGuards = $0 } }
+                    .simultaneousGesture(dragGesture(width: width, touched: $contentTouched), including: swipeEnabled || isOpen ? .all : .none)
+                    .onPreferenceChange(DrawerSwipeGuardKey.self) { contentGuards = $0 }
             }
+            .coordinateSpace(.named(SideDrawerMotion.screen))
             .background {
                 if theme.backdrop { PanesBackdrop() } else { theme.backgroundColor.ignoresSafeArea() }
             }
@@ -178,10 +232,20 @@ struct SideDrawer<Drawer: View, Content: View>: View {
                     settle()
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: PerfDrive.snap)) { note in
+                if let open = note.object as? Bool { withAnimation(SideDrawerMotion.animation) { isOpen = open } }
+            }
             #endif
-            .sensoryFeedback(.impact(weight: .medium), trigger: snaps)
+            .onChange(of: geo.safeAreaInsets.bottom, initial: true) { _, bottom in
+                if bottom <= 100 { homeBar = bottom }
+            }
+            .onChange(of: contentTouched || panelTouched) { _, touched in
+                if !touched { dragCancelled() }
+            }
+            // The tap lands as the snap starts, not when it settles. Off `isOpen` itself: a counter bumped for it made
+            // a second pass over this body (and the drawer) per snap.
+            .sensoryFeedback(.impact(weight: .medium), trigger: isOpen)
             .onChange(of: isOpen) { _, open in
-                snaps += 1
                 leave()
                 settle()
             }
@@ -204,8 +268,9 @@ struct SideDrawer<Drawer: View, Content: View>: View {
     }
 
     /// `closeOnly` is the copy living on the panel: it only pulls the panel away leftwards.
-    private func dragGesture(width: CGFloat, closeOnly: Bool = false) -> some Gesture {
+    private func dragGesture(width: CGFloat, closeOnly: Bool = false, touched: GestureState<Bool>) -> some Gesture {
         DragGesture(minimumDistance: 12, coordinateSpace: .global)
+            .updating(touched) { _, on, _ in on = true }
             .onChanged { value in
                 guard swipeEnabled || dragAxis != nil else { return }
                 if !closeOnly {
@@ -259,6 +324,21 @@ struct SideDrawer<Drawer: View, Content: View>: View {
             }
     }
 
+    /// A gesture gone without `onEnded` (cancelled): clear what it left and settle the chat where it was headed
+    /// before. After a normal end `onEnded` has already cleared it all and this does nothing.
+    private func dragCancelled() {
+        dragChecked = false
+        dragBlocked = false
+        guard dragAxis != nil || drag != 0 || dragSlack != 0 else { return }
+        let moved = dragAxis == .horizontal
+        withAnimation(SideDrawerMotion.animation) {
+            dragAxis = nil
+            drag = 0
+            dragSlack = 0
+        }
+        if moved { settle() }
+    }
+
     private func close() {
         withAnimation(SideDrawerMotion.animation) { isOpen = false }
     }
@@ -284,11 +364,14 @@ struct SideDrawer<Drawer: View, Content: View>: View {
     private func startsOnEditedText(_ point: CGPoint) -> Bool {
         var view = hitView(at: point)
         while let v = view {
-            if let text = v as? UITextView, text.isFirstResponder { return true }
+            // Editable only: a reply's selectable text stays first responder after a selection, and counting it
+            // blocked every pull that started on a reply (ReplySelection.holds covers its live selection).
+            if let text = v as? UITextView, text.isEditable, text.isFirstResponder { return true }
             view = v.superview
         }
         guard let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first,
-              let editing = Self.firstResponder(in: window) as? UITextView, editing.selectedRange.length > 0 else { return false }
+              let editing = Self.firstResponder(in: window) as? UITextView, editing.isEditable,
+              editing.selectedRange.length > 0 else { return false }
         return editing.convert(editing.bounds, to: nil).insetBy(dx: -8, dy: -44).contains(point)
     }
 

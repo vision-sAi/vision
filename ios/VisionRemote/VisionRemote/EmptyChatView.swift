@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The transcript before a chat has anything in it: Pip, and nothing else.
+/// The transcript before a chat has anything in it: Vision's scout, and nothing else.
 ///
-/// He carries the state this screen used to spell out — asleep while the machine is away, thinking
+/// It carries the state this screen used to spell out — asleep while the machine is away, thinking
 /// while we look for it, an error face when it turned us down — so there is nothing to read and
 /// nothing to tidy away once the first message lands.  The exceptions: "Set up Vision" before pairing,
 /// and, once connected, the project or folder a fresh chat works in.
@@ -14,14 +14,14 @@ struct EmptyChatView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            PipView(mood: mood, cell: 9)
+            VisionFace(mood: mood, width: 99)
             if !client.isConfigured {
                 Button("Set up Vision", action: onSetUp)
                     .themeFont(.footnote)
                     .foregroundStyle(.tint)
                     .buttonStyle(.plain)
             } else if client.connection != .online {
-                EmptyView()   // Pip's face says it isn't connected
+                EmptyView()   // the scout's face says it isn't connected
             } else if let project = client.activeProject {
                 // A project's fresh chat says whose it is and what for; its folder is the project's, so no picker.
                 VStack(spacing: 6) {
@@ -46,9 +46,9 @@ struct EmptyChatView: View {
                 }
                 .padding(.horizontal, 36)
                 .accessibilityElement(children: .combine)
-            } else if let folder = client.active?.folder, !folder.isEmpty {
-                // A fresh chat says where it will work, the one thing that differs between two empty chats,
-                // and a tap changes it: nothing has been said yet, so this is the moment to.
+            } else if let folder = client.active.map(\.folder) ?? client.nextFolder, !folder.isEmpty {
+                // A fresh chat (or the draft of one) says where it will work, the one thing that differs between
+                // two empty chats, and a tap changes it: nothing has been said yet, so this is the moment to.
                 Button { onFolder?() } label: {
                     HStack(spacing: 6) {
                         Label(folder, systemImage: "folder")
@@ -79,7 +79,7 @@ struct EmptyChatView: View {
         .containerRelativeFrame(.vertical) { height, _ in max(220, height - 48) }
     }
 
-    private var mood: PipMood {
+    private var mood: VisionFaceMood {
         guard client.isConfigured else { return .asleep }
         switch client.connection {
         case .online: return .idle
@@ -107,7 +107,7 @@ struct WelcomeView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 Spacer(minLength: 24)
-                PipView(mood: mood, cell: 11)
+                VisionFace(mood: mood, width: 121)
                 VStack(spacing: 10) {
                     Text("Vision")
                         .themeFont(.largeTitle, weight: .bold)
@@ -227,7 +227,7 @@ struct WelcomeView: View {
     /// Paired with an address that did not answer.
     private var retrying: Bool { client.isConfigured && problem != nil }
 
-    private var mood: PipMood {
+    private var mood: VisionFaceMood {
         if connectedTo != nil { return .idle }
         if checking { return .thinking }
         return problem == nil ? .idle : .error

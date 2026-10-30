@@ -174,6 +174,30 @@ final class FakeServerTests: XCTestCase {
         XCTAssertNotNil(try frame { $0["type"] as? String == "message" && $0["text"] as? String == "yes, move it" })
     }
 
+    /// The first key typed into the empty composer, and the draft cleared again, leave it where it was: one line
+    /// of text is as tall as the empty field.
+    func testTheComposerHoldsStillAsTheFirstKeyGoesIn() throws {
+        try call("_scene", ["chats": [["chat": "s1", "title": "Still", "busy": false, "history_id": "h1"]],
+                            "history": ["s1": [["role": "user", "text": "Hi"], ["role": "assistant", "text": "Hello."]]]])
+        let app = launch()
+        let input = app.textViews["messageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10))
+        input.tap()
+        Thread.sleep(forTimeInterval: 1.5)   // the keyboard up and settled
+        let empty = input.frame
+        shoot(app, "composer-empty")
+        input.typeText("W")
+        Thread.sleep(forTimeInterval: 0.5)
+        let typed = input.frame
+        shoot(app, "composer-typed")
+        input.typeText(XCUIKeyboardKey.delete.rawValue)
+        Thread.sleep(forTimeInterval: 0.5)
+        let cleared = input.frame
+        shoot(app, "composer-cleared")
+        XCTAssertEqual(typed, empty, "the first key moved the field: \(empty) → \(typed)")
+        XCTAssertEqual(cleared, empty, "clearing the draft moved the field: \(empty) → \(cleared)")
+    }
+
     /// After a model or effort switch the machine says so just before the next turn starts, after the phone has
     /// already put the message up: the message stays one bubble, under the note and above its reply.
     func testAMessageSentAfterAnEffortSwitchShowsOnce() throws {
@@ -449,7 +473,7 @@ final class FakeServerTests: XCTestCase {
         let app = launch()
         XCTAssertTrue(app.textViews["messageInput"].waitForExistence(timeout: 10))
         app.open(URL(string: "vision://scheduled")!)
-        XCTAssertTrue(app.navigationBars["Scheduled"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Coming up"].waitForExistence(timeout: 5))
         app.buttons["Close"].firstMatch.tap()
         app.open(URL(string: "vision://compose")!)
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
@@ -685,8 +709,8 @@ final class FakeServerTests: XCTestCase {
         XCTAssertTrue(text(app, containing: "Widget").waitForExistence(timeout: 5), "back on the Projects screen")
 
         // One whose chat isn't open: pushed at once, opening while the machine opens its chat. The fake never does,
-        // and back returns to the Projects screen.
-        text(app, containing: "Widget").tap()
+        // and back returns to the Projects screen. The drawer lists it too, so the one on screen is tapped.
+        onScreen(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Widget"))).tap()
         let opening = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Opening project")).firstMatch
         XCTAssertTrue(opening.waitForExistence(timeout: 5), "pushed before the machine answers")
         let opened = try frame { $0["type"] as? String == "new" }
@@ -700,12 +724,13 @@ final class FakeServerTests: XCTestCase {
         XCTAssertTrue(goal.waitForExistence(timeout: 5))
         goal.tap()
         goal.typeText("Tidy the docs")
+        XCTAssertTrue(app.buttons["Create"].isEnabled, "a goal is enough: the folder is optional")
+        app.buttons["More options"].tap()
         let name = app.textFields["Scout's name"]
         XCTAssertEqual(name.value as? String, "Atlas", "a name none of the others has is suggested")
         name.tap()
         name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8) + "Quill")
         app.buttons["sprout"].tap()
-        XCTAssertFalse(app.buttons["Create"].isEnabled, "no folder yet: a project needs one")
         app.buttons["Folder"].tap()
         XCTAssertTrue(app.buttons["code"].waitForExistence(timeout: 5))
         app.buttons["code"].tap()
@@ -775,16 +800,16 @@ final class FakeServerTests: XCTestCase {
         XCTAssertTrue(text(app, containing: "git push origin tray").waitForNonExistence(timeout: 5), "decided, the card goes")
 
         app.buttons["Project settings"].tap()
-        let leash = app.buttons["Leash and check-ins"]
+        let leash = app.buttons["Schedule"]
         XCTAssertTrue(leash.waitForExistence(timeout: 5))
         leash.tap()
-        app.buttons["Autonomous"].tap()
+        app.switches["Ask me before big changes"].firstMatch.switches.firstMatch.tap()
         let changed = try frame { $0["type"] as? String == "_post_projects" && ($0["settings"] as? [String: Any])?["leash"] as? String == "autonomous" }
         XCTAssertNotNil(changed, "the leash is saved as it's changed")
         app.buttons["Does it"].firstMatch.tap()
         let rule = try frame { $0["type"] as? String == "_post_projects" && ($0["settings"] as? [String: Any])?["rules"] != nil }
         XCTAssertEqual((rule?["settings"] as? [String: Any])?["rules"] as? [String: String], ["land": "does"])
-        app.buttons["Check in now"].tap()
+        app.buttons["Status report now"].tap()
         XCTAssertNotNil(try frame { $0["type"] as? String == "_checkin" })
     }
 
@@ -1420,6 +1445,7 @@ final class FakeServerTests: XCTestCase {
             back.press(forDuration: 0.05, thenDragTo: back.withOffset(CGVector(dx: -260, dy: 0)), withVelocity: 300, thenHoldForDuration: 0)
         }
     }
+
 }
 
 private extension XCUIElement {
@@ -1428,4 +1454,5 @@ private extension XCUIElement {
         tap()
         typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: text.count))
     }
+
 }

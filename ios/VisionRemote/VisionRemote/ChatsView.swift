@@ -5,7 +5,7 @@ import SwiftUI
 /// it, long-press it for a preview and Close; the floating Chat pill starts a new one and the gear opens Settings. A chat
 /// open in a terminal on the machine is listed too (terminal icon); it closes from its own window. A project's chat
 /// isn't listed: it opens from the Projects page.
-struct ChatsView: View {
+struct ChatsView: View, Equatable {
     @EnvironmentObject private var client: VisionClient
     @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
@@ -31,8 +31,15 @@ struct ChatsView: View {
     var onClose: (() -> Void)? = nil
 
     enum Sheet: String, Identifiable {
-        case library, scheduled, sessions, usage, settings, folder
+        case library, scheduled, sessions, usage, settings
         var id: String { rawValue }
+    }
+
+    /// Alike unless what's shown differs (the client's changes count on their own). Closures can't be compared, so
+    /// without this every pass over the drawer rebuilt the list below, and its UICollectionView re-diffed and
+    /// reconfigured its rows: a hitch at the start of each open and close.
+    static func == (a: ChatsView, b: ChatsView) -> Bool {
+        a.projectsShown == b.projectsShown && (a.onClose == nil) == (b.onClose == nil)
     }
 
     private func close() {
@@ -90,7 +97,6 @@ struct ChatsView: View {
                     projectsRow
                     ForEach(drawerScouts) { scout in scoutRow(scout) }
                     navRow("Library", icon: "books.vertical", sheet: .library)
-                    navRow("Scheduled", icon: "clock", sheet: .scheduled)
                     navRow("Earlier conversations", icon: "bubble.left.and.text.bubble.right", sheet: .sessions)
                     navRow("Usage", icon: "gauge.with.dots.needle.67percent", sheet: .usage)
                 }
@@ -173,13 +179,6 @@ struct ChatsView: View {
                 case .sessions: SessionsView()
                 case .usage: UsageView()
                 case .settings: SettingsView()
-                case .folder:
-                    FolderPickerView { path in
-                        sheet = nil
-                        showProjects(false)
-                        client.newConversation(in: path)
-                        close()
-                    }
                 }
             }
             // Settings sits at full height and doesn't resize.
@@ -363,14 +362,11 @@ struct ChatsView: View {
     }
 
     private func open(_ chat: ChatInfo) {
-        // The new transcript lands whole, in a still transaction of its own, a tick before the drawer
-        // moves: inside the drawer's animated one every bubble faded and slid in with it.
-        var still = Transaction()
-        still.disablesAnimations = true
-        withTransaction(still) {
-            showProjects(false)
-            client.select(chat: chat.id)
-        }
+        // The new transcript lands a tick before the drawer moves: inside the drawer's animated transaction
+        // every bubble faded and slid in with it. The transcripts cross-fade (ChatView animates that swap, and
+        // keeps the bubbles inside still).
+        showProjects(false)
+        client.select(chat: chat.id)
         DispatchQueue.main.async { close() }
     }
 
@@ -404,7 +400,7 @@ struct ChatsView: View {
         HStack {
             Button {
                 showProjects(false)
-                client.newConversation()
+                client.startNewChat()
                 close()
             } label: {
                 HStack(spacing: 8) {
@@ -428,19 +424,6 @@ struct ChatsView: View {
             .disabled(client.connection != .online)
             .opacity(client.connection == .online ? 1 : 0.5)
             .accessibilityLabel("New chat")
-            // The same, somewhere else: pick the machine folder the new chat works in.
-            Button { sheet = .folder } label: {
-                Image(systemName: "folder.badge.plus")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .frame(width: 34, height: 34)
-                    .padding(gearPadding)
-                    .contentShape(Circle())
-            }
-            .drawerGlassButton()
-            .disabled(client.connection != .online)
-            .opacity(client.connection == .online ? 1 : 0.5)
-            .accessibilityLabel("New chat in a folder")
             Spacer()
             Button { sheet = .settings } label: {
                 Image(systemName: "gearshape")
@@ -487,13 +470,6 @@ struct ChatsView: View {
                         Text("·")
                     }
                     Text(status(chat))
-                    // Where it works on the machine, home written as ~; a long path gives way in the middle.
-                    if !chat.folder.isEmpty {
-                        Text("·")
-                        Text(chat.folder)
-                            .truncationMode(.middle)
-                            .layoutPriority(-1)
-                    }
                 }
                 .themeFont(.footnote)
                 .foregroundStyle(.secondary)

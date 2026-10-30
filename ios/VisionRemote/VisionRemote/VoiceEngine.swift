@@ -14,7 +14,7 @@ import os
 /// What comes out is what the machine already understands: one 16 kHz mono WAV per utterance, cut on
 /// silence, for `POST /transcribe`.
 final class VoiceEngine: ObservableObject {
-    /// 0…1, smoothed the way the CLI's meter is, for Pip's waveform.
+    /// 0…1, smoothed the way the CLI's meter is, for the call's waveform.
     @Published private(set) var level: Double = 0
     /// Vision's voice is coming out of the speaker right now.
     @Published private(set) var speaking = false
@@ -411,7 +411,7 @@ final class VoiceEngine: ObservableObject {
             }
         }
         // No Now Playing here: it puts the system's own speaker island up beside the call's Live
-        // Activity and squeezes that down to Pip alone, timer gone.  Pip already says she's talking.
+        // Activity and squeezes that down to the scout alone, timer gone.  The scout already says it's talking.
     }
 
     // MARK: capture
@@ -437,7 +437,7 @@ final class VoiceEngine: ObservableObject {
         let seconds = Double(frames) / format.sampleRate
         let chunk = Data(bytes: channel[0], count: frames * 2)
 
-        // RMS in the same dB window the CLI's meter uses, so Pip's bars mean the same thing here.
+        // RMS in the same dB window the CLI's meter uses, so the bars mean the same thing here.
         var sum = 0.0
         for i in 0..<frames {
             let sample = Double(channel[0][i]) / 32768

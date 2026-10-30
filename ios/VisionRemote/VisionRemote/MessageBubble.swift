@@ -891,47 +891,61 @@ struct ScanText: View {
         _reveal = State(initialValue: live ? 0 : 1)
     }
 
+    /// The line's width, for the band's travel.
+    @State private var width: CGFloat = 0
+
     var body: some View {
-        Text(text)
+        let line = Text(text)
             .lineLimit(1)
             .truncationMode(.middle)
-            .textRenderer(ScanRenderer(reveal: reveal, sweep: sweep, scanning: scanning))
+            .textRenderer(RevealRenderer(reveal: reveal))
+        // Scanning, the line sits at 55% and the band brings it up to full as it passes: the line again, seen
+        // through a soft band the GPU slides across it. The glyphs are drawn once. Drawn afresh every frame with the
+        // band worked into them (a text renderer), the sweep kept the main thread a fifth busy for as long as a
+        // tool ran, and took frames off whatever else moved meanwhile, the drawer most of all.
+        line
+            .opacity(scanning ? 0.55 : 1)
+            .overlay(alignment: .leading) {
+                if scanning, width > 0 {
+                    let band = 0.22 * width   // the scan's half-width
+                    line.mask(alignment: .leading) {
+                        // The band's profile: the square of a ramp to its middle, in four steps.
+                        LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .white.opacity(0.25), location: 0.25),
+                                               .init(color: .white, location: 0.5), .init(color: .white.opacity(0.25), location: 0.75),
+                                               .init(color: .clear, location: 1)],
+                                       startPoint: .leading, endPoint: .trailing)
+                            .frame(width: 2 * band)
+                            .offset(x: -2 * band + sweep * (width + 2 * band))
+                    }
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .onAppear {
                 if reveal < 1 { withAnimation(.easeOut(duration: 0.45)) { reveal = 1 } }
-                // Only a live line sweeps: a settled one looping forever redraws every frame and drags the thread.
-                // Callers re-id the view when `scanning` flips, so this runs again for the settled line.
+                // Only a live line sweeps. Callers re-id the view when `scanning` flips, so this runs again for the
+                // settled line.
                 if scanning { withAnimation(.linear(duration: 1.6).repeatForever(autoreverses: false)) { sweep = 1 } }
             }
     }
 }
 
-private struct ScanRenderer: TextRenderer, Animatable {
+/// Fades the line in a glyph at a time, left to right.
+private struct RevealRenderer: TextRenderer, Animatable {
     var reveal: Double
-    var sweep: Double
-    let scanning: Bool
 
-    var animatableData: AnimatablePair<Double, Double> {
-        get { AnimatablePair(reveal, sweep) }
-        set { reveal = newValue.first; sweep = newValue.second }
+    var animatableData: Double {
+        get { reveal }
+        set { reveal = newValue }
     }
 
     func draw(layout: Text.Layout, in ctx: inout GraphicsContext) {
         let glyphs = layout.flatMap { $0 }.flatMap { $0 }
         let count = Double(max(glyphs.count, 1))
-        let width = max(layout.map { $0.typographicBounds.rect.maxX }.max() ?? 1, 1)
         let spread = 0.35  // of the fade-in, how long one glyph takes to come up
-        let band = 0.22    // the scan's half-width, as a share of the line
-        let centre = -band + sweep * (1 + 2 * band)
         for (i, glyph) in glyphs.enumerated() {
             let start = Double(i) / count * (1 - spread)
-            var alpha = min(max((reveal - start) / spread, 0), 1)
-            if scanning {
-                let x = glyph.typographicBounds.rect.midX / width
-                let light = max(0, 1 - abs(x - centre) / band)
-                alpha *= 0.55 + 0.45 * light * light
-            }
             var copy = ctx
-            copy.opacity = alpha
+            copy.opacity = min(max((reveal - start) / spread, 0), 1)
             copy.draw(glyph)
         }
     }
@@ -1508,5 +1522,87 @@ private struct ShellRow: View {
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// A message's bubble, or, while it is finished and far off screen, an empty box of its last drawn height. Every
+/// bubble in a long chat was built on each switch into it, text views and all, though only the last screen was
+/// seen; standing in, only the bubbles within a couple of screens draw, and the others as they come within reach.
+/// A chat opened for the first time (no heights known yet) draws whole, as before.
+struct BubbleSlot: View {
+    let message: Message
+    let client: VisionClient
+    @State private var near: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// `drawn`: built straight away rather than standing in (the latest bubbles, on screen as the chat opens).
+    init(message: Message, client: VisionClient, drawn: Bool) {
+        self.message = message
+        self.client = client
+        _near = State(initialValue: drawn)
+    }
+
+    var body: some View {
+        if !near, let known = BubbleHeights.known(message, typeSize: typeSize) {
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .frame(height: known.height)
+                // Drawn once within a couple of screens of view, or in a slot wider or narrower than the height was
+                // measured at (the phone turned). Read off the slot's own place in the scroll view, which is known
+                // from its first layout: `onScrollVisibilityChange` only reports a change, so a slot already within
+                // reach as the chat opened never heard from it and stayed blank.
+                .onGeometryChange(for: Reach.self) { proxy in
+                    let box = proxy.frame(in: .scrollView)
+                    let seen = proxy.bounds(of: .scrollView) ?? .zero
+                    return Reach(near: box.maxY > seen.minY - 1200 && box.minY < seen.maxY + 1200, width: proxy.size.width)
+                } action: { reach in
+                    if reach.near || abs(reach.width - known.width) > 0.5 { near = true }
+                }
+                .accessibilityElement()
+                .accessibilityLabel(message.text)
+        } else {
+            MessageBubble(message: message, client: client)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+                    guard !message.streaming, !message.shellRunning, !message.queued, size.width > 0 else { return }
+                    #if DEBUG
+                    if BubbleHeights.known(message, typeSize: typeSize) == nil { BubbleHeights.builtUnknown += 1 }
+                    if let known = BubbleHeights.known(message, typeSize: typeSize), known.width == size.width, abs(known.height - size.height) > 0.5 {
+                        print("PERF bubble height off: drawn \(size.height), stood in \(known.height)")
+                    }
+                    #endif
+                    BubbleHeights.note(size, for: message, typeSize: typeSize)
+                }
+        }
+    }
+
+    private struct Reach: Equatable {
+        let near: Bool
+        let width: CGFloat
+    }
+}
+
+/// The heights bubbles were last drawn at, by what they hold and the type size, so a chat opened again can stand
+/// its far bubbles in (BubbleSlot). Keyed on the message's content, not its id: a history fetch gives new ids.
+@MainActor enum BubbleHeights {
+    private static var heights: [String: (width: CGFloat, height: CGFloat)] = [:]
+    #if DEBUG
+    static var builtUnknown = 0   // bubbles drawn with no height known (the benchmark reads it)
+    static func forget() { heights.removeAll() }
+    #endif
+
+    static func known(_ message: Message, typeSize: DynamicTypeSize) -> (width: CGFloat, height: CGFloat)? {
+        heights[key(message, typeSize)]
+    }
+
+    static func note(_ size: CGSize, for message: Message, typeSize: DynamicTypeSize) {
+        if heights.count >= 4096 { heights.removeAll(keepingCapacity: true) }
+        heights[key(message, typeSize)] = (size.width, size.height)
+    }
+
+    private static func key(_ m: Message, _ typeSize: DynamicTypeSize) -> String {
+        [m.role.rawValue, m.text, m.imagePaths.joined(separator: ","), m.files.joined(separator: ","), m.shellOutput,
+         "\(m.durationMs ?? -1)", "\(m.tools.count)", "\(m.agents.count)", "\(m.answered.count)", "\(m.isError)",
+         m.checkin?.label ?? "", "\(typeSize)"].joined(separator: "\u{1F}")
     }
 }

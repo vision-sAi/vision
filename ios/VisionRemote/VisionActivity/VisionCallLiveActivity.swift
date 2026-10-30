@@ -24,15 +24,15 @@ struct VisionThreadsLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: VisionThreadsAttributes.self) { context in
             LockScreenThreads(state: context.state)
-                .activityBackgroundTint(PipPalette.face.opacity(0.92))
-                .activitySystemActionForegroundColor(PipPalette.eye)
+                .activityBackgroundTint(VisionPalette.backdrop.opacity(0.92))
+                .activitySystemActionForegroundColor(VisionPalette.glow)
         } dynamicIsland: { context in
             let state = context.state
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     Label("Threads", systemImage: "square.stack.3d.up.fill")
                         .font(.headline)
-                        .foregroundStyle(PipPalette.eye)
+                        .foregroundStyle(VisionPalette.glow)
                         .padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
@@ -48,17 +48,17 @@ struct VisionThreadsLiveActivity: Widget {
                 }
             } compactLeading: {
                 Image(systemName: "square.stack.3d.up.fill")
-                    .foregroundStyle(state.needsYou > 0 ? Color.orange : PipPalette.eye)
+                    .foregroundStyle(state.needsYou > 0 ? Color.orange : VisionPalette.glow)
             } compactTrailing: {
                 Text(state.needsYou > 0 ? "\(state.needsYou)!" : "\(state.working)")
                     .font(.caption.weight(.bold))
                     .monospacedDigit()
-                    .foregroundStyle(state.needsYou > 0 ? Color.orange : PipPalette.eye)
+                    .foregroundStyle(state.needsYou > 0 ? Color.orange : VisionPalette.glow)
             } minimal: {
                 Image(systemName: "square.stack.3d.up.fill")
-                    .foregroundStyle(state.needsYou > 0 ? Color.orange : PipPalette.eye)
+                    .foregroundStyle(state.needsYou > 0 ? Color.orange : VisionPalette.glow)
             }
-            .keylineTint(PipPalette.eye)
+            .keylineTint(VisionPalette.glow)
         }
     }
 }
@@ -78,7 +78,7 @@ private struct LockScreenThreads: View {
                     Text(state.shortHeadline)
                 }
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(state.needsYou > 0 ? Color.orange : PipPalette.eye)
+                .foregroundStyle(state.needsYou > 0 ? Color.orange : VisionPalette.glow)
                 .lineLimit(1)
             }
             ThreadRows(rows: state.shownRows)
@@ -121,29 +121,29 @@ private struct ThreadRows: View {
     static func color(_ state: String) -> Color {
         switch state {
         case "waiting_on_you": return .orange
-        case "working", "landing": return PipPalette.eye
+        case "working", "landing": return VisionPalette.glow
         case "ready_for_review": return .green
         default: return .secondary
         }
     }
 }
 
-/// Vision in the Dynamic Island and on the Lock Screen.  A call shows Pip, a mark for who is talking
+/// Vision in the Dynamic Island and on the Lock Screen.  A call shows Vision's scout, a mark for who is talking
 /// (a waveform while it hears you, a speaker while Vision speaks), a call timer, and mute + hang-up;
 /// a spoken reply shows the speaker and a stop button.  Both work without opening the app.
 struct VisionCallLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: VisionCallAttributes.self) { context in
             LockScreenCall(state: context.state, attributes: context.attributes)
-                .activityBackgroundTint(PipPalette.face.opacity(0.92))
-                .activitySystemActionForegroundColor(PipPalette.eye)
+                .activityBackgroundTint(VisionPalette.backdrop.opacity(0.92))
+                .activitySystemActionForegroundColor(VisionPalette.glow)
         } dynamicIsland: { context in
             let state = context.state
             let attributes = context.attributes
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 8) {
-                        CallPip(mood: state.mood, cell: 3)
+                        CallFace(mood: state.mood, width: 34)
                         Text("Vision").font(.headline)
                     }
                     .padding(.leading, 4)
@@ -170,7 +170,7 @@ struct VisionCallLiveActivity: Widget {
                     .padding(.horizontal, 4)
                 }
             } compactLeading: {
-                CallPip(mood: state.mood, cell: 2.2)
+                CallFace(mood: state.mood, width: 24)
             } compactTrailing: {
                 // Who is talking, at a glance; between turns a call shows its timer.
                 if state.mood.shown || !attributes.call {
@@ -186,7 +186,7 @@ struct VisionCallLiveActivity: Widget {
                 StateMark(mood: state.mood)
                     .font(.caption.weight(.bold))
             }
-            .keylineTint(PipPalette.eye)
+            .keylineTint(VisionPalette.glow)
         }
     }
 }
@@ -197,7 +197,7 @@ private struct LockScreenCall: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            CallPip(mood: state.mood, cell: 4)
+            CallFace(mood: state.mood, width: 44)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Vision").font(.headline).foregroundStyle(.white)
                 HStack(spacing: 6) {
@@ -258,17 +258,16 @@ private struct CallButtons: View {
     }
 }
 
-/// Pip, still: widgets draw one frame, so he holds the face for the state rather than animating it.
-/// Hearing you gives him a tall waveform, plain listening a flat one.
-private struct CallPip: View {
+/// Vision's scout, still: widgets draw one frame, so it holds the face for the state rather than animating it.
+private struct CallFace: View {
     var mood: VisionCallAttributes.Mood
-    var cell: CGFloat
+    var width: CGFloat
 
     var body: some View {
-        PipView(mood: pipMood, level: mood == .hearing ? 0.9 : mood == .listening ? 0.12 : 0, cell: cell, animated: false)
+        VisionFace(mood: face, width: width, animated: false)
     }
 
-    private var pipMood: PipMood {
+    private var face: VisionFaceMood {
         switch mood {
         case .starting, .muted: return .idle
         case .listening, .hearing: return .listening
@@ -325,8 +324,8 @@ private extension VisionCallAttributes.Mood {
 
 private func moodColor(_ mood: VisionCallAttributes.Mood) -> Color {
     switch mood {
-    case .muted, .error: return PipPalette.errorAccent
+    case .muted, .error: return VisionPalette.trouble
     case .starting, .listening, .thinking: return .secondary
-    case .hearing, .speaking: return PipPalette.eye
+    case .hearing, .speaking: return VisionPalette.glow
     }
 }

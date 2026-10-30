@@ -6,6 +6,7 @@ import SwiftUI
 struct ProjectsHome: View {
     @EnvironmentObject private var client: VisionClient
     @Environment(\.theme) private var theme
+    @Environment(\.drawerBars) private var drawerBars
     /// A project picked: its chat is opened (on the machine too, if it isn't open) and pushed.
     let onOpen: (ProjectInfo) -> Void
     @State private var creating = false
@@ -24,7 +25,7 @@ struct ProjectsHome: View {
         Group {
             if client.projects.isEmpty {
                 VStack(spacing: 12) {
-                    BuddyView(hue: 205, trait: "antenna", mood: "asleep", size: 96)
+                    BuddyView(hue: 205, trait: "sprout", mood: "asleep", size: 96)
                     Text("Send your first scout").themeFont(.headline)
                     Text("Give it a goal; it works on it in the background and checks in.")
                         .themeFont(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -55,7 +56,8 @@ struct ProjectsHome: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.backgroundColor.ignoresSafeArea())
-        .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
+        // Room for the home indicator as padding: in the drawer the screen lays out with no safe area (see SideDrawer).
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar.padding(.bottom, drawerBars?.bottom ?? 0) }
         .navigationTitle("Scouts")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
@@ -429,6 +431,7 @@ struct NewProjectView: View {
     @State private var settings = ProjectSettings()
     @State private var look = ScoutLook(name: "", hue: 205, trait: "antenna")
     @State private var checkins: [String: Any] = ["repeat": "daily", "time": "08:00"]
+    @State private var more = false   // name and look, leash, instructions, how it runs
     @State private var saving = false
     @State private var error: String?
     @FocusState private var focus: Field?
@@ -451,20 +454,34 @@ struct NewProjectView: View {
                                 .accessibilityLabel("Goal")
                         }
                     }
-                    ProjectFormSection("Scout") {
-                        ProjectFormCard { ScoutLookPicker(look: $look) }
+                    ProjectFormSection("When it runs") {
+                        ProjectFormCard {
+                            ScoutScheduleEditor(schedule: .init(repeatKind: "daily", time: "08:00", everyMinutes: 120, enabled: true)) {
+                                checkins = $0
+                            }
+                            .themeFont(.body)
+                            .padding(.horizontal, 18)
+                            .frame(minHeight: 54)
+                        }
                     }
-                    // The folder: a scout can't start without one.
-                    ProjectFormSection("Folder") {
+                    // The folder: optional. Without one it works in the machine's default folder (a news brief
+                    // needs none); with one, every run starts there.
+                    ProjectFormSection("Folder (optional)") {
                         ProjectFormCard {
                             Button { pickingFolder = true } label: {
                                 ProjectFormRow(icon: "folder") {
-                                    Text(folder.map(homeAsTilde) ?? "Choose a folder")
+                                    Text(folder.map(homeAsTilde) ?? "None: for code or files, pick one")
                                         .foregroundStyle(folder == nil ? .secondary : .primary)
                                         .lineLimit(1)
                                         .truncationMode(.head)
                                 } trailing: {
-                                    ProjectFormChevron()
+                                    if folder != nil {
+                                        Button { folder = nil; settings.leash = "checkins" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                                            .buttonStyle(.plain)
+                                            .accessibilityLabel("No folder")
+                                    } else {
+                                        ProjectFormChevron()
+                                    }
                                 }
                             }
                             .buttonStyle(.plain)
@@ -472,30 +489,31 @@ struct NewProjectView: View {
                             .accessibilityValue(folder.map(homeAsTilde) ?? "none chosen")
                         }
                     }
-                    ProjectFormSection("Leash") {
-                        ProjectFormCard {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Picker("Leash", selection: $settings.leash) {
-                                    ForEach(ScoutWords.leashes, id: \.0) { Text($0.1).tag($0.0) }
-                                }
-                                .pickerStyle(.segmented)
-                                Text(ScoutWords.leashes.first { $0.0 == settings.leash }?.2 ?? "")
-                                    .themeFont(.footnote).foregroundStyle(.secondary)
+                    ProjectFormCard {
+                        Button { withAnimation(.snappy(duration: 0.25)) { more.toggle() } } label: {
+                            ProjectFormRow(icon: "ellipsis.circle") {
+                                Text(more ? "Fewer options" : "Name, look and more")
+                            } trailing: {
+                                Image(systemName: "chevron.down")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .rotationEffect(.degrees(more ? 180 : 0))
                             }
-                            .padding(16)
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("More options")
                     }
-                    ProjectFormSection("Check-ins") {
-                        ProjectFormCard {
-                            Form {
-                                ScoutScheduleEditor(schedule: .init(repeatKind: "daily", time: "08:00", everyMinutes: 120, enabled: true)) {
-                                    checkins = $0
-                                }
-                            }
-                            .scrollDisabled(true)
-                            .scrollContentBackground(.hidden)
-                            .frame(height: 112)
-                        }
+                    if more {
+                    ProjectFormSection("Scout") {
+                        ProjectFormCard { ScoutLookPicker(look: $look) }
+                    }
+                    // Only for a scout that works on files: a news brief never needs the choice.
+                    if folder != nil {
+                    ProjectFormCard {
+                        Toggle(ScoutWords.askLabel, isOn: Binding(get: { ScoutWords.asks(settings.leash) },
+                                                                  set: { settings.leash = ScoutWords.leash(asking: $0) }))
+                            .padding(16)
+                    }
                     }
                     ProjectFormSection("Instructions (optional)") {
                         ProjectFormCard {
@@ -523,6 +541,7 @@ struct NewProjectView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Settings")
+                    }
                     }
                     if let error {
                         Text(error)
@@ -561,7 +580,7 @@ struct NewProjectView: View {
         }
     }
 
-    private var ready: Bool { !trimmedGoal.isEmpty && folder != nil && client.connection == .online }
+    private var ready: Bool { !trimmedGoal.isEmpty && client.connection == .online }
 
     /// A name, colour and look none of the other scouts has, as the machine would pick (projects.suggest_scout).
     private func suggest() {
@@ -575,7 +594,7 @@ struct NewProjectView: View {
         look.trait = ScoutLook.traits.min { a, b in others.filter { $0.trait == a }.count < others.filter { $0.trait == b }.count } ?? "antenna"
     }
 
-    /// One button, the accent, the width of the page: it waits for a goal, a folder and the machine.
+    /// One button, the accent, the width of the page: it waits for a goal and the machine.
     private var createButton: some View {
         Button { create() } label: {
             Group {
@@ -661,7 +680,7 @@ enum ScoutWords {
         let n = needs(project, counts: counts)
         if n > 0 { return "\(n) need\(n == 1 ? "s" : "") you" }
         if project.isPaused { return "Paused" }
-        if project.checkin?.running != nil { return "Checking in…" }
+        if project.checkin?.running != nil { return "Reporting…" }
         switch project.mood {
         case "worried": return "Something failed"
         case "focused": return "Working"
@@ -669,8 +688,8 @@ enum ScoutWords {
         case "proud": return "Landed something"
         default: break
         }
-        if project.leash == "on_call" { return "On call" }
-        if let next = project.checkin?.schedule?.nextRun { return "Next check-in " + when(next) }
+        if project.leash == "on_call" { return "Resting" }
+        if let next = project.checkin?.schedule?.nextRun { return "Next status report " + when(next) }
         return "Resting"
     }
 
@@ -688,11 +707,11 @@ enum ScoutWords {
     /// Moods worth moving for in a list; the rest hold still so a list of scouts isn't an aquarium.
     static func lively(_ mood: String) -> Bool { ["needs_you", "still_waiting", "worried", "found_it", "waking"].contains(mood) }
 
-    static let leashes: [(String, String, String)] = [
-        ("on_call", "On call", "Works only when you give it something."),
-        ("checkins", "Check-ins", "Works alone on its schedule; anything with consequences asks first."),
-        ("autonomous", "Autonomous", "Takes those steps itself, within its rules."),
-    ]
+    /// The one choice of how far a scout goes alone (its leash underneath): ask first, or don't.
+    static let askLabel = "Ask me before big changes"
+    static let askNote = "Off, it pushes, deletes and merges without asking."
+    static func asks(_ leash: String) -> Bool { leash != "autonomous" }
+    static func leash(asking: Bool) -> String { asking ? "checkins" : "autonomous" }
 }
 
 /// A scout's buddy as its project has it.
@@ -854,7 +873,7 @@ struct CheckinCardView: View {
             }
             Divider()
             if text.isEmpty {
-                HStack(spacing: 8) { ProgressView(); Text("Checking in…").foregroundStyle(.secondary) }
+                HStack(spacing: 8) { ProgressView(); Text("Reporting…").foregroundStyle(.secondary) }
             } else {
                 ReplyMarkdown(text: text, selectable: true)
             }
@@ -927,11 +946,14 @@ struct ScoutScheduleEditor: View {
     @State private var kind: String
     @State private var time: Date
     @State private var hours: Int
+    @State private var weekday: Int
     let onChange: ([String: Any]) -> Void
 
     init(schedule: ScoutCheckins.Schedule?, onChange: @escaping ([String: Any]) -> Void) {
         let on = schedule?.enabled ?? false
-        _kind = State(initialValue: on ? (schedule?.repeatKind == "every" ? "every" : schedule?.repeatKind == "weekdays" ? "weekdays" : "daily") : "off")
+        let kinds = ["every", "weekdays", "weekly"]
+        _kind = State(initialValue: on ? (kinds.first { $0 == schedule?.repeatKind } ?? "daily") : "off")
+        _weekday = State(initialValue: schedule?.weekday ?? 0)
         let parts = (schedule?.time ?? "08:00").split(separator: ":").compactMap { Int($0) }
         _time = State(initialValue: Calendar.current.date(bySettingHour: parts.first ?? 8, minute: parts.count > 1 ? parts[1] : 0,
                                                           second: 0, of: Date()) ?? Date())
@@ -939,20 +961,42 @@ struct ScoutScheduleEditor: View {
         self.onChange = onChange
     }
 
+    // Each row lays out its own label, so it reads the same in a Form and on a project form's card.
     var body: some View {
-        Picker("Checks in", selection: $kind) {
-            Text("Off").tag("off")
-            Text("Every day").tag("daily")
-            Text("Weekdays").tag("weekdays")
-            Text("Every few hours").tag("every")
+        row("Runs") {
+            Picker("Runs", selection: $kind) {
+                Text("Off").tag("off")
+                Text("Every day").tag("daily")
+                Text("Weekdays").tag("weekdays")
+                Text("Every week").tag("weekly")
+                Text("Every few hours").tag("every")
+            }
+            .pickerStyle(.menu)
         }
         .onChange(of: kind) { send() }
-        if kind == "daily" || kind == "weekdays" {
-            DatePicker("At", selection: $time, displayedComponents: .hourAndMinute)
+        if kind == "weekly" {
+            row("On") {
+                Picker("On", selection: $weekday) {
+                    ForEach(0..<7, id: \.self) { i in Text(Calendar.current.standaloneWeekdaySymbols[(i + 1) % 7]).tag(i) }
+                }
+                .pickerStyle(.menu)
+            }
+            .onChange(of: weekday) { send() }
+        }
+        if kind == "daily" || kind == "weekdays" || kind == "weekly" {
+            row("At") { DatePicker("At", selection: $time, displayedComponents: .hourAndMinute) }
                 .onChange(of: time) { send() }
         } else if kind == "every" {
-            Stepper("Every \(hours) hour\(hours == 1 ? "" : "s")", value: $hours, in: 1...12)
+            row("Every \(hours) hour\(hours == 1 ? "" : "s")") { Stepper("Hours", value: $hours, in: 1...12) }
                 .onChange(of: hours) { send() }
+        }
+    }
+
+    private func row<Control: View>(_ label: String, @ViewBuilder control: () -> Control) -> some View {
+        HStack {
+            Text(label)
+            Spacer(minLength: 8)
+            control().labelsHidden().fixedSize()
         }
     }
 
@@ -962,7 +1006,9 @@ struct ScoutScheduleEditor: View {
         case "every": return ["repeat": "every", "every_minutes": hours * 60]
         default:
             let c = Calendar.current.dateComponents([.hour, .minute], from: time)
-            return ["repeat": kind, "time": String(format: "%02d:%02d", c.hour ?? 8, c.minute ?? 0)]
+            var body: [String: Any] = ["repeat": kind, "time": String(format: "%02d:%02d", c.hour ?? 8, c.minute ?? 0)]
+            if kind == "weekly" { body["weekday"] = weekday }
+            return body
         }
     }
 
@@ -982,14 +1028,10 @@ struct ScoutLeashPage: View {
         Form {
             if let project {
                 Section {
-                    Picker("Leash", selection: Binding(get: { project.leash }, set: { v in save { try await client.setLeash(projectID, v) } })) {
-                        ForEach(ScoutWords.leashes, id: \.0) { Text($0.1).tag($0.0) }
-                    }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Text("Leash")
+                    Toggle(ScoutWords.askLabel, isOn: Binding(get: { ScoutWords.asks(project.leash) },
+                                                              set: { v in save { try await client.setLeash(projectID, ScoutWords.leash(asking: v)) } }))
                 } footer: {
-                    Text(ScoutWords.leashes.first { $0.0 == project.leash }?.2 ?? "")
+                    Text(ScoutWords.askNote)
                 }
                 Section {
                     ForEach(project.rules) { rule in
@@ -1028,23 +1070,22 @@ struct ScoutLeashPage: View {
                         LabeledContent("Last", value: Date(timeIntervalSince1970: last).formatted(date: .abbreviated, time: .shortened)
                                        + (project.checkin?.lastNeeds ?? 0 > 0 ? " · \(project.checkin!.lastNeeds) needed you" : ""))
                     }
-                    Button(checkingIn || project.checkin?.running != nil ? "Checking in…" : "Check in now") {
+                    Button(checkingIn || project.checkin?.running != nil ? "Reporting…" : "Status report now") {
                         checkingIn = true
                         save { try await client.checkInNow(projectID) }
                     }
                     .disabled(checkingIn || project.checkin?.running != nil || project.isPaused || client.connection != .online)
                 } header: {
-                    Text("Check-ins")
+                    Text("Status reports")
                 } footer: {
-                    Text(project.leash == "on_call" ? "On call, it skips its scheduled check-ins; Check in now still works."
-                         : "It looks at what changed, works on its goal and reports in its chat. One notification if something needs you.")
+                    Text("It looks at what changed, works on its goal and reports in its chat. One notification if something needs you.")
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red) }
                 }
             }
         }
-        .navigationTitle("Leash and check-ins")
+        .navigationTitle("Schedule")
         .navigationBarTitleDisplayMode(.inline)
     }
 
