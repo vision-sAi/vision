@@ -2,5 +2,7 @@ build.log
 archive/
 DerivedData/
 xcuserdata/
-*.xcodeproj/project.xcworkspace/
+**/*.xcodeproj/project.xcworkspace/
 VisionRemote/Local.xcconfig
+**/xcshareddata/xcodecloud/
+VisionRemote/simbuild/
