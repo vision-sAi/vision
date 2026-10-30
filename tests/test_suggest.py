@@ -1,9 +1,13 @@
 import asyncio
 import json
+import os
+import shutil
 import subprocess
+import time
 import unittest
 
 import _nopush  # noqa: F401  (keeps the suite off the real phones)
+from contextlib import ExitStack
 from unittest.mock import patch
 
 from vision import suggest, ui
@@ -17,10 +21,45 @@ def _ran(result: str, is_error: bool = False):
     return lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, out, "")
 
 
+class FakeClaude:
+    """subprocess.Popen standing in for `claude`: it reads one stream-json message and answers it."""
+
+    def __init__(self, answer, calls):
+        self.answer, self.calls = answer, calls
+
+    def __call__(self, cmd, **kw):
+        proc = self
+
+        class Proc:
+            returncode = None
+
+            def poll(self):
+                return self.returncode
+
+            def communicate(self, input=None, timeout=None):
+                self.returncode = 0
+                if input is None:
+                    return "", ""
+                proc.calls.append((cmd[0], cmd, {"input": json.loads(input)["message"]["content"], **kw}))
+                if proc.answer is None:
+                    return json.dumps({"type": "result", "is_error": True, "result": "Not logged in"}) + "\n", ""
+                return json.dumps({"type": "result", "is_error": False, "result": proc.answer}) + "\n", ""
+
+            def kill(self):
+                self.returncode = -9
+
+        p = Proc()
+        proc.started.append(p)
+        return p
+
+    started: list
+
+
 class SuggestTests(unittest.TestCase):
     def setUp(self):
         suggest._failed.clear()
         self.addCleanup(suggest._failed.clear)
+        self.addCleanup(suggest._drop_spare)
 
     def installed(self, *names):
         def find(name):
@@ -37,10 +76,6 @@ class SuggestTests(unittest.TestCase):
             exe = cmd[0]
             calls.append((exe, cmd, kw))
             answer = answers.get(exe)
-            if exe == "claude":
-                if answer is None:
-                    return subprocess.CompletedProcess(cmd, 1, json.dumps({"is_error": True, "result": "Not logged in"}), "")
-                return _ran(answer)(cmd, **kw)
             if exe == "codex":
                 if answer is None:
                     return subprocess.CompletedProcess(cmd, 1, "", "not signed in")
@@ -52,7 +87,12 @@ class SuggestTests(unittest.TestCase):
             lines = [{"type": "text", "data": answer}, {"type": "end", "sessionId": "s"}]
             return subprocess.CompletedProcess(cmd, 0, "\n".join(json.dumps(x) for x in lines), "")
 
-        return calls, patch("subprocess.run", side_effect=run)
+        claude = FakeClaude(answers.get("claude"), calls)
+        claude.started = self.started = []
+        running = ExitStack()
+        running.enter_context(patch("subprocess.run", side_effect=run))
+        running.enter_context(patch("subprocess.Popen", side_effect=claude))
+        return calls, running
 
     def test_the_guess_comes_from_a_toolless_haiku_call_on_the_conversation(self):
         calls, running = self.fake({"claude": "yes, move it"})
@@ -65,6 +105,51 @@ class SuggestTests(unittest.TestCase):
         self.assertIn("--no-session-persistence", cmd)
         self.assertIn("User: why does my loop only run once", kw["input"])
         self.assertIn("Assistant: The return is inside the loop", kw["input"])
+
+    def test_a_guess_takes_the_started_claude_and_starts_the_next(self):
+        calls, running = self.fake({"claude": "yes, move it"})
+        with self.installed("claude"), running:
+            suggest.warm()
+            self.assertEqual(len(self.started), 1, "warm starts one ahead")
+            self.assertEqual(calls, [], "…which waits: nothing is asked yet")
+            self.assertEqual(suggest.suggest(CONVO), "yes, move it")
+            self.assertEqual(len(self.started), 2, "the guess used it and started the next")
+            self.assertEqual(suggest.suggest(CONVO), "yes, move it")
+            self.assertEqual(len(self.started), 3)
+            self.assertEqual(len(calls), 2, "one process per guess: no guess sees another's conversation")
+            suggest.warm()
+            self.assertEqual(len(self.started), 3, "one is already waiting")
+
+    def test_an_unused_spare_goes_after_a_while_instead_of_idling_for_good(self):
+        calls, running = self.fake({"claude": "yes, move it"})
+        with self.installed("claude"), running, patch.object(suggest, "SPARE_MAX_AGE", 0.05):
+            suggest.warm()
+            self.assertIsNotNone(suggest._spare)
+            for _ in range(100):
+                if suggest._spare is None:
+                    break
+                time.sleep(0.01)
+            self.assertIsNone(suggest._spare, "no turn came, so the waiting claude was let go")
+            self.assertIsNotNone(self.started[0].poll(), "…and its process ended")
+            self.assertEqual(calls, [], "it was never asked anything")
+            suggest.warm()
+            self.assertEqual(len(self.started), 2, "the next turn starts a fresh one")
+
+    def test_a_taken_spare_is_not_let_go_mid_guess(self):
+        calls, running = self.fake({"claude": "yes, move it"})
+        with self.installed("claude"), running:
+            suggest.warm()
+            taken = suggest._take_spare(("claude", suggest.PROMPT, None))
+            self.assertIsNotNone(taken)
+            self.addCleanup(taken.drop)
+            self.assertTrue(taken.timer.finished.is_set(), "its expiry is called off once a guess has it")
+
+    def test_a_failing_claude_starts_no_spare(self):
+        calls, running = self.fake({"claude": None, "codex": "yes, move it"})
+        with self.installed("claude", "codex"), running:
+            self.assertEqual(suggest.suggest(CONVO), "yes, move it")
+            suggest.warm()
+        self.assertEqual(len(self.started), 1, "only the one that failed; warm leaves a failing Claude alone")
 
     def test_without_claude_a_small_codex_model_guesses_and_leaves_no_session(self):
         calls, running = self.fake({"codex": "yes, move it"})
@@ -119,6 +204,8 @@ class SuggestTests(unittest.TestCase):
         self.assertEqual(suggest.clean("Nothing."), "")
         self.assertEqual(suggest.clean("one\ntwo"), "")
         self.assertEqual(suggest.clean("x" * 200), "")
+        self.assertEqual(suggest.clean("<br>"), "")  # a model's way of sending nothing
+        self.assertEqual(suggest.clean("..."), "")
 
     def test_a_long_reply_is_cut_to_its_end(self):
         rows = suggest._rows([{"role": "assistant", "text": "a" * 5000 + "Shall I?"}])
@@ -264,6 +351,42 @@ class JoinedSuggestionTests(unittest.TestCase):
         rb._dispatch({"type": "suggestion", "chat": "other", "text": "not ours"})
         rb._dispatch({"type": "chat", "chat": "c1", "busy": True, "suggestion": ""})
         self.assertEqual(got, ["run the tests", ""])
+
+
+# The reply that drew "Does it still jump when the drawer opens?": the build was already on the phone,
+# so the user's next word is what they saw there, not a question back.
+HANDED_OVER = [
+    {"role": "user", "text": "the drawer still jumps at the edges when it closes, fix it and put it on my phone"},
+    {"role": "assistant", "text": (
+        "The shrink is back and the edge jump is gone. The new build is installed and running on your phone.\n\n"
+        "The jump came from SwiftUI, not UIKit as I'd thought: anything under a scaleEffect loses the screen's "
+        "safe area. When the scale got back to exactly 1, it snapped out to the screen edges.\n\n"
+        "Fix: the chat now lays out on the full screen outside the scale, and gets the status bar and home "
+        "indicator insets back as padding inside it. The change is in SideDrawer.swift.\n\n"
+        "Simulator: on a close, the card stays full height the whole way, and the header moves at most a couple "
+        "of points as it lands. I've removed the debug hook and shut down the simulator and fake server.")},
+]
+
+# Vision asked what the user wants; only the user knows, so there is nothing to guess.
+OPEN_QUESTION = [
+    {"role": "user", "text": "Hello"},
+    {"role": "assistant", "text": "Hey. What are we working on?"},
+]
+
+
+@unittest.skipUnless(os.environ.get("VISION_LIVE") and shutil.which("claude"),
+                     "asks the real Haiku: set VISION_LIVE=1 with Claude Code signed in")
+class LiveGuessTests(unittest.TestCase):
+    def test_after_a_hand_over_the_guess_is_the_users_verdict_not_a_question(self):
+        answer = suggest.one_shot(suggest.ask(suggest._rows(HANDED_OVER)), ("claude",))
+        self.assertIsNotNone(answer, "Haiku never answered (signed out, or `claude` couldn't run)")
+        guess = suggest.clean(answer)
+        self.assertFalse(guess.rstrip().endswith("?"), f"a question back to the assistant: {guess!r}")
+
+    def test_an_open_question_from_the_assistant_gets_no_guess(self):
+        answer = suggest.one_shot(suggest.ask(suggest._rows(OPEN_QUESTION)), ("claude",))
+        self.assertIsNotNone(answer, "Haiku never answered (signed out, or `claude` couldn't run)")
+        self.assertEqual(suggest.clean(answer), "", f"filler guessed where only the user knows: {answer!r}")
 
 
 if __name__ == "__main__":
