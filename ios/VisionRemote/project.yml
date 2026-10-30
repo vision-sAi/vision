@@ -31,7 +31,7 @@ targets:
     info:
       path: VisionRemote/Info.plist
       properties:
-        CFBundleDisplayName: Vision
+        CFBundleDisplayName: $(APP_DISPLAY_NAME)
         CFBundleShortVersionString: "0.2.1"
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
@@ -72,7 +72,7 @@ targets:
     info:
       path: VisionNotify/Info.plist
       properties:
-        CFBundleDisplayName: Vision
+        CFBundleDisplayName: $(APP_DISPLAY_NAME)
         CFBundleShortVersionString: "0.2.1"
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         VisionKeychainGroup: $(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).VisionRemote.push
@@ -96,7 +96,7 @@ targets:
     info:
       path: VisionActivity/Info.plist
       properties:
-        CFBundleDisplayName: Vision
+        CFBundleDisplayName: $(APP_DISPLAY_NAME)
         CFBundleShortVersionString: "0.2.1"
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         VisionKeychainGroup: $(AppIdentifierPrefix)$(BUNDLE_ID_PREFIX).VisionRemote.push   # the app's pairing (SharedPairing)

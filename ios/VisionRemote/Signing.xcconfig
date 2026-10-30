@@ -2,5 +2,6 @@
 // your Apple team and bundle id prefix there.
 DEVELOPMENT_TEAM =
 BUNDLE_ID_PREFIX = com.example
+APP_DISPLAY_NAME = Vision
 
 #include? "Local.xcconfig"
