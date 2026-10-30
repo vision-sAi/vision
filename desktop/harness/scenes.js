@@ -296,7 +296,7 @@
     agents: { ...base, http: AGENT_HTTP, asleep: [{ from: now - 9 * 3600, to: now - 2 * 3600 }], steps: [
       { wait: 300, click: ".side-row[data-action=agents]" },
       { wait: 200, check: "the board's columns each carry their colour", fn: () => [...document.querySelectorAll(".lane")].map((l) => [...l.classList].find((c) => c.startsWith("tone-")) ?? "wide").join() === "tone-ask,tone-ready,tone-busy,tone-idle,wide" },
-      { wait: 200, check: "the board groups threads by what they need", fn: () => [...document.querySelectorAll(".lane-head h3")].map((h) => h.textContent).join(",") === "Needs you,Ready for review,Working,Idle,Scheduled" },
+      { wait: 200, check: "the board groups threads by what they need", fn: () => [...document.querySelectorAll(".lane-head h3")].map((h) => h.textContent).join(",") === "Needs you,Ready for review,Working,Idle,Coming up" },
       { check: "the sidebar badge counts what needs you: questions, work to review and requests", fn: () => document.querySelector("#agents-badge").textContent === "3" },
       { check: "a recent sleep is explained", fn: () => !!document.querySelector(".sleep-banner") },
       { frame: { type: "thread", project: "p1", thread: { ...THREADS.p1[2], state: "ready_for_review", last_result: { status: "completed", summary: "Tests added." } } } },
@@ -412,7 +412,7 @@
       { wait: 80, check: "Check in now asks the server", fn: () => window.__http.some((r) => r.method === "POST" && r.path === "projects/p1/checkin") },
       { frame: { type: "checkin", project: "p1", chat: "sc1", state: "started", label: "Afternoon check-in", started: now } },
       { wait: 80, check: "the buddy wakes up for it", fn: () => document.querySelector(".scout-head .buddy")?.dataset.mood === "waking" },
-      { check: "and the button says it's under way", fn: () => document.querySelector(".checkin-now").textContent === "Checking in…" },
+      { check: "and the button says it's under way", fn: () => document.querySelector(".checkin-now").textContent === "Reporting…" },
     ] },
 
     approvals: { ...base, http: SCOUT_HTTP, steps: [
@@ -435,7 +435,9 @@
 
     leash: { ...base, http: SCOUT_HTTP, steps: [
       openAtlas,
-      { wait: 300, run: () => document.querySelectorAll(".leash-seg button")[2].click() },
+      // The leash is one switch, "asks first": Atlas asks first, so turning it off lets it go ahead on its own.
+      { wait: 300, check: "the leash switch shows it asks first", fn: () => document.querySelector("#scout-rail .ask-row .toggle")?.getAttribute("aria-checked") === "true" },
+      { run: () => document.querySelector("#scout-rail .ask-row .toggle").click() },
       { wait: 80, check: "the leash switch sends the leash", fn: () => window.__http.some((r) => r.body?.settings?.leash === "autonomous") },
       { run: () => { const r = document.querySelector("#scout-rail"); r.scrollTop = r.scrollHeight; } },
     ] },
