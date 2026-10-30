@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Build Vision Remote and install it on the iPhone plugged into (or reachable from) this Mac; UDID=<device> picks
 # another. Run in the GUI session (codesign needs the keychain). To sign under your own team, set up
-# VisionRemote/Local.xcconfig first (see Local.xcconfig.example).
+# VisionRemote/Local.xcconfig first (see Local.xcconfig.example). It installs as "Vision Dev", its own app
+# beside the TestFlight one (bundle ids under <prefix>.dev); TESTFLIGHT_ID=1 builds over the real one instead.
 set -e
 cd "${0:A:h}/VisionRemote"  # this checkout; DerivedData and the log go in ~/VisionRemote-ios
 OUT=~/VisionRemote-ios
@@ -42,9 +43,14 @@ if [ -f ~/.appstoreconnect/key.env ]; then
   source ~/.appstoreconnect/key.env
   AUTH+=(-authenticationKeyPath ~/.appstoreconnect/AuthKey_$KEY_ID.p8 -authenticationKeyID $KEY_ID -authenticationKeyIssuerID $ISSUER_ID)
 fi
+VARIANT=()
+if [ -z "$TESTFLIGHT_ID" ]; then
+  PREFIX=$(sed -n 's/^BUNDLE_ID_PREFIX *= *//p' Local.xcconfig 2>/dev/null | tail -1)
+  VARIANT=("BUNDLE_ID_PREFIX=${PREFIX:-com.example}.dev" "APP_DISPLAY_NAME=Vision Dev")
+fi
 (
   xcodebuild -project VisionRemote.xcodeproj -scheme VisionRemote -configuration Debug \
-    -destination 'generic/platform=iOS' -derivedDataPath "$DERIVED" "${AUTH[@]}" build || exit 1
+    -destination 'generic/platform=iOS' -derivedDataPath "$DERIVED" "${AUTH[@]}" "${VARIANT[@]}" build || exit 1
   APP="$DERIVED/Build/Products/Debug-iphoneos/VisionRemote.app"
   BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$APP/Info.plist")
   xcrun devicectl device install app --device "$UDID" "$APP" || exit 1
