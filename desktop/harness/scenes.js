@@ -182,8 +182,26 @@
     models: { ...base, steps: [
       { wait: 300, click: "#model" },
       { wait: 200, check: "the model menu opens", fn: () => !document.querySelector("#popover").hidden },
+      { check: "the effort slider shows without scrolling the models", fn: () => {
+        const pop = document.querySelector("#popover").getBoundingClientRect(), slider = document.querySelector("#popover .effort-slider")?.getBoundingClientRect();
+        return document.querySelector("#popover").scrollTop === 0 && slider && slider.bottom <= pop.bottom && slider.top >= pop.top;
+      } },
       { run: () => document.querySelectorAll("#popover .menu-item")[1].click() },
       { wait: 100, check: "picking a model switches the chat", fn: () => sentOf("model")[0]?.model === "sonnet" },
+    ] },
+
+    // The model menu left open: a long list scrolls, the effort slider stays at its foot.
+    modelmenu: { ...base, steps: [
+      { wait: 300, click: "#model" },
+      { wait: 300, check: "the effort slider is in view with the list scrolled to its end too", fn: () => {
+        const pop = document.querySelector("#popover");
+        pop.scrollTop = pop.scrollHeight;
+        const p = pop.getBoundingClientRect(), r = pop.querySelector(".effort-slider").getBoundingClientRect();
+        const ok = r.bottom <= p.bottom && r.top >= p.top;
+        pop.scrollTop = 0;
+        return ok;
+      } },
+      { wait: 3000, check: "the menu stays open by itself", fn: () => !document.querySelector("#popover").hidden },
     ] },
 
     streaming: { ...base, steps: [
