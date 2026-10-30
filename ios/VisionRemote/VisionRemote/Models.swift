@@ -1288,7 +1288,15 @@ struct SessionRow: Decodable, Identifiable {
     let chat: String?
     let provider: String
     let updated: Double?       // epoch seconds; absent from older machines
+    var model: String? = nil   // "Opus 5.5", when the machine knows what it last ran on
+    var effort: String? = nil
     var stableID: String { "\(provider):\(id)" }
+
+    /// "Opus 5.5 medium", else the provider's name.
+    var brainLabel: String {
+        guard let model, !model.isEmpty else { return ProviderStyle.title(provider) }
+        return [model, effort].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
+    }
 
     /// A photo sent as the first message titles the chat "[Attached image: /long/path…]"; show
     /// "Photo" or "File" (plus whatever was typed with it) instead of the machine's file path.
