@@ -105,7 +105,14 @@ class CheckinScheduleTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             clean({"kind": "checkin", "repeat": "daily", "time": "08:00"})
         t = clean({"kind": "checkin", "project": "p1", "repeat": "daily", "time": "08:00"})
-        self.assertEqual((t["title"], t["prompt"], t["project"]), ("Check-in", "", "p1"))
+        self.assertEqual((t["title"], t["prompt"], t["project"]), ("Status report", "", "p1"))
+
+    def test_a_folder_is_optional_and_kept_through_an_edit(self):
+        news = clean({"prompt": "USA news brief", "repeat": "daily", "time": "07:00"})
+        self.assertEqual(news["workdir"], "")
+        t = clean({"prompt": "check the build", "repeat": "daily", "time": "08:00", "workdir": "/tmp/repo"})
+        self.assertEqual(clean({"time": "09:00"}, t)["workdir"], "/tmp/repo")
+        self.assertEqual(clean({"workdir": ""}, t)["workdir"], "")
 
     def test_every_n_minutes_counts_from_when_it_was_set(self):
         with self.assertRaises(ValueError):
@@ -240,8 +247,11 @@ class EndpointTest(unittest.TestCase):
             Image.new("RGB", (800, 600), (200, 30, 30)).save(uploads / "20260925-101010-abcdef.jpg")
             (uploads / "20260925-101011-abcdef-notes.txt").write_text("hi")
             posted = []
+            notes = []
+            chat = SimpleNamespace(post=notes.append)
             hub = SimpleNamespace(authorized=lambda t: t == "t", log=lambda _: None, post=posted.append,
-                                  schedule=Schedule(Path(d) / "s.json"))
+                                  schedule=Schedule(Path(d) / "s.json"),
+                                  task_chat=lambda task: chat if task.get("chat") == "c1" else None)
             client = TestClient(server.create_app(hub))
             auth = {"Authorization": "Bearer t"}
             with patch.object(server, "UPLOAD_DIR", uploads), patch.object(library, "THUMB_DIR", Path(d) / "thumbs"), \
@@ -256,10 +266,14 @@ class EndpointTest(unittest.TestCase):
                 self.assertEqual(max(Image.open(io.BytesIO(r.content)).size), 100)
                 self.assertEqual(client.get("/thumb", params={"path": "/etc/hostname"}, headers=auth).status_code, 404)
 
-            r = client.post("/scheduled", json={"prompt": "news", "repeat": "daily", "time": "07:15"}, headers=auth)
+            # One set from a chat (one on its own becomes a scout: test_scouts).
+            r = client.post("/scheduled", json={"prompt": "news", "repeat": "daily", "time": "07:15", "chat": "c1"},
+                            headers=auth)
             self.assertEqual(r.status_code, 200)
             tid = r.json()["id"]
-            self.assertEqual(client.post("/scheduled", json={"prompt": "x", "repeat": "daily", "time": "7"},
+            self.assertEqual(len(notes), 1)  # the chat it was set from says so
+            self.assertTrue(notes[0]["text"].startswith("Scheduled for ") and notes[0]["text"].endswith(", daily: news"), notes)
+            self.assertEqual(client.post("/scheduled", json={"prompt": "x", "repeat": "daily", "time": "7", "chat": "c1"},
                                          headers=auth).status_code, 400)
             self.assertEqual([t["id"] for t in client.get("/scheduled", headers=auth).json()], [tid])
             self.assertEqual(client.delete(f"/scheduled/{tid}", headers=auth).status_code, 200)

@@ -28,7 +28,7 @@ a phone → machine frame without one goes to the most recently active chat.
                      tokens_out, scout, mood, leash, …}} (a project made or changed: projects.py; `threads`: how many
                      threads are in each state; `tokens_out`: what its threads have written; `scout` {name, hue, trait}
                      and `mood` its buddy avatar, sent again when the mood changes; `leash` its autonomy as
-                     on_call | checkins | autonomous) · project_removed {project} (archived)
+                     on_call | checkins | autonomous) · project_removed {project} (archived; …/resume brings it back)
                    activity {project, event: {at, kind, text, thread?}} (a line in the project's activity log)
                    approval {project, approval: {id, target, title, tool, input, command, rule, action, state, …}} (a scout
                      asked leave to run something, or the user decided: projects.py approvals)
@@ -61,7 +61,7 @@ GET /search?q=&limit= finds what was said in the open chats: [{chat, title, proj
 chat whose message (or title) holds every word of q, newest chat first, the snippet around the first hit.
 Projects (projects.py, runs.py): /projects (list, make or edit), /projects/adopt (POST {chat} or {session_id,
 provider?}: an open chat becomes a project's, as it is), /projects/{id} (one; DELETE archives),
-…/open, …/pause, …/resume, …/memory (GET, POST {fact}, DELETE …/memory/{n}), …/activity (GET ?limit=&since=:
+…/open, …/pause, …/resume, …/delete (a retired one, for good), …/memory (GET, POST {fact}, DELETE …/memory/{n}), …/activity (GET ?limit=&since=:
 the events, newest first), …/checkin (POST: check in now), …/checkins (POST the check-in schedule), …/approvals
 (GET; POST …/approvals/{aid} {decision: approve|deny, command?}), …/threads (list, POST starts
 one {objective, title?, edits?, after?}), …/threads/{tid} (one, with its run log) and its …/tell, …/message
@@ -1980,6 +1980,29 @@ class Hub:
         chat = self.chats.get(task.get("chat") or "")
         return None if chat is None or getattr(chat, "closed", False) else chat
 
+    def scout_from_task(self, task: dict) -> dict:
+        """A scout whose goal is a scheduled task's prompt, running on its schedule: what a timed job
+        that isn't tied to a chat became. Returns the project; ValueError when the task doesn't make one."""
+        workdir = ""
+        if task.get("workdir"):
+            try:
+                workdir = usable_folder(task["workdir"])
+            except ValueError:
+                pass  # gone since: the default folder, as the task would have run in
+        if not workdir:
+            workdir = os.path.abspath(os.path.expanduser(self.cfg.brain.workdir)) if self.cfg.brain.workdir else os.getcwd()
+        project = self.projects.upsert({"goal": str(task.get("prompt") or ""), "title": str(task.get("title") or ""),
+                                        "workdirs": [workdir]})
+        name = (project.get("scout") or {}).get("name") or project.get("title") or "Scout"
+        fields = {k: task[k] for k in ("repeat", "time", "date", "weekday", "every_minutes", "enabled") if k in task}
+        try:
+            self.schedule.upsert({"kind": "checkin", "project": project["id"], "prompt": "",
+                                  "title": f"{name}'s status report", **fields})
+        except (TypeError, ValueError):
+            self.projects.delete(project["id"])
+            raise
+        return project
+
     def run_task(self, task: dict, brain=None, cfg: Config | None = None, note: str = ""):
         """Fire a task; answers with the chat it ran in (None: a reminder whose chat has gone)."""
         home = self.task_chat(task)
@@ -2052,8 +2075,14 @@ class Hub:
             return chat
         if task.get("kind") == "reminder" or self.task_chat(task) is not None:
             return self.run_task(task)
-        brain, cfg, note = await asyncio.get_running_loop().run_in_executor(None, self._prepare_chat)
-        return self.run_task(task, brain, cfg, note)
+        workdir, moved = "", ""
+        if task.get("workdir"):
+            try:
+                workdir = usable_folder(task["workdir"])
+            except ValueError as e:
+                moved = f"{e}; this run works in the default folder instead."
+        brain, cfg, note = await asyncio.get_running_loop().run_in_executor(None, self._prepare_chat, None, workdir)
+        return self.run_task(task, brain, cfg, f"{note} {moved}".strip())
 
     SLEEP_POLL = 10.0
     MOOD_POLL = 60.0
@@ -2076,7 +2105,30 @@ class Hub:
                 self.log(f"woke after {(gap[1] - gap[0]) / 60:.0f} min asleep")
                 self.post({"type": "slept", "from": round(gap[0], 1), "to": round(gap[1], 1)})
 
+    def fold_tasks_into_scouts(self) -> None:
+        """Scheduled tasks from before scouts took them over (on their own, not set from a chat) become
+        scouts on the same schedule, and an on-call scout (a leash the apps no longer offer) becomes one
+        that asks first with its schedule off, which is what on call did. Once, as the server starts serving."""
+        from vision.projects import clean_settings
+
+        for project in self.projects.list(include_archived=True):
+            settings = clean_settings({}, project.get("settings"))
+            if settings["leash"] == "on_call":
+                self.projects.upsert({"id": project["id"], "settings": {**settings, "leash": "checkins"}})
+                if (task := self.schedule.for_project(project["id"])) is not None:
+                    self.schedule.upsert({"id": task["id"], "enabled": False})
+                self.log(f"project {project['id']}: on call is now its schedule off")
+        for task in self.schedule.list():
+            if task.get("kind") == "task" and not task.get("chat"):
+                try:
+                    project = self.scout_from_task(task)
+                    self.schedule.delete(task["id"])
+                    self.log(f"scheduled task {task['id']} is now scout {project['id']}")
+                except (TypeError, ValueError, KeyError) as e:
+                    self.log(f"scheduled task {task['id']} stays a task: {e}")
+
     async def _watch_schedule(self) -> None:
+        self.fold_tasks_into_scouts()
         while True:
             try:
                 for task in self.schedule.due():
@@ -2311,7 +2363,7 @@ class Hub:
             leash = clean_settings({}, project.get("settings"))["leash"]
             task = self.schedule.for_project(project["id"]) if hasattr(self.schedule, "for_project") else None
             line = (f"{needs} need{'s' if needs == 1 else ''} you" if needs else "paused" if project.get("status") == "paused"
-                    else "working" if "working" in states else "on call" if leash == "on_call" else "resting")
+                    else "working" if "working" in states else "when asked" if leash == "on_call" else "resting")
             scout = project.get("scout") or {}
             out.append({"id": project["id"], "name": scout.get("name") or project.get("title") or "Scout",
                         "hue": scout.get("hue", 205), "trait": scout.get("trait") or "antenna",
@@ -2589,16 +2641,16 @@ class Hub:
             self.log(f"project {pid}: couldn't keep the check-in: {e}")
         name = (project.get("scout") or {}).get("name") or project.get("title") or "Your scout"
         words = f"{needs} need{'s' if needs == 1 else ''} you" if needs else "nothing needs you"
-        event = log_activity(folder, "checkin_done", f"Checked in: {words}" if not error else f"Check-in stopped: {error}")
+        event = log_activity(folder, "checkin_done", f"Status report: {words}" if not error else f"Status report stopped: {error}")
         self.post({"type": "activity", "project": pid, "event": event})
-        self.post({"type": "checkin", "project": pid, "chat": chat.id, "state": "done", "label": info.get("label") or "Check-in",
+        self.post({"type": "checkin", "project": pid, "chat": chat.id, "state": "done", "label": info.get("label") or "Status report",
                    "started": round(started, 1), "ended": round(ended, 1), "summary": (reply or "")[:SUMMARY_CHARS],
                    "needs_you": needs, **({"error": error} if error else {})})
         self.post_project(project)
         notify = (project.get("settings") or {}).get("notify") or "needs_you"
         if notify == "all" or (notify == "needs_you" and (needs or error)):
             first = next((ln.strip() for ln in (reply or "").splitlines() if ln.strip()), "")
-            self.push(f"{name} checked in" + (f" · {words}" if needs else ""), error or first[:180] or words, chat.id, project=pid)
+            self.push(f"{name} sent a status report" + (f" · {words}" if needs else ""), error or first[:180] or words, chat.id, project=pid)
 
     def moods_changed(self) -> None:
         """Projects whose scout's mood is no longer the one the apps were shown (a thread changed, or time
@@ -2764,8 +2816,8 @@ class Hub:
     def project_saved(self, project: dict, before: dict | None = None) -> None:
         """A project made or edited (`before`: as it was): its open chat takes the new goal and instructions
         (and title), and every phone hears of it. Paused: its threads stop where they are, to carry on at
-        resume. Archived: its chat goes back to being an ordinary one, so nothing disappears, and its
-        working threads stop. A new coordinator model reaches the open chat as a /model would."""
+        resume. Archived (retired): its working threads stop and its chat stays its own, so bringing it back
+        (resume) finds it as it was. A new coordinator model reaches the open chat as a /model would."""
         was = (before or {}).get("status")
         now = project.get("status")
         if (pt := self.threads.get(project["id"])) is not None or now != was == "paused":
@@ -2781,11 +2833,12 @@ class Hub:
             elif was == "paused" and now == "active":
                 self.log(f"project {project['id']}: resumed")
                 pt.resume()
+            elif was == "archived" and now == "active":
+                self.log(f"project {project['id']}: brought back")
         chat = self.project_chat(project)
         if chat is not None:
-            archived = now == "archived"
-            chat.set_project(None if archived else project)
-            if not archived:
+            chat.set_project(project)
+            if now != "archived":
                 chat.title = project["title"]
                 old, new = (before or {}).get("settings") or {}, project.get("settings") or {}
                 if before is not None and (old.get("coordinator_model"), old.get("coordinator_effort")) != \
@@ -2793,6 +2846,38 @@ class Hub:
                     chat.switch_when_free(new["coordinator_model"], new.get("coordinator_effort") or None)
             self.post(chat.summary())
         self.post_project(project)
+
+    def delete_project(self, project: dict) -> list[str]:
+        """A retired project gone for good: its threads stopped and their worktrees removed (one with work
+        that's on no other branch is kept), its check-ins, its chat and its folder. The work folder itself
+        is never touched. Returns a line for each worktree kept."""
+        from vision.runs import remove_worktree
+
+        pid = project["id"]
+        pt = self.threads.get(pid)
+        if pt is None and (self.projects.root / pid / "threads.json").exists():
+            pt = self.project_threads(project)
+        kept = []
+        for t in pt.list() if pt is not None else []:
+            if t["state"] == "working":
+                pt.stop(t["id"])
+            if t.get("worktree") and (why := remove_worktree(t["worktree"], t.get("branch") or "")):
+                kept.append(f"{tilde(t['worktree'])} kept: {why}")
+        with self._lock:
+            self.threads.pop(pid, None)
+        self._moods.pop(pid, None)
+        if (task := self.schedule.for_project(pid)) is not None:
+            self.schedule.delete(task["id"])
+            self.post({"type": "scheduled"})
+        if (chat := self.project_chat(project)) is not None:
+            chat.shut()
+            chat.cancel()
+            self.close_chat(chat, already_cancelled=True)
+            self.post({"type": "chat_closed", "chat": chat.id})
+        self.projects.delete(pid)
+        self.log(f"project deleted: {pid} {project.get('title')!r}" + "".join(f"; {k}" for k in kept))
+        self.post({"type": "project_removed", "project": pid})
+        return kept
 
     async def open_project_chat(self, project: dict) -> Chat:
         """The project's chat: the open one, or a new one in the project's folder (the first; the server's
@@ -2885,8 +2970,8 @@ class Hub:
             return
         if kind == "new" and msg.get("project"):
             # A project's chat: the open one, or a new one in the project's folder.
-            project = self.projects.get(str(msg["project"]))
-            if project is None or project.get("status") == "archived":
+            project = self.projects.get(str(msg["project"]))  # a retired one's too: its chat is still its own
+            if project is None:
                 await ws.send_json({"type": "error", "text": "That project is gone."})
                 return
             try:
@@ -3541,17 +3626,40 @@ def create_app(hub: Hub) -> FastAPI:
     @app.post("/scheduled", dependencies=[Depends(bearer)])
     async def scheduled_save(body: dict) -> dict:
         """Add a task, or edit one (`id` set): {title, prompt, repeat, time, date?, weekday?, enabled,
-        kind?, chat?}. `pids` (the `vision remind` command's ancestors) names a terminal chat instead
+        kind?, chat?, workdir?}. `pids` (the `vision remind` command's ancestors) names a terminal chat instead
         of `chat`: the one whose process is among them."""
         pids = body.pop("pids", None)
         if not body.get("chat") and isinstance(pids, list):
             body["chat"] = next((hub.links[p].id for p in pids if p in hub.links), "")
+        if not body.get("id") and (body.get("kind") or "task") == "task" and not body.get("chat"):
+            # A timed job on its own is a scout now: it keeps one chat and remembers its last run.
+            from vision.scheduled import clean as scheduled_clean
+
+            try:
+                if body.get("workdir"):
+                    body["workdir"] = usable_folder(str(body["workdir"]))
+                project = hub.scout_from_task(scheduled_clean(body))
+            except (TypeError, ValueError) as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            hub.log(f"scheduled job made scout {project['id']}: {project['title']!r}")
+            hub.project_saved(project)
+            hub.post({"type": "scheduled"})
+            return hub.schedule.for_project(project["id"]) or {}
         try:
+            if body.get("workdir"):
+                body["workdir"] = usable_folder(str(body["workdir"]))
             task = hub.schedule.upsert(body)
         except (TypeError, ValueError) as e:
             raise HTTPException(status_code=400, detail=str(e))
         hub.log(f"scheduled {task['kind']} saved: {task['title']!r} ({task['repeat']} {task['time']})")
         hub.post({"type": "scheduled"})
+        if not body.get("id") and task.get("next_run") and (home := hub.task_chat(task)) is not None:
+            # Set from a chat: that chat says so, as it has no list of its own to show it in.
+            from datetime import datetime
+
+            when = datetime.fromtimestamp(task["next_run"]).strftime("%a %H:%M")
+            what = "Reminder" if task["kind"] == "reminder" else "Scheduled"
+            home.post({"type": "note", "text": f"{what} for {when}{'' if task['repeat'] == 'once' else ', ' + task['repeat']}: {task['title']}"})
         return task
 
     @app.delete("/scheduled/{tid}", dependencies=[Depends(bearer)])
@@ -3662,10 +3770,9 @@ def create_app(hub: Hub) -> FastAPI:
 
     @app.post("/projects/{ref}/resume", dependencies=[Depends(bearer)])
     async def projects_resume(ref: str) -> dict:
-        """Resume a paused project: its paused threads carry on in their own sessions."""
+        """Resume a paused project (its paused threads carry on in their own sessions), or bring back a
+        retired one, with its chat and check-in schedule as they were."""
         before = project_or_404(ref)
-        if before.get("status") == "archived":
-            raise HTTPException(status_code=409, detail="that project is archived")
         project = hub.projects.upsert({"id": before["id"], "status": "active"})
         hub.project_saved(project, before)
         return hub.view_project(project)
@@ -3742,7 +3849,7 @@ def create_app(hub: Hub) -> FastAPI:
             raise HTTPException(status_code=409, detail=f"that project is {project['status']}")
         chat = await hub.checkin(project["id"], why="now")
         if chat is None:
-            raise HTTPException(status_code=409, detail="it couldn't check in now")
+            raise HTTPException(status_code=409, detail="it couldn't send a status report now")
         return {"chat": chat.id}
 
     @app.post("/projects/{ref}/checkins", dependencies=[Depends(bearer)])
@@ -3759,7 +3866,7 @@ def create_app(hub: Hub) -> FastAPI:
             fields = {k: body[k] for k in ("repeat", "time", "weekday", "every_minutes", "enabled") if k in body}
             try:
                 hub.schedule.upsert({**({"id": old["id"]} if old else {}), "kind": "checkin", "project": project["id"],
-                                     "title": f"{name}'s check-in", "prompt": "", **fields})
+                                     "title": f"{name}'s status report", "prompt": "", **fields})
             except (TypeError, ValueError) as e:
                 raise HTTPException(status_code=400, detail=str(e)) from None
         hub.post({"type": "scheduled"})
@@ -3770,21 +3877,28 @@ def create_app(hub: Hub) -> FastAPI:
     async def projects_open(ref: str) -> dict:
         """The project's chat, opened if it isn't (`vision project open` joins it next)."""
         project = project_or_404(ref)
-        if project.get("status") == "archived":
-            raise HTTPException(status_code=409, detail="that project is archived")
         chat = await hub.open_project_chat(project)
         return chat.summary()
 
+    @app.post("/projects/{ref}/delete", dependencies=[Depends(bearer)])
+    async def projects_delete(ref: str) -> dict:
+        """Delete a retired project for good (retire it first: DELETE /projects/{ref}): its chat, threads,
+        memory and check-ins. Its work folder is left alone; `kept` lists worktrees with work in them."""
+        project = project_or_404(ref)
+        if project.get("status") != "archived":
+            raise HTTPException(status_code=409, detail="retire it first")
+        kept = await asyncio.to_thread(hub.delete_project, project)
+        return {"deleted": project["id"], "kept": kept}
+
     @app.delete("/projects/{ref}", dependencies=[Depends(bearer)])
     async def projects_archive(ref: str) -> dict:
-        """Archive a project: gone from the lists, its chat left open as an ordinary one. Nothing on disk
-        is deleted."""
-        project = hub.projects.archive(project_or_404(ref)["id"])
-        if (task := hub.schedule.for_project(project["id"])) is not None:
-            hub.schedule.delete(task["id"])  # a retired scout doesn't check in
-            hub.post({"type": "scheduled"})
+        """Archive (retire) a project: its threads stop, it leaves the lists (GET /projects?all=1 still has
+        it) and its check-ins are skipped, as a paused one's are. Its chat stays its own and nothing on disk is
+        deleted, so POST …/resume brings it back as it was."""
+        before = project_or_404(ref)
+        project = hub.projects.archive(before["id"])
         hub.log(f"project archived: {project['id']} {project['title']!r}")
-        hub.project_saved(project)
+        hub.project_saved(project, before)
         return hub.view_project(project)
 
     # -- project threads (runs.py)

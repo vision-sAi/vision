@@ -115,22 +115,23 @@ def clean(body: dict, old: dict | None = None) -> dict:
     """A task from the phone's form, checked; `old` supplies what the edit leaves out. Raises ValueError."""
     task = dict(old or {})
     interval_was = (task.get("repeat"), task.get("every_minutes"))
-    for key in ("title", "prompt", "repeat", "time", "date", "weekday", "enabled", "kind", "chat", "project", "every_minutes"):
+    for key in ("title", "prompt", "repeat", "time", "date", "weekday", "enabled", "kind", "chat", "project", "every_minutes", "workdir"):
         if key in body:
             task[key] = body[key]
     task["kind"] = task.get("kind") or "task"
     if task["kind"] not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
     task["chat"] = str(task.get("chat") or "")
+    task["workdir"] = str(task.get("workdir") or "").strip()  # the folder a run works in; "" is the server's own
     task["prompt"] = str(task.get("prompt") or "").strip()
     if task["kind"] == "checkin":
         task["project"] = str(task.get("project") or "")
         if not task["project"]:
-            raise ValueError("a check-in needs its project")
+            raise ValueError("a status report needs its project")
     elif not task["prompt"]:
         raise ValueError("a scheduled task needs a prompt")
     task["title"] = (str(task.get("title") or "").strip()[:80] or task["prompt"].splitlines()[0][:60]
-                     if task["prompt"] else str(task.get("title") or "").strip()[:80] or "Check-in")
+                     if task["prompt"] else str(task.get("title") or "").strip()[:80] or "Status report")
     if task.get("repeat") not in REPEATS:
         raise ValueError(f"repeat must be one of {', '.join(REPEATS)}")
     if task["repeat"] == "every":
