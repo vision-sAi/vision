@@ -166,7 +166,11 @@
 
   const MODELS = {
     tabs: [{ tab: "Claude", models: [{ id: "opus", label: "Opus 5.5", description: "Most capable" }, { id: "sonnet", label: "Sonnet 5.5", description: "Fast and capable" }] },
-           { tab: "Codex", models: [{ id: "gpt-5.5-codex", label: "GPT-5.5 Codex", description: "OpenAI's coding model" }] }],
+           { tab: "Codex", models: [{ id: "gpt-5.5-codex", label: "GPT-5.5 Codex", description: "OpenAI's coding model" },
+             { id: "gpt-5.5", label: "GPT-5.5", description: "" }, { id: "gpt-5.5-mini", label: "GPT-5.5 mini", description: "" }] },
+           { tab: "Grok", models: [{ id: "grok-5", label: "Grok 5", description: "" }, { id: "grok-5-fast", label: "Grok 5 Fast", description: "" }] },
+           { tab: "Local", models: [{ id: "local/qwen3", label: "Qwen3 32B", description: "" }, { id: "local/llama", label: "Llama 4 Scout", description: "" },
+             { id: "local/gemma", label: "Gemma 4 27B", description: "" }] }],
     efforts: ["low", "medium", "high", "max"].map((e) => ({ id: e, label: e[0].toUpperCase() + e.slice(1), description: "" })),
   };
   const FOLDERS = {
