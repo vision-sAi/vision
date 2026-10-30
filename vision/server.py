@@ -326,17 +326,38 @@ def video_digest(path: str | Path) -> dict | None:
         return None
 
 
+def ffmpeg_exe() -> str:
+    """The ffmpeg to run: the static one imageio-ffmpeg ships (the serve extra, so every machine has it),
+    else one on the PATH."""
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001  (not installed, or no binary for this platform)
+        if exe := shutil.which("ffmpeg"):
+            return exe
+        raise RuntimeError("ffmpeg is not available: reinstall Vision with the serve extra, or install ffmpeg") from None
+
+
+def probe_video(ffmpeg: str, path: Path) -> tuple[float, set[str]]:
+    """A clip's length in seconds and the kinds of track in it ({"video", "audio"}), read from the header
+    `ffmpeg -i` prints (imageio-ffmpeg has no ffprobe)."""
+    head = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-i", str(path)],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace").stderr
+    if m := re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", head):
+        duration = int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3])
+    else:
+        duration = 0.0
+    kinds = {k.lower() for k in re.findall(r"Stream #\d+:\d+[^\n]*?: (Video|Audio):", head)}
+    return duration, kinds
+
+
 def digest_video(path: Path, transcribe=None) -> dict:
     """Turn an uploaded clip into what a brain can take in: JPEG frames where the picture changes
     (plus evenly spaced ones so a static stretch isn't one frame), capped at MAX_VIDEO_FRAMES, and the
     soundtrack through Whisper. Stored beside the clip as <clip>.json; frames in <clip>-frames/."""
-    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
-        raise RuntimeError("ffmpeg is not installed on the computer")
-    probe = json.loads(subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", str(path)],
-        capture_output=True, text=True, check=True, encoding="utf-8").stdout)
-    duration = float(probe.get("format", {}).get("duration") or 0)
-    kinds = {s.get("codec_type") for s in probe.get("streams", [])}
+    ffmpeg = ffmpeg_exe()
+    duration, kinds = probe_video(ffmpeg, path)
     if "video" not in kinds:
         raise RuntimeError("no video track in that file")
     frames_dir = path.with_name(path.stem + "-frames")
@@ -345,7 +366,7 @@ def digest_video(path: Path, transcribe=None) -> dict:
 
     # Scene changes (and the first frame); showinfo logs each kept frame's time.
     run = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-nostdin", "-y", "-i", str(path),
+        [ffmpeg, "-hide_banner", "-nostdin", "-y", "-i", str(path),
          "-vf", f"select='eq(n,0)+gt(scene,{SCENE_THRESHOLD})',showinfo,{fit}", "-fps_mode", "vfr", "-q:v", "3",
          str(frames_dir / "s%04d.jpg")],
         capture_output=True, text=True, encoding="utf-8")
@@ -362,7 +383,7 @@ def digest_video(path: Path, transcribe=None) -> dict:
         if any(abs(t - s) < 1.5 for s, _ in scene):
             continue
         out = frames_dir / f"e{k:04d}.jpg"
-        subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", str(path),
+        subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", str(path),
                         "-frames:v", "1", "-vf", fit, "-q:v", "3", str(out)], capture_output=True)
         if out.is_file():
             even.append((t, out))
@@ -385,7 +406,7 @@ def digest_video(path: Path, transcribe=None) -> dict:
 
     transcript = ""
     if "audio" in kinds and transcribe is not None:
-        wav = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-v", "error", "-i", str(path), "-vn", "-ac", "1",
+        wav = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-i", str(path), "-vn", "-ac", "1",
                               "-ar", "16000", "-f", "wav", "pipe:1"], capture_output=True).stdout
         if wav:
             transcript = (transcribe(wav) or "").strip()

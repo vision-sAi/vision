@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import tempfile
 import time
@@ -143,8 +142,8 @@ class UploadTests(unittest.TestCase):
         self.assertNotIn("path", response.json())
 
 
-    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
     def test_uploaded_video_reaches_the_brain_as_frames_and_words(self):
+        # Runs everywhere: the serve extra brings its own ffmpeg, so no machine needs one installed.
         from pathlib import Path
         from types import SimpleNamespace
         from fastapi.testclient import TestClient
@@ -156,10 +155,13 @@ class UploadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(server, "UPLOAD_DIR", Path(directory)):
             clip = Path(directory) / "source.mp4"
             # Portrait, 12 s, a hard cut from red to blue at 6 s, with sound.
-            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=red:s=360x640:d=6:r=10",
+            subprocess.run([server.ffmpeg_exe(), "-v", "error", "-y", "-f", "lavfi", "-i", "color=red:s=360x640:d=6:r=10",
                             "-f", "lavfi", "-i", "color=blue:s=360x640:d=6:r=10", "-f", "lavfi", "-i", "sine=d=12",
                             "-filter_complex", "[0][1]concat=n=2:v=1:a=0[v]", "-map", "[v]", "-map", "2",
                             "-c:a", "aac", "-shortest", str(clip)], check=True)
+            duration, kinds = server.probe_video(server.ffmpeg_exe(), clip)
+            self.assertAlmostEqual(duration, 12, delta=0.5)
+            self.assertEqual(kinds, {"video", "audio"})
             response = client.post("/upload", files={"file": ("video.mp4", clip.read_bytes(), "video/mp4")},
                                    headers={"Authorization": "Bearer upload-test"})
             self.assertEqual(response.status_code, 200, response.text)
