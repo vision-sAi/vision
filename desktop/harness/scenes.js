@@ -10,7 +10,7 @@
     folder: "~/code/vision", busy: false, waiting: false, questions: [], queued: [], updated: now - ago, mode: "auto", ...more,
   });
   const CHATS = [
-    chat("c1", "Fix the flaky upload test", 600, { suggestion: "Run the whole suite to be sure" }),
+    chat("c1", "Fix the flaky upload test", 600, { suggestion: "Run the whole suite to be sure", context: { tokens: 84_000, window: 200_000 } }),
     chat("c2", "Weekend plans in Austin", 3000, { busy: true, model: "Sonnet 5.5", folder: "~" }),
     chat("c3", "Frigate camera dropouts", D + 100, { source: "terminal", folder: "~" }),
     chat("c4", "Draft the TestFlight notes", 3 * D, { waiting: true }),
@@ -141,7 +141,16 @@
 
   window.SCENES = {
     chat: { ...base, steps: [
-      { wait: 300, check: "a pinned chat heads the list", fn: () => document.querySelector("#chats .group:not(.scouts-head)")?.textContent === "Pinned" && document.querySelector("#chats .group:not(.scouts-head) + .chat-item .chat-name")?.textContent === "Compare NAS drives" },
+      { wait: 300, check: "the composer shows how full the chat's context is", fn: () => !document.querySelector("#context").hidden && document.querySelector("#context-text").textContent === "42%" },
+      { run: () => {
+        const i = document.querySelector("#input");
+        i.focus(); i.value = "first line"; i.setSelectionRange(10, 10);
+        i.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true }));
+        i.setRangeText("second line", i.selectionStart, i.selectionEnd, "end");
+      } },
+      { check: "Shift+Return breaks the line instead of sending", fn: () => document.querySelector("#input").value === "first line\nsecond line" && !sentOf("message").length },
+      { run: () => { const i = document.querySelector("#input"); i.value = ""; i.dispatchEvent(new Event("input")); } },
+      { check: "a pinned chat heads the list", fn: () => document.querySelector("#chats .group:not(.scouts-head)")?.textContent === "Pinned" && document.querySelector("#chats .group:not(.scouts-head) + .chat-item .chat-name")?.textContent === "Compare NAS drives" },
       { check: "a chat can be opened in a terminal from its title bar", fn: () => !document.querySelector("#open-terminal").hidden },
       { run: () => document.querySelector("#open-terminal").click() },
       { wait: 50, check: "which asks its computer to open it", fn: () => sentOf("open_terminal")[0]?.chat === "c1" },

@@ -388,6 +388,14 @@ svg.icon { width: 16px; height: 16px; stroke-width: 1.8; flex: none; }
   display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px; border: 0; border-radius: 8px;
   background: none; color: var(--dim); font-size: 12.5px; max-width: 260px; white-space: nowrap;
 }
+.context { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 6px; color: var(--dim); font-size: 12.5px; font-variant-numeric: tabular-nums; cursor: default; flex: none; }
+.context[hidden] { display: none; }
+.context svg { width: 16px; height: 16px; transform: rotate(-90deg); }
+.context circle { fill: none; stroke-width: 2.5; }
+.context .track { stroke: var(--line-strong); }
+.context .fill { stroke: currentColor; stroke-linecap: round; stroke-dasharray: var(--fill, 0) 100; transition: stroke-dasharray 0.3s; }
+.context.warn { color: var(--warn); }
+.context.full { color: var(--danger); }
 .chip-btn:disabled { opacity: 0.4; cursor: default; }
 .chip-btn span:not([data-icon]) { overflow: hidden; text-overflow: ellipsis; }
 .chip-btn svg.icon { width: 14px; height: 14px; }
