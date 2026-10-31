@@ -319,7 +319,7 @@ class TerminalSuggestionTests(unittest.TestCase):
 
         self.assertEqual(self.drawn(), "yes, move it")
         self.screen.busy = True
-        self.assertEqual(self.drawn(), "")
+        self.assertEqual(self.drawn(), self.screen.placeholder)  # mid-reply the guess gives way to the placeholder
         self.screen.busy = False
         self.screen.area.buffer.set_document(Document("no", 2))
         self.assertEqual(self.drawn(), "no")

@@ -72,7 +72,7 @@ class RowsTests(unittest.TestCase):
         tasks = self.tasks(ACTIVE, PENDING)
         e.checklist_fn = lambda: tasks
         text = plain(e.lines(60))
-        self.assertRegex(text[-3], r"^. Doing task 1… \(0s · thinking · esc to stop\)$")
+        self.assertRegex(text[-3], r"^  . Doing task 1… \(0s · thinking · esc to stop\)$")
         self.assertEqual(text[-2:], ["  ⎿  ■ Task 1", "     □ Task 2"])
 
     def test_todo_calls_get_no_row_of_their_own(self):

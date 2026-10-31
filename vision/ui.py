@@ -24,7 +24,6 @@ from prompt_toolkit.layout.processors import Processor, Transformation, Transfor
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Frame, Label, TextArea
-from prompt_toolkit.widgets.base import Border
 from rich.box import ROUNDED
 from rich.console import Console, Group
 from rich.color import Color
@@ -37,26 +36,49 @@ from rich.syntax import Syntax
 from rich.padding import Padding
 from rich.table import Table
 from rich.text import Text
+from rich.theme import Theme
 
-from vision.buddy import HEIGHT as BUDDY_HEIGHT, MIN_COLUMNS as BUDDY_MIN_COLUMNS, WIDTH as BUDDY_WIDTH, Buddy, FACE_BG, FACE_X0, FACE_X1, idle_sprite
+from vision.buddy import HEIGHT as BUDDY_HEIGHT, MIN_COLUMNS as BUDDY_MIN_COLUMNS, WIDTH as BUDDY_WIDTH, Buddy, face
 from vision.brain import clock
 from vision.checklist import ACTIVE, DONE, TODO_TOOLS
-from vision.theme import ACCENT
+from vision.theme import (ACCENT, ACCENT_HI, BAND, BAND_FLAT, BAND_INK, CARD, CARD_EDGE, CHIP_BG, CHIP_INK, CODE, DANGER, DIM, FAINT, LINE, OK,
+                          RICH_THEME, SELECTION, SHELL, TEXT, WARN, hsl, mix, truecolor)
 
-USER_STYLE = "bold"  # the user's own lines: bold behind a `›` mark
-USER_BG = "on grey23"  # ...on a full-width grey band, like Claude Code
-SEL_STYLE = "bg:#264f78"  # a mouse selection over the transcript: Claude Code's dark-theme selectionBg, rgb(38, 79, 120)
-PREFIX_W = BUDDY_WIDTH  # Pip's input gutter width
-# The transcript's two-cell gutter, as Claude Code and Codex draw theirs: `› ` before what the user
-# said, `● ` before Vision's prose, `◉ ` while the mic is open; tool rows carry their own `⏺`.
-USER_MARK, REPLY_MARK, HEAR_MARK, SHELL_MARK = "› ", "● ", "◉ ", "! "
-GUTTER = len(REPLY_MARK)
+USER_STYLE = f"bold {BAND_INK}"  # the user's own words, on the band (see GradientBand)
+SEL_STYLE = f"bg:{SELECTION}"  # a mouse selection over the transcript
+PREFIX_W = BUDDY_WIDTH  # the buddy's input gutter width
+# The transcript's two-cell gutter: Vision's prose sits indented behind it with no mark (the user's band
+# says who is talking), `◉ ` marks words still being heard and `! ` a shell command on its band. Copying
+# drops the gutter with the margin (see selected_text), so the marks are kept in GUTTER_MARKS.
+USER_MARK, REPLY_MARK, HEAR_MARK, SHELL_MARK = "› ", "  ", "◉ ", "! "
+GUTTER = 2
 GUTTER_MARKS = {USER_MARK, REPLY_MARK, HEAR_MARK, SHELL_MARK}
-SHELL_STYLE = "#fd5db1"  # shell mode (`!`): its prompt, border and transcript mark, Claude Code's bash pink
+SHELL_STYLE = SHELL  # shell mode (`!`): its prompt, border and transcript mark stay pink
 SHELL_SHOWN = 200  # lines of a shell command's output kept in the transcript (the end of it)
-NOTICE_MARKS = {"info": ("· ", "dim"), "warn": ("⚠ ", "yellow"), "error": ("✗ ", "red")}
+NOTICE_MARKS = {"info": ("· ", FAINT), "warn": ("⚠ ", WARN), "error": ("✗ ", DANGER)}
 
-MODE_BADGES = {"auto": "⏵⏵ auto", "plan": "⏸ plan"}  # what the bottom-left corner shows
+MODE_BADGES = {"auto": "⏵⏵ auto", "plan": "⏸ plan"}  # the mode chip in the composer's bottom border
+
+# rich's markdown styles as Panes draws them: `code` as a chip, links in the accent, quiet rules.
+UI_THEME = Theme({
+    **RICH_THEME.styles,
+    "markdown.code": f"{CHIP_INK} on {CHIP_BG}",
+    "markdown.code_block": f"on {CODE}",
+    "markdown.link": f"underline {ACCENT_HI}",
+    "markdown.link_url": DIM,
+    "markdown.item.bullet": DIM,
+    "markdown.item.number": DIM,
+    "markdown.block_quote": f"italic {DIM}",
+    "markdown.hr": LINE,
+    "markdown.h1": f"bold {TEXT}",
+    "markdown.h2": f"bold {TEXT}",
+    "markdown.h3": f"bold {TEXT}",
+    "markdown.h4": f"bold {DIM}",
+    "markdown.h5": DIM,
+    "markdown.h6": f"italic {DIM}",
+    "markdown.table.header": f"bold {DIM}",
+    "markdown.table.border": LINE,
+})
 
 # A lone Esc byte could be the start of an escape sequence, so prompt_toolkit holds it for
 # `ttimeoutlen` (0.5 s by default) before treating it as the Escape key. Terminals deliver whole
@@ -65,7 +87,7 @@ ESC_TIMEOUT = 0.05
 
 # prompt_toolkit only draws 24-bit colour when told to; on 256 colours the diff's dark red and green
 # (and other dark tints) snap to the same greys. Terminals that say they do truecolor get it.
-if os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit"):
+if truecolor():
     os.environ.setdefault("PROMPT_TOOLKIT_COLOR_DEPTH", "DEPTH_24_BIT")
 
 
@@ -76,42 +98,48 @@ def _snappy(app):
 
 
 PT_STYLE = Style.from_dict({
+    # the composer: an accent edge round a raised fill, its chips set into the bottom border
     "frame.border": ACCENT,
-    "frame.label": ACCENT,
-    "frame.corner": ACCENT,  # the model name in the input box's bottom-right border
-    "placeholder": "#6b7580 italic",
-    "shell.prompt": f"{SHELL_STYLE} bold",  # shell mode (`!`): the box's prompt and border turn pink
-    "shell frame.border": SHELL_STYLE,
-    "shell frame.corner": SHELL_STYLE,
-    "queued": "#c9d1d9",  # the strip of messages waiting behind a reply, over the input box
-    "queued.hint": "#6b7580 italic",
-    "queued.sel": f"{ACCENT} bold",
-    "queued.edit": "#6b7580",
-    "status": "#8a939c",
-    "jump": "bg:#264f78 #e6edf3",  # the "↓ Jump to bottom" pill over the transcript while it is scrolled up
-    "status.key": "#c9d1d9 bold",
-    # mode indicator, bottom left (Shift-Tab)
-    "mode.auto": "ansiyellow bold",
-    "mode.plan": "ansibrightgreen bold",
-    "pick.title": "bold",
-    "pick.cursor": f"{ACCENT} bold",
-    "pick.selected": f"{ACCENT} bold",
-    "pick.hint": "#6b7580",
-    "pick.desc": "#8a939c",
-    "pick.note": "#5a636c",  # the provider tab's "via …" line under the rows, a shade under the hint
-    "pick.num": "#6b7580",
-    "pick.current": ACCENT,
-    "pick.tab": "#8a939c",
-    "pick.tab.active": f"bg:{ACCENT} #000000 bold",
-    # Pip Obsidian (the inset face and animated cells supply their own flat colors).
-    "buddy.body": "#899a90",
-    "buddy.eye": "#c1ebd1",
-    "buddy.mouth": "#c1ebd1",
-    "buddy.key": "#d0e7d9",
-    "buddy.think": "#dbcaa5",
-    "buddy.listen": "#c1ebd1",
-    "buddy.err": "#d8a191",
-    "buddy.sleep": "#738378",
+    "frame.label": ACCENT_HI,
+    "frame.corner": ACCENT_HI,  # the model, bottom right
+    "frame.caret": DIM,
+    "frame.sep": FAINT,
+    "frame.folder": DIM,
+    "composer": f"bg:{CARD} {TEXT}",
+    "placeholder": f"{DIM} italic",
+    "shell.prompt": f"{SHELL} bold",  # shell mode (`!`): the box's prompt and border turn pink
+    "shell frame.border": SHELL,
+    # the pinned title over the transcript
+    "title": f"bold {TEXT}",
+    "title.folder": DIM,
+    "title.rule": LINE,
+    # the overlays (model picker, question form): rounded cards on the raised fill
+    "card.fill": f"bg:{CARD}",  # not plain "card": `card.border` names its parent class too, and would take the fill
+    "card.border": ACCENT,
+    "card.label": f"bold {TEXT}",
+    "ask card.border": WARN,
+    "ask card.label": f"bold {WARN}",
+    "queued": DIM,  # the strip of messages waiting behind a reply, over the input box
+    "queued.hint": FAINT,
+    "queued.sel": f"{ACCENT_HI} bold",
+    "queued.edit": FAINT,
+    "status": DIM,
+    "status.faint": FAINT,
+    "status.spin": ACCENT,
+    "jump": f"bg:{SELECTION} {TEXT}",  # the "↓ Jump to bottom" pill over the transcript while it is scrolled up
+    "status.key": TEXT,
+    "mode.auto": WARN,
+    "mode.plan": OK,
+    "pick.title": f"bold {TEXT}",
+    "pick.cursor": f"{ACCENT_HI} bold",
+    "pick.selected": f"{ACCENT_HI} bold",
+    "pick.hint": FAINT,
+    "pick.desc": DIM,
+    "pick.note": FAINT,  # the provider tab's "via …" line under the rows
+    "pick.num": FAINT,
+    "pick.current": OK,
+    "pick.tab": DIM,
+    "pick.tab.active": f"bg:{ACCENT} #ffffff bold",
 })
 
 # ---------------------------------------------------------------- header
@@ -123,55 +151,73 @@ def show_header(
     console.print(header_renderable(model=model, directory=directory, voice=voice, resumed=resumed))
     for line in extra:
         if line:
-            console.print(Text(line, style="dim"))
+            console.print(Text(line, style=DIM))
 
 
 def _pip_mark() -> Text:
-    """Still idle Pip, four rows, the same colours as the composer gutter."""
-    rows, colors = idle_sprite()
-    out = Text()
-    for y, row in enumerate(rows):
-        if y:
-            out.append("\n")
-        for x, char in enumerate(row):
-            style = colors[y][x]
-            if 1 <= y <= 2 and FACE_X0 <= x <= FACE_X1:
-                style = f"{style} on {FACE_BG}"
-            out.append(char, style=style)
-    return out
+    """Vision's buddy, still and curious, as four rows of half blocks (the composer gutter's face)."""
+    return Text("\n").join(face("curious", props=False))
 
 
-def header_renderable(*, model: str, directory: str, voice: str, resumed: bool = False):
-    """The open card: Pip on the left, `◆ Vision` and labeled model / directory / voice on the right,
-    in a rounded cyan box sized to the content. First block in an empty transcript; /clear puts it back."""
-    title = Text.assemble(("◆ Vision", f"bold {ACCENT}"))
-    if resumed:
-        title.append("   resumed", style="dim")
-    facts = Text()
-    facts.append_text(title)
-    for name, value in (("model", model), ("directory", directory), ("voice", voice)):
-        facts.append("\n")
-        facts.append(f"{name}:".ljust(12), style="dim")
-        facts.append(value)
-    grid = Table.grid(padding=(0, 1))
+def _open_card(facts: Text):
+    """The card Vision opens with: its face on the left, `facts` on the right, a quiet violet edge round both."""
+    grid = Table.grid(padding=(0, 3))
     grid.add_column(no_wrap=True)
-    grid.add_column(no_wrap=True)
+    grid.add_column()
     grid.add_row(_pip_mark(), facts)
-    return Panel(grid, box=ROUNDED, border_style=ACCENT, padding=(0, 1), expand=False)
+    return Panel(grid, box=ROUNDED, border_style=CARD_EDGE, padding=(1, 2), expand=False)
+
+
+# What the line under the open card names: (key, what it does), the keys the chat really has.
+OPEN_TIPS = (("/", "commands"), ("!", "shell"), ("shift-tab", "auto / plan"), ("ctrl-o", "tool calls"), ("/project", "make it a scout"))
+
+
+class _Tips:
+    """The keys under the open card on one line, `/ commands   ! shell …`, keys in the accent: as many
+    as fit the width, never wrapped."""
+
+    def __rich_console__(self, console, options):
+        tips = Text(" " * GUTTER)
+        for key, what in OPEN_TIPS:
+            tip = Text.assemble(("   " if tips.cell_len > GUTTER else "", ""), (key, ACCENT_HI), (" " + what, DIM))
+            if tips.cell_len + tip.cell_len > options.max_width:
+                break
+            tips.append_text(tip)
+        yield tips
+
+
+def open_tips() -> _Tips:
+    return _Tips()
+
+
+def header_renderable(*, model: str, directory: str, voice: str, resumed: bool = False, version: str = "",
+                      scouts: int | None = None, needing: int = 0):
+    """The open card, first block in an empty transcript (/clear puts it back): the buddy, then `Vision
+    <version>`, the model and effort in the accent beside the folder, and `voice off · 3 scouts, 1 needs
+    you` (the scouts left out while unknown or none). The keys worth knowing sit on a line under it."""
+    sep = ("  ·  ", FAINT)
+    head = Text.assemble(("Vision", f"bold {TEXT}"))
+    if version:
+        head.append(f"  {version}", style=FAINT)
+    if resumed:
+        head.append("  ·  resumed", style=FAINT)
+    third = Text.assemble((f"voice {voice}", DIM))
+    if scouts:
+        third.append_text(Text.assemble(sep, (f"{scouts} scout{'s' * (scouts != 1)}", DIM)))
+        if needing:
+            third.append_text(Text.assemble((", ", FAINT), (f"{needing} need{'s' * (needing == 1)} you", WARN)))
+    facts = Text("\n").join([head, Text.assemble((model, ACCENT_HI), sep, (directory, DIM)), third])
+    return Group(_indented(_open_card(facts)), Text(""), open_tips())
 
 
 def welcome_renderable(message: str, hint: str = ""):
-    """The first run's card (vision/onboard.py): Pip, `◆ Vision`, a line on what is about to happen and
-    a dim one on the keys. The same box as the chat's open card, so setup and chat look like one thing."""
-    words = Text.assemble(("◆ Vision", f"bold {ACCENT}"), "\n", message)
+    """The first run's card (vision/onboard.py): the buddy, `Vision`, a line on what is about to happen and
+    a dim one on the keys. The same card as the chat's open card, so setup and chat look like one thing."""
+    words = Text.assemble(("Vision", f"bold {TEXT}"), "\n", (message, TEXT))
     if hint:
         words.append("\n")
-        words.append(hint, style="dim")
-    grid = Table.grid(padding=(0, 1))
-    grid.add_column(no_wrap=True)
-    grid.add_column()
-    grid.add_row(_pip_mark(), words)
-    return Panel(grid, box=ROUNDED, border_style=ACCENT, padding=(0, 1), expand=False)
+        words.append(hint, style=DIM)
+    return _open_card(words)
 
 
 # ---------------------------------------------------------------- input word wrap
@@ -251,9 +297,52 @@ class WordWrap(Processor):
 
 
 # ---------------------------------------------------------------- transcript rendering
-def user_grid(text: str) -> Padding:
-    """The user's message: bold behind a `›` mark, on a full-width highlighted band. An attached
-    picture's line (`[Attached image: path]`) shows as `[Image #N]`, a file:// link to it, as in Claude Code."""
+class GradientBand:
+    """The user's message as the apps draw their bubble: a band across the whole width, violet to blue
+    when the terminal draws 24-bit colour (one shade per cell) and flat otherwise, the words in bold near
+    white behind a two-cell pad, wrapped, with a band row of air above and below. `mark` (shell mode's
+    pink `!`) sits in the pad of the first row. Cells with a background of their own (an `[Image #N]`
+    chip) keep it."""
+
+    def __init__(self, body: Text, mark: Text | None = None):
+        self.body = body
+        self.mark = mark
+
+    def __rich_console__(self, console, options):
+        width = options.max_width
+        lines = list(self.body.wrap(console, max(1, width - 2 * GUTTER)))
+        flat = not truecolor()
+        shades = [RichStyle(bgcolor=BAND_FLAT if flat else mix(BAND[0], BAND[1], x / max(1, width - 1))) for x in range(width)]
+        for n, line in enumerate([Text(""), *lines, Text("")]):
+            row = (self.mark.copy() if self.mark is not None and n == 1 else Text(" " * GUTTER))
+            row.append_text(line)
+            row.truncate(width)
+            row.pad_right(width - row.cell_len)
+            x = 0
+            out: list[Segment] = []
+            for seg in row.render(console):
+                for ch in seg.text:
+                    w = max(1, get_cwidth(ch))
+                    style = seg.style or RichStyle()
+                    if style.bgcolor is None:
+                        style = style + shades[min(x, width - 1)]
+                    if out and out[-1].style == style:
+                        out[-1] = Segment(out[-1].text + ch, style)
+                    else:
+                        out.append(Segment(ch, style))
+                    x += w
+            yield from out
+            yield Segment.line()
+
+    def __rich_measure__(self, console, options):
+        from rich.measure import Measurement
+
+        return Measurement(options.max_width, options.max_width)
+
+
+def user_grid(text: str) -> GradientBand:
+    """The user's message on its band (GradientBand). An attached picture's line (`[Attached image:
+    path]`) shows as an `[Image #N]` chip, a file:// link to it, inline with the words around it as typed."""
     body = Text(style=USER_STYLE)
     joined = False  # the last line was a picture: it sits inline with the text around it, as typed
     for i, line in enumerate(text.split("\n")):
@@ -262,76 +351,80 @@ def user_grid(text: str) -> Padding:
             body.append(" " if m or joined else "\n")
         if m:
             path = m[1]
-            body.append(f"[Image #{image_number(path)}]", RichStyle(link="file://" + path if path.startswith("/") else None, color=ACCENT))
+            body.append(f"[Image #{image_number(path)}]",
+                        RichStyle(link="file://" + path if path.startswith("/") else None, color=CHIP_INK, bgcolor=CHIP_BG))
         else:
             body.append(line)
         joined = bool(m)
-    return Padding(_reply_grid(body, USER_MARK), (0, 0), style=USER_BG, expand=True)
+    return GradientBand(body)
 
 
 def reply_grid(text: str, markdown: bool = True) -> Group:
-    """A finished reply as a static transcript block (a resumed conversation's earlier turns): the
-    same `●` gutter as a live reply, with its blank line above and below."""
+    """A finished reply as a static transcript block (a resumed conversation's earlier turns): indented
+    behind the gutter like a live reply, with its blank line above and below."""
     return Group(Text(""), _reply_grid(ChatMarkdown(text) if markdown else Text(text), REPLY_MARK), Text(""))
 
 
 def hearing_grid(text: str) -> Table:
     """The user's words as they are still being heard: a `◉` mark, the words so far in italics and
     a trailing ellipsis while the ears are catching up; `◉ listening…` before the first word."""
-    body = Text(text, style="italic") if text else Text("listening", style="dim italic")
-    body.append("…" if not text else " …", style="dim")
+    body = Text(text, style="italic") if text else Text("listening", style=f"italic {DIM}")
+    body.append("…" if not text else " …", style=FAINT)
     return _reply_grid(body, HEAR_MARK)
 
 
-def shell_grid(command: str) -> Padding:
-    """A command run in shell mode: like the user's own message, behind a pink `!` instead of `›`."""
-    return Padding(_reply_grid(Text(command, style=USER_STYLE), SHELL_MARK, SHELL_STYLE), (0, 0), style=USER_BG, expand=True)
+def shell_grid(command: str) -> GradientBand:
+    """A command run in shell mode: on the band like the user's own message, behind a pink `!`."""
+    return GradientBand(Text(command, style=USER_STYLE), Text(SHELL_MARK, style=f"bold {SHELL}"))
 
 
-def shell_output_grid(output: str, code: int | None, running: bool = False) -> Table:
+def shell_output_grid(output: str, code: int | None, running: bool = False) -> Padding:
     """What a shell-mode command printed (its last SHELL_SHOWN lines), dim under a `⎿`, and how it ended
     when that was not cleanly: `exit 2`, or `stopped` (None) when it was cut short. `running`: it is still
     going, so this is what it has printed so far and there is no ending to say."""
     lines = output.rstrip("\n").splitlines()
     body = Text()
     if len(lines) > SHELL_SHOWN:
-        body.append(f"… {len(lines) - SHELL_SHOWN} earlier lines\n", style="dim italic")
+        body.append(f"… {len(lines) - SHELL_SHOWN} earlier lines\n", style=f"italic {FAINT}")
         lines = lines[-SHELL_SHOWN:]
-    body.append("\n".join(lines) if lines else "running…" if running else "(no output)", style="dim")
-    if running:
-        return _reply_grid(body, "⎿ ", "dim")
-    if code != 0:
-        body.append(("\n" if lines else " ") + ("stopped" if code is None else f"exit {code}"), style="red")
-    return _reply_grid(body, "⎿ ", "dim")
+    body.append("\n".join(lines) if lines else "running…" if running else "(no output)", style=DIM)
+    if code != 0 and not running:
+        body.append(("\n" if lines else " ") + ("stopped" if code is None else f"exit {code}"), style=DANGER)
+    return _indented(_reply_grid(body, "⎿ ", FAINT))
 
 
 PATCH_SHOWN = 400  # lines of a /diff patch kept in the transcript (the start of it: the stat says the rest)
 
 
-def diff_grid(title: str, stat: str, patch: str) -> Table:
+def diff_grid(title: str, stat: str, patch: str) -> Padding:
     """What changed since a checkpoint (/diff): a title line, the `--stat` summary, and the patch
     coloured as a diff, hanging under the info mark like any other /command answer."""
     lines = patch.rstrip("\n").splitlines()
-    parts = [Text(title, style="dim"), Text(stat.rstrip("\n"), style="dim")]
+    parts = [Text(title, style=DIM), Text(stat.rstrip("\n"), style=DIM)]
     if lines:
         shown = lines[:PATCH_SHOWN]
         parts.append(Syntax("\n".join(shown), "diff", theme="ansi_dark", word_wrap=True, padding=0, background_color="default"))
         if len(lines) > PATCH_SHOWN:
-            parts.append(Text(f"… {len(lines) - PATCH_SHOWN} more lines", style="dim italic"))
+            parts.append(Text(f"… {len(lines) - PATCH_SHOWN} more lines", style=f"italic {FAINT}"))
     mark, style = NOTICE_MARKS["info"]
-    return _reply_grid(Group(*parts), mark, style)
+    return _indented(_reply_grid(Group(*parts), mark, style))
 
 
 def notice_grid(text: str, kind: str = "info"):
     """A system line in the transcript (a /command's answer, a warning, an error), told from the
-    conversation by its mark: `·` dim for info, `⚠` yellow, `✗` red. A multi-line text hangs under
+    conversation by its mark: a faint `·` for info, an amber `⚠`, a red `✗`. A multi-line text hangs under
     the mark. Rich markup in `text` is honoured for info lines (the callers' `[yellow]…[/yellow]`)."""
     mark, style = NOTICE_MARKS.get(kind, NOTICE_MARKS["info"])
     if kind == "info":
-        body = Text.from_markup(text, style="dim") if "[" in text else Text(text, style="dim")
+        body = Text.from_markup(text, style=DIM) if "[" in text else Text(text, style=DIM)
     else:
-        body = Text(text, style=style)
-    return _reply_grid(body, mark, style)
+        body = Text(text, style=TEXT)
+    return _indented(_reply_grid(body, mark, style))
+
+
+def _indented(block) -> Padding:
+    """A block moved in by the gutter, its mark in line with the prose of the replies around it."""
+    return Padding(block, (0, 0, 0, GUTTER))
 
 
 def _reply_grid(content, mark: str = "", mark_style: str = ACCENT) -> Table:
@@ -349,32 +442,37 @@ def _reply_grid(content, mark: str = "", mark_style: str = ACCENT) -> Table:
 AGENT_STEPS_SHOWN = 3  # a running subagent's latest tool calls under its row, before `+N more tool uses`
 
 
+def _row_mark(text: Text, done: bool, failed: bool, spin: str) -> None:
+    """A tool or agent row's mark: the accent spinner while it runs, a green ✓ once done, a red ✗ when it failed."""
+    if not done:
+        text.append((spin or "●") + " ", style=ACCENT)
+    else:
+        text.append("✗ " if failed else "✓ ", style=DANGER if failed else OK)
+
+
 def agent_activity(runs, spin: str = "", expanded: set | None = None, full: bool = False) -> Group:
-    """The subagent rows, the shape of a tool row (see tool_activity): `⏺ general-purpose(what it was
-    asked)` then, under a `⎿`, what it is doing and how it is going, as Claude Code draws them. While it
-    runs, its latest tool calls (`Grep(def login)`, `+4 more tool uses` above them when there are more)
-    and `running · opus high · 12s · ↓1.2k` (the model the Agent call named, else the one it inherits;
-    the effort is always inherited; the voice model's worker shows the tokens it has produced so far).
-    Once done it is one row, `⏺ Explore(what it was asked) · Haiku 5.5 · 3 tools · 17.3s` (`↑12,340
-    ↓1,204` for the worker, which has usage of its own); a failed one keeps a red `failed` line under it. A click on the row puts its id in
-    `expanded`, and `full` (the reply unfolded with ctrl-o) does the same for every row: all its tool
-    calls are listed, running or done. Lines are truncated, not wrapped (see _one_row)."""
+    """The subagent rows, the shape of a tool row (see tool_activity): `⠋ general-purpose what it was
+    asked`, then under a `⎿` what it is doing and how it is going. While it runs, its latest tool calls
+    (`Grep def login`, `+4 more tool uses` above them when there are more) and `running · opus high ·
+    12s · ↓1.2k` (the model the Agent call named, else the one it inherits; the effort is always
+    inherited; the voice model's worker shows the tokens it has produced so far). Once done it is one
+    row, `✓ Explore what it was asked · Haiku 5.5 · 3 tools · 17.3s` (`↑12,340 ↓1,204` for the worker,
+    which has usage of its own); a failed one keeps a red `failed` line under it. A click on the row puts
+    its id in `expanded`, and `full` (the reply unfolded with ctrl-o) does the same for every row: all its
+    tool calls are listed, running or done. Lines are truncated, not wrapped (see _one_row)."""
     from vision.models import model_label
 
     text = _one_row()
     expanded = expanded or set()
     for run in list(runs):
-        if run.done:
-            text.append("⏺ ", style="red" if run.failed else "green")
-        else:
-            text.append((spin or "⏺") + " ", style=ACCENT)
-        text.append(run.kind, style="bold")
+        _row_mark(text, run.done, run.failed, spin)
+        text.append(run.kind, style=f"bold {TEXT}")
         if run.label:
-            text.append(f"({run.label})", style="dim")
+            text.append(f" {run.label}", style=DIM)
         quiet = run.done and not run.failed  # a clean finish says it all on the row itself
         if quiet:
             bits = [model_label(run.model)] if run.model else []
-            text.append("".join(f" · {b}" for b in [*bits, run.status] if b), style="dim")
+            text.append("".join(f" · {b}" for b in [*bits, run.status] if b), style=FAINT)
         text.append("\n")
         subs: list[tuple[str, str]] = []  # (line, style) under the `⎿`
         steps = list(run.steps)
@@ -383,8 +481,8 @@ def agent_activity(runs, spin: str = "", expanded: set | None = None, full: bool
         else:
             shown = [] if run.done else steps[-AGENT_STEPS_SHOWN:]
             if len(steps) > len(shown) and shown:
-                subs.append((f"+{len(steps) - len(shown)} more tool uses", "dim italic"))
-        subs += [(f"{tool}({detail})" if detail else tool, "dim") for tool, detail in shown]
+                subs.append((f"+{len(steps) - len(shown)} more tool uses", f"italic {FAINT}"))
+        subs += [(f"{tool} {detail}" if detail else tool, DIM) for tool, detail in shown]
         if not quiet:
             bits = ["cut off" if run.cut_off else "failed"] if run.done else ["running"]
             if run.model:  # which brain is spending (`Fable 5.1`, not the id a workflow reports)
@@ -396,11 +494,11 @@ def agent_activity(runs, spin: str = "", expanded: set | None = None, full: bool
                 tokens = run.tokens_fn() if run.tokens_fn else getattr(run, "tokens", 0)
                 if tokens:
                     bits.append(f"↓{short_count(tokens)}")
-            subs.append((" · ".join(bits), "red" if run.failed else "dim"))
+            subs.append((" · ".join(bits), DANGER if run.failed else FAINT))
         for line in (run.details if run.done else [])[1:]:  # the first line repeats the state above
-            subs.append((line, "red" if run.failed and line is run.details[1] else "dim"))
+            subs.append((line, DANGER if run.failed and line is run.details[1] else DIM))
         for i, (line, style) in enumerate(subs):
-            text.append("  ⎿  " if i == 0 else "     ", style="dim")
+            text.append("  ⎿  " if i == 0 else "     ", style=FAINT)
             text.append(line + "\n", style=style)
     text.rstrip()
     return Group(text)
@@ -413,31 +511,28 @@ def _one_row() -> Text:
 
 
 def tool_activity(calls, spin: str = "", expanded: set | None = None) -> Group:
-    """The main conversation's tool calls, one row each: `⏺ Bash(git status)` (a spinner while it
-    runs, a green dot once done, a red one when it failed). A click on the row puts the call's id in
-    `expanded`, which shows the whole result under a `⎿` (see _ReplyEntry.lines); nothing sits under
-    it otherwise. Once the reply is done the block folds to one summary row (tool_fold). Lines are
-    truncated, not wrapped, so a long command or output line stays one row."""
+    """The main conversation's tool calls, one row each: `✓ Bash git status` (the accent spinner while
+    it runs, a red ✗ when it failed), the name in bold and what it was called with dimmed. A click on the
+    row puts the call's id in `expanded`, which shows the whole result under a `⎿` (see
+    _ReplyEntry.lines); nothing sits under it otherwise. Once the reply is done the block folds to one
+    summary row (tool_fold). Lines are truncated, not wrapped, so a long command or output line stays one row."""
     text = _one_row()
     expanded = expanded or set()
     for call in list(calls):
-        if not call.done:
-            text.append((spin or "⏺") + " ", style=ACCENT)
-        else:
-            text.append("⏺ ", style="red" if call.is_error else "green")
-        text.append(call.name, style="bold")
+        _row_mark(text, call.done, call.is_error, spin)
+        text.append(call.name, style=f"bold {TEXT}")
         if call.detail:
-            text.append(f"({call.detail})", style="dim")
+            text.append(f" {call.detail}", style=DIM)
         text.append("\n")
         if call.done and call.id in expanded:
             lines = [ln for ln in call.output.splitlines() if ln.strip()]
-            body_style = "red" if call.is_error else "dim"
-            text.append("  ⎿  ", style="dim")
+            body_style = DANGER if call.is_error else DIM
+            text.append("  ⎿  ", style=FAINT)
             if not lines:
                 text.append(("(error)" if call.is_error else "(no output)") + "\n", style=body_style)
             for i, ln in enumerate(lines):
                 if i:
-                    text.append("     ", style="dim")
+                    text.append("     ")
                 text.append(ln.rstrip() + "\n", style=body_style)
     text.rstrip()
     return Group(text)
@@ -449,48 +544,87 @@ def tool_live(calls, spin: str = "", expanded: set | None = None) -> Group:
     return tool_activity(list(calls)[-1:], spin, expanded)
 
 
-_TOOL_VERBS = {  # how the folded line counts each tool: (verb, noun); tools sharing a pair are added together
-    "Read": ("read", "file"), "Edit": ("edited", "file"), "Write": ("edited", "file"), "NotebookEdit": ("edited", "file"),
-    "Bash": ("ran", "command"), "Grep": ("searched", "pattern"), "Glob": ("searched", "pattern"),
-    "WebSearch": ("searched the web", "time"), "WebFetch": ("fetched", "page"), "Agent": ("ran", "agent"), "Task": ("ran", "agent"),
-}
+def _tool_kind(name: str) -> str:
+    """Which word the folded line counts a tool under, as the desktop app sorts them (render.ts stepsSummary)."""
+    if name == "Read":
+        return "read"
+    if name in ("Grep", "Glob", "LS"):
+        return "search"
+    if "Edit" in name or "Write" in name:
+        return "edit"
+    if name == "Bash" or re.search(r"shell|exec|command", name, re.I):
+        return "run"
+    if name.startswith("Web"):
+        return "web"
+    if name in ("Agent", "Task"):
+        return "agent"
+    return "tool"
+
+
+def _times(n: int) -> str:
+    return "once" if n == 1 else "twice" if n == 2 else f"{n} times"
+
+
+def _some(n: int, one: str, many: str) -> str:
+    return one if n == 1 else f"{n} {many}"
+
+
+_KIND_WORDS = (  # in this order, whatever order the calls came in
+    ("read", lambda n: "read " + _some(n, "a file", "files")),
+    ("search", lambda n: "searched " + _times(n)),
+    ("edit", lambda n: "edited " + _some(n, "a file", "files")),
+    ("run", lambda n: "ran " + _some(n, "a command", "commands")),
+    ("web", lambda n: "looked at " + _some(n, "a page", "pages")),
+    ("agent", lambda n: "sent " + _some(n, "an agent", "agents")),
+    ("tool", lambda n: "used " + _some(n, "a tool", "tools")),
+)
 
 
 def tool_summary(calls) -> str:
-    """The turn's tool calls and subagents in one line, as Claude Code folds its own once a turn is
-    over: `Read 3 files, ran 2 commands, ran 5 agents`, in the order they were first used, and
-    `, 1 failed` at the end if any errored. Empty without calls."""
-    counts: dict[tuple[str, str], int] = {}
-    failed = 0
+    """What a run of tool calls and subagents did, in a few words, as the desktop app says it: `Read 2
+    files, searched once, edited a file, ran a command, sent an agent`. Empty without calls."""
+    tally: dict[str, int] = {}
     for call in list(calls):
-        name = call.name if _is_tool(call) else "Agent"
-        key = _TOOL_VERBS.get(name, ("called", name))
-        counts[key] = counts.get(key, 0) + 1
-        failed += bool(call.is_error if _is_tool(call) else call.failed)
-    parts = []
-    for (verb, noun), n in counts.items():
-        s = "" if n == 1 else "s"
-        parts.append(f"called {noun} {n} time{s}" if verb == "called" else f"{verb} {n} {noun}{s}")
-    if failed:
-        parts.append(f"{failed} failed")
-    line = ", ".join(parts)
+        kind = _tool_kind(call.name) if _is_tool(call) else "agent"
+        tally[kind] = tally.get(kind, 0) + 1
+    line = ", ".join(say(tally[kind]) for kind, say in _KIND_WORDS if kind in tally)
     return line[:1].upper() + line[1:]
 
 
+def diff_counts(calls) -> tuple[int, int]:
+    """Lines added and removed over the edits among `calls` (their diffs, as edit_summary counts them)."""
+    added = removed = 0
+    for call in list(calls):
+        if _is_edit(call):
+            lines = [ln for h in call.diff or [] for ln in h["lines"]]
+            added += sum(ln[:1] == "+" for ln in lines)
+            removed += sum(ln[:1] == "-" for ln in lines)
+    return added, removed
+
+
 def tool_fold(calls) -> Group:
-    """The folded block: one row, `⏺ Read 3 files, ran 2 agents · ctrl-o to expand` (a red
-    dot if any failed), shown in place of the tool and agent rows once the reply is done."""
+    """The folded block, shown in place of a run of tool, edit and agent rows once something follows it:
+    one row, `● Edited a file, ran a command +2 −1 ›`, the lines the edits added and removed after the
+    words and `2 failed` in red when any did. A click on it (or ctrl-o) unfolds the run."""
     calls = list(calls)
+    failed = sum(bool(c.is_error if _is_tool(c) else c.failed) for c in calls)
     text = _one_row()
-    text.append("⏺ ", style="red" if any(c.is_error if _is_tool(c) else c.failed for c in calls) else "green")
-    text.append(tool_summary(calls), style="dim")
-    text.append(" · ctrl-o to expand", style="dim italic")
+    text.append("● ", style=DANGER if failed else ACCENT)
+    text.append(tool_summary(calls), style=DIM)
+    if failed:
+        text.append(f", {failed} failed", style=DANGER)
+    added, removed = diff_counts(calls)
+    if added:
+        text.append(f" +{added}", style=OK)
+    if removed:
+        text.append(f" −{removed}", style=DANGER)
+    text.append("  ›", style=FAINT)
     return Group(text)
 
 
 EDIT_TOOLS = ("Edit", "MultiEdit", "Write", "NotebookEdit")  # as vision.brain.EDIT_TOOLS (ui does not import it)
 DIFF_SHOWN = 16  # diff lines under an edit before `… +N lines (click to expand)`
-_DIFF_STYLE = {"-": "on #4a1f23", "+": "on #1d3b26"}  # removed and added lines, Claude Code's dark red and green
+_DIFF_STYLE = {"-": "on #3a1f2c", "+": "on #1b3328"}  # removed and added lines: dark rose and dark green on the violet dark
 
 
 def _is_edit(item) -> bool:
@@ -501,9 +635,8 @@ def _is_edit(item) -> bool:
 def edit_summary(call) -> str:
     """The line under an edit, as Claude Code words it: `Updated ~/a.py with 3 additions and 1
     removal`, or `Wrote 40 lines to ~/b.py` for a new file."""
-    lines = [ln for h in call.diff for ln in h["lines"]]
-    added, removed = sum(ln[:1] == "+" for ln in lines), sum(ln[:1] == "-" for ln in lines)
-    if call.name == "Write" and added == len(lines):
+    added, removed = diff_counts([call])
+    if call.name == "Write" and added == sum(len(h["lines"]) for h in call.diff):
         return f"Wrote {added} line{'s' * (added != 1)} to {call.detail}"
     bits = [f"{added} addition{'s' * (added != 1)}"] if added else []
     bits += [f"{removed} removal{'s' * (removed != 1)}"] if removed else []
@@ -511,26 +644,22 @@ def edit_summary(call) -> str:
 
 
 def tool_diff(call, spin: str = "", width: int = 80, full: bool = False) -> Group:
-    """An edit as Claude Code shows one: `⏺ Update(~/a.py)`, under it `⎿  Updated ~/a.py with 2
-    additions and 1 removal`, then the changed lines with their numbers, removals on dark red and
-    additions on dark green, the whole row wide. Past DIFF_SHOWN lines it stops at `… +N lines`
-    unless `full` (a click on the block). Still running, failed or without a diff: the header and,
-    for a failure, the error."""
+    """An edit unfolded: `✓ Update ~/a.py`, under it `⎿  Updated ~/a.py with 2 additions and 1 removal`,
+    then the changed lines with their numbers, removals on dark rose and additions on dark green, the
+    whole row wide. Past DIFF_SHOWN lines it stops at `… +N lines` unless `full` (a click on the block).
+    Still running, failed or without a diff: the header and, for a failure, the error."""
     text = _one_row()
-    if not call.done:
-        text.append((spin or "⏺") + " ", style=ACCENT)
-    else:
-        text.append("⏺ ", style="red" if call.is_error else "green")
-    text.append("Update" if call.name in ("Edit", "MultiEdit") else call.name, style="bold")
+    _row_mark(text, call.done, call.is_error, spin)
+    text.append("Update" if call.name in ("Edit", "MultiEdit") else call.name, style=f"bold {TEXT}")
     if call.detail:
-        text.append(f"({call.detail})", style="dim")
+        text.append(f" {call.detail}", style=DIM)
     if call.done and call.is_error:
         first = next((ln for ln in call.output.splitlines() if ln.strip()), "(error)")
-        text.append("\n  ⎿  ", style="dim")
-        text.append(first, style="red")
+        text.append("\n  ⎿  ", style=FAINT)
+        text.append(first, style=DANGER)
     elif call.done and call.diff:
-        text.append("\n  ⎿  ", style="dim")
-        text.append(edit_summary(call), style="dim")
+        text.append("\n  ⎿  ", style=FAINT)
+        text.append(edit_summary(call), style=DIM)
         rows: list[tuple[str, str, str]] = []  # (number, sign, text) per line; ("", "…", "") between hunks
         for i, hunk in enumerate(call.diff):
             if i:
@@ -547,13 +676,13 @@ def tool_diff(call, spin: str = "", width: int = 80, full: bool = False) -> Grou
         for num, sign, body in cut:
             text.append("\n")
             if sign == "…":
-                text.append("       " + " " * pad + "…", style="dim")
+                text.append("       " + " " * pad + "…", style=FAINT)
                 continue
-            text.append("       ")  # the indent stays unshaded: the red / green starts at the number
+            text.append("       ")  # the indent stays unshaded: the colour starts at the number
             line = f"{num.rjust(pad)} {sign if sign != ' ' else ' '} {body}"
             text.append(line.ljust(width - 7), style=_DIFF_STYLE.get(sign, ""))
         if len(rows) > len(cut):
-            text.append(f"\n       … +{len(rows) - len(cut)} lines (click to expand)", style="dim italic")
+            text.append(f"\n       … +{len(rows) - len(cut)} lines (click to expand)", style=f"italic {FAINT}")
     return Group(text)
 
 
@@ -596,12 +725,31 @@ def word_cut(text: str, n: int) -> int:
     return len(text)
 
 
+CODE_THEME = "one-dark"  # pygments' One Dark: the desktop's dark --hl-* colours
+
+
+def code_rule(width: int, label: str = "") -> Text:
+    """A code card's edge: `─ python ──────…` across the width (the label faint, the rule a hairline)."""
+    rule = Text("─ " if label else "", style=LINE)
+    if label:
+        rule.append(label, style=FAINT)
+        rule.append(" ")
+    rule.append("─" * max(0, width - rule.cell_len), style=LINE)
+    return rule
+
+
 class _CodeBlock(CodeBlock):
-    """A fenced block flush with the prose, as Claude Code draws it: no padding lines or columns
-    (rich's default pads one of each, which also lands in a copied selection)."""
+    """A fenced block as a card, the desktop's look without its sides: a hairline rule naming the
+    language, the code on the darker code fill (a cell of it either side and a row above and below),
+    a closing rule. No side borders, so a copied selection holds only the code."""
 
     def __rich_console__(self, console, options):
-        yield Syntax(str(self.text).rstrip(), self.lexer_name, theme=self.theme, word_wrap=True, padding=0)
+        width = options.max_width
+        lang = "" if self.lexer_name in ("text", "default") else self.lexer_name
+        yield code_rule(width, lang)
+        yield Syntax(str(self.text).rstrip(), self.lexer_name, theme=CODE_THEME, word_wrap=True, padding=(1, 1),
+                     background_color=CODE)
+        yield code_rule(width)
 
 
 class _ListItem(ListItem):
@@ -642,7 +790,7 @@ class _Image(ImageItem):
         path = self.destination
         link = RichStyle(link=("file://" + path) if path.startswith("/") else path or None)
         caption = self.text.plain.strip() or path.rsplit("/", 1)[-1]
-        yield Text.assemble(("🖼 ", "none"), (caption, link + RichStyle(bold=True)), ("  ", "none"), (path, link + RichStyle(dim=True)), end="")
+        yield Text.assemble(("🖼 ", "none"), (caption, link + RichStyle(bold=True)), ("  ", "none"), (path, link + RichStyle(color=FAINT)), end="")
 
 
 class ChatMarkdown(Markdown):
@@ -704,20 +852,20 @@ class ReplyView:
         if self.gate is not None:
             self._gate_at = self.gate()
             buf = buf[: word_cut(buf, self._gate_at)]
-        # In the order things happened: a `●` block per run of prose, the subagents' rows where they
-        # were launched (flush left, so their dot lines up with the mark), a blank line between.
+        # In the order things happened: a block per run of prose, the subagents' rows where they were
+        # launched (in the gutter's indent, lined up with the prose), a blank line between.
         blocks: list = []
         for part in split_at_marks(buf, self.marks):
             if part[0] == "text":
                 piece = buf[part[1]:part[2]].strip("\n")
                 block = _reply_grid(ChatMarkdown(piece) if self.markdown else Text(piece), REPLY_MARK)
             else:
-                block = agent_activity([self.marks[k][1] for k in part[1]])
-            blocks += [Text(""), block] if blocks else [block]
+                block = Padding(agent_activity([self.marks[k][1] for k in part[1]]), (0, 0, 0, GUTTER))
+            blocks += [Text(""), block] if blocks and part[0] == "text" else [block]
         if not blocks:
             blocks.append(_reply_grid(Text(""), REPLY_MARK))
         if self.status:
-            blocks.append(Padding(Text(self.status, style="dim italic"), (0, 0, 0, GUTTER)))
+            blocks.append(Padding(Text(self.status, style=f"italic {FAINT}"), (0, 0, 0, GUTTER)))
         self._live.update(Group(*blocks), refresh=True)
         self._cost = time.monotonic() - started
 
@@ -915,10 +1063,10 @@ def _picker_lines(title: str, tabs, tab: int, idx: int, current: str, framed: bo
         is_current = val == current
         out.append(("class:pick.cursor" if cur else "", f" {'❯' if cur else ' '} "))
         out.append(("class:pick.num", f"{i + 1} " if i < 9 else "  "))
-        out.append(("class:pick.selected" if cur else "class:pick.current" if is_current else "", f"{label:<{label_w}}"))
+        out.append(("class:pick.selected" if cur else "", f"{label:<{label_w}}"))
         out.append(("class:pick.desc", desc))
         if is_current:
-            out.append(("class:pick.current", "  (current)"))
+            out.append(("class:pick.current", "  ✓ current"))
         out.append(("", "\n"))
     out.extend([("", "\n")] * (_max_rows(tabs) - len(rows)))
     if _has_notes(tabs):
@@ -1297,19 +1445,19 @@ def ask_questions(questions: list[dict]) -> dict[str, str] | None:
     body = HSplit([
         Window(FormattedTextControl(lambda: FormattedText(form.lines(typed=box.text))), height=lambda: form.height(), always_hide_cursor=True),
         box,
-    ])
+    ], style="class:card.fill")
     app = _snappy(Application(
-        layout=Layout(Frame(body, title=[("class:frame.label", " Vision asks ")]), focused_element=box),
+        layout=Layout(_card(body, "Vision asks", "ask"), focused_element=box),
         key_bindings=kb, style=PT_STYLE, erase_when_done=True,
     ))
     return app.run()
 
 
 def answered_grid(questions: list[dict], answers: dict[str, str] | None):
-    """What a settled question form leaves in the transcript, the way Claude Code records an
-    answered AskUserQuestion: a headline, then one dim `· question → answer` line per question
-    hanging off a ⎿ hook. A dismissed form lists the questions with their options instead, so
-    the transcript still shows what was asked."""
+    """What a settled question form leaves in the transcript, the way Claude Code records an answered
+    AskUserQuestion, in the gutter's indent like the tool rows around it: an accent `●` and a headline,
+    then one dim `· question → answer` line per question hanging off a ⎿ hook. A dismissed form lists the
+    questions with their options instead, so the transcript still shows what was asked."""
     if answers:
         head = f"You answered Vision's question{'s' if len(answers) > 1 else ''}:"
         rows = [f"· {q} → {a}" for q, a in answers.items()]
@@ -1320,8 +1468,8 @@ def answered_grid(questions: list[dict], answers: dict[str, str] | None):
     grid.add_column(width=5, no_wrap=True)  # "  ⎿  " on the first row, blank under it so wrapped lines keep the indent
     grid.add_column(ratio=1, overflow="fold")
     for i, row in enumerate(rows):
-        grid.add_row(Text("  ⎿  " if i == 0 else "", style="dim"), Text(row, style="dim"))
-    return Group(Text.assemble("● ", head), grid)
+        grid.add_row(Text("  ⎿  " if i == 0 else "", style=FAINT), Text(row, style=DIM))
+    return Padding(Group(Text.assemble(("● ", ACCENT if answers else FAINT), (head, TEXT)), grid), (0, 0, 0, GUTTER))
 
 
 def short_path(p: str) -> str:
@@ -1427,7 +1575,7 @@ WORKING_VERBS = ("working…", "on it…", "still on it…")  # content-free on 
 VERB_SECONDS = 4  # how long each verb stays up
 
 
-SESSION_NAME_CHARS = 40  # longest title set into the input box's top border
+SESSION_NAME_CHARS = 72  # longest title pinned over the transcript (the folder follows it)
 CHECKLIST_ROWS = 5  # most task rows under the live line; finished ones fold first (`… +2 completed`)
 
 
@@ -1457,22 +1605,22 @@ def checklist_rows(tasks: list, width: int) -> list[list]:
     shown = shown[:CHECKLIST_ROWS]
     rows = []
     for n, t in enumerate(shown):
-        line = Text("  ⎿  " if n == 0 else "     ", style="dim")
+        line = Text("  ⎿  " if n == 0 else "     ", style=FAINT)
         if t.status == ACTIVE:
             line.append("■ ", style=ACCENT)
-            line.append(t.text, style="bold")
+            line.append(t.text, style=f"bold {TEXT}")
         elif t.status == DONE:
-            line.append("✔ ", style="green")
-            line.append(t.text, style="dim strike")
+            line.append("✔ ", style=OK)
+            line.append(t.text, style=f"strike {FAINT}")
         else:
-            line.append("□ ", style="dim")
-            line.append(t.text)
+            line.append("□ ", style=FAINT)
+            line.append(t.text, style=DIM)
         line.truncate(width, overflow="ellipsis")
         rows.append(line)
     tail = [f"+{len(folded)} completed"] if folded else []
     tail += [f"+{len(more)} pending"] if more else []
     if tail:
-        rows.append(Text("     … " + ", ".join(tail), style="dim"))
+        rows.append(Text("     … " + ", ".join(tail), style=FAINT))
     return [row for line in rows for row in _rows(render_ansi(line, width))]
 
 
@@ -1491,7 +1639,10 @@ WHEEL_LINES = 3  # transcript lines per mouse-wheel notch
 def render_ansi(renderable, width: int) -> str:
     """Render a rich renderable to an ANSI string at the given width."""
     buf = io.StringIO()
-    c = Console(file=buf, width=max(20, width), force_terminal=True, color_system="truecolor", highlight=False, soft_wrap=False)
+    # TERM left out: rich draws a "dumb" terminal 80 wide whatever width it is given, and this is no terminal.
+    env = {k: v for k, v in os.environ.items() if k != "TERM"}
+    c = Console(file=buf, width=max(20, width), force_terminal=True, color_system="truecolor", highlight=False, soft_wrap=False,
+                theme=UI_THEME, _environ=env)
     c.print(renderable)
     return buf.getvalue()
 
@@ -1589,10 +1740,17 @@ def _vis(frag) -> int:
     return len(frag[1]) - frag[1].count(" ")
 
 
+def _is_rule(row) -> bool:
+    """A row that is only a drawn rule, maybe with a label in it: a code card's edge or a markdown `---`."""
+    text = "".join(f[1] for f in row if "[ZeroWidthEscape]" not in f[0]).strip()
+    return len(text) > 2 and text[0] == "─" and text[-1] == "─"
+
+
 @lru_cache(maxsize=512)
 def _reveal_style(style: str, level: int) -> str:
-    """Ease the incoming glyph up to its normal colour over sixteen small steps."""
-    foreground, background = "#c9d1d9", "#20252b"
+    """Ease the incoming glyph up to its normal colour over sixteen small steps, from the code fill (about
+    the terminal's own background) to its colour, or the text colour where it has none of its own."""
+    foreground, background = TEXT, CODE
     for token in style.split():
         if token.startswith("bg:#"):
             background = token[3:]
@@ -1620,10 +1778,15 @@ class _Reveal:
         self.at = time.monotonic()
         self._before: list[int] = []  # visible chars ahead of each counted fragment
         self._where: list[tuple[int, int]] = []  # (row, column) of that fragment
+        # A code card's rules (`─ python ───…`) and a markdown rule are drawn, not said: each counts as a
+        # single character and comes in whole rather than a dash at a time.
+        self._whole = {r for r, row in enumerate(self.rows) if _is_rule(row)}
         total = 0
         for r, row in enumerate(self.rows):
             for c, frag in enumerate(row):
                 v = _vis(frag)
+                if v and r in self._whole:
+                    v = 1 if c == next(i for i, f in enumerate(row) if _vis(f)) else 0
                 if v:
                     self._before.append(total)
                     self._where.append((r, c))
@@ -1640,6 +1803,8 @@ class _Reveal:
         end = math.ceil(n)
         i = bisect.bisect_left(self._before, end) - 1  # fragment holding the last visible char
         r, c = self._where[i]
+        if r in self._whole:
+            return self.rows[: r + 1]
         row = self.rows[r]
         style, text = row[c][0], row[c][1]
         k, j = end - self._before[i], 0
@@ -1840,9 +2005,15 @@ class _ReplyEntry(_Entry):
         if stable and key in self._static_marks:
             return self._static_marks[key]
         rows: list[list] = []
+        items = [self.marks[k][1] for k in ks]
+        if self.folded or (settled and not self.unfolded and stable):
+            # Something follows the run (or the reply is done): one summary row for all of it, edits
+            # included, their diffs counted in it rather than shown (a click or ctrl-o unfolds).
+            handler = self._click(self.toggle_fold)
+            rows = [[(style, txt, handler) for style, txt, *_ in row] for row in _rows(render_ansi(tool_fold(items), inner))]
+            return self._gutter(rows, key if stable else None)
         groups: list[list] = []
-        for k in ks:
-            item = self.marks[k][1]
+        for item in items:
             if _is_edit(item) or not groups or _is_edit(groups[-1][0]):
                 groups.append([item])
             else:
@@ -1857,11 +2028,17 @@ class _ReplyEntry(_Entry):
                 rows += self._group_rows(group, spin, inner, settled or n < len(groups) - 1)
         if self.unfolded and ks[-1] == len(self.marks) - 1:
             handler = self._click(self.toggle_fold)
-            for row in _styled_rows("     ctrl-o to fold", "dim italic", inner):
+            for row in _styled_rows("  ctrl-o to fold", f"italic {FAINT}", inner):
                 rows.append([(style, txt, handler) for style, txt, *_ in row])
-        if stable:
-            self._static_marks[key] = rows
-        return rows
+        return self._gutter(rows, key if stable else None)
+
+    def _gutter(self, rows: list[list], key: tuple | None) -> list[list]:
+        """Mark rows moved in by the gutter, in line with the prose; the pad takes its row's click handler
+        too, so the whole row stays one target. Cached under `key` once everything in them is done."""
+        out = [[("", " " * GUTTER, *row[0][2:3]), *row] if row else row for row in rows]
+        if key is not None:
+            self._static_marks[key] = out
+        return out
 
     def _group_rows(self, items: list, spin: str, inner: int, settled: bool) -> list[list]:
         """A group of calls and subagents with no prose or edit between them. While it is going, each
@@ -1948,18 +2125,17 @@ class _ReplyEntry(_Entry):
             self._line_progress = shown
         if width not in self._lines:
             inner = max(20, width - 1)
-            mark = _styled_rows(REPLY_MARK, f"bold {ACCENT}")[0]
             rows: list[list] = []
             parts = self.full(width, fresh=self.done).cut(shown)
             for n, (kind, payload) in enumerate(parts):
                 if kind == "text":
-                    # The `●` gutter: the mark on the first row of each run of prose, two blanks under it.
-                    block = [[*mark, *payload[0]], *[[("", " " * GUTTER), *row] for row in payload[1:]]]
+                    # The gutter: each row of prose moved in by it (REPLY_MARK is blank).
+                    block = [[("", REPLY_MARK), *row] for row in payload]
                 else:
-                    # The subagents' and tool calls' rows where they happened, flush left so their
-                    # dot lines up with the mark.
-                    block = self._mark_rows(payload, spin, inner, settled=n < len(parts) - 1)
-                rows += [[], *block] if rows else block  # a blank line between prose and the rows
+                    # The subagents' and tool calls' rows where they happened, in line with the prose.
+                    block = self._mark_rows(payload, spin, inner - GUTTER, settled=n < len(parts) - 1)
+                # A blank line before each run of prose; the rows sit straight under the prose that led to them.
+                rows += [[], *block] if rows and kind == "text" else block
             if self.ended is None:
                 # Live line while the brain works, Claude Code's shape: `⠋ having a look… (3s · ↓ 1.2k ·
                 # esc to stop)`. Not through _ROW_CACHE: it changes ten times a second. A tool call's own
@@ -1978,12 +2154,18 @@ class _ReplyEntry(_Entry):
                 if got:
                     hints.append(f"↓ {short_count(got)}")
                 hints.append("esc to stop")
-                line = f"{spin} {label} ({' · '.join(hints)})" if label else " · ".join(hints)
-                rows = [*rows, *_rows(render_ansi(Text(line, style="dim italic"), inner)), *checklist_rows(tasks, inner)]
+                line = Text(" " * GUTTER)
+                if label:
+                    line.append(f"{spin} ", style=ACCENT)
+                    line.append(label, style=ACCENT_HI)
+                    line.append(f" ({' · '.join(hints)})", style=FAINT)
+                else:
+                    line.append(" · ".join(hints), style=FAINT)
+                rows = [*rows, *_rows(render_ansi(line, inner)), *checklist_rows(tasks, inner)]
             elif self.footer and (self.done or self.cancelled):
-                rows = [*rows, *_styled_rows(" " * GUTTER + self.footer, "dim", inner)]
+                rows = [*rows, *_styled_rows(" " * GUTTER + self.footer, FAINT, inner)]
             elif not rows:
-                rows = _styled_rows("…", "dim")
+                rows = _styled_rows(" " * GUTTER + "…", FAINT)
             if not self.done:
                 # A re-render of the longer buffer can shorten the already-revealed part by a row (a code
                 # fence closing, a table gaining a row, a status line clearing). Pad instead of shrinking,
@@ -2319,55 +2501,40 @@ def _private_output():
 
 
 class CornerFrame:
-    """The input box's frame with a label set into its bottom-right border, the way the Grok CLI
-    names its model there: `└──── Sonnet 5 (high) ─┘`, and another in its top-right border, the
-    conversation's title as Claude Code shows it: `┌──── R2 bucket contents ─┐`. Both are read on
-    every repaint; an empty string draws a plain border. Same border characters and styles as
-    prompt_toolkit's Frame."""
+    """The composer's frame, the apps' input card in box drawing: rounded corners in the accent round a
+    raised fill, and chips set into the bottom border. `left` gives the bottom-left ones (the mode and
+    the folder: `╰─ ⏵⏵ auto · ~/code/vision ───`), `corner` the bottom-right one (the model, `── Opus 5
+    · high ▾ ─╯`), `top` an optional label in the top border. All three are read on every repaint and
+    may be a plain string or ready-made (style, text) fragments (the quota figure in amber); an empty
+    one draws a plain border."""
 
-    def __init__(self, body, corner: Callable[[], str], top: Callable[[], str] | None = None):
+    def __init__(self, body, corner: Callable[[], str], top: Callable[[], str] | None = None,
+                 left: Callable[[], list] | None = None):
         from functools import partial
 
         fill = partial(Window, style="class:frame.border")
         self.body = body
         self.corner_fn = corner
         self.top_fn = top or (lambda: "")
-        def corner_fragments():
-            # A plain string, or ready-made (style, text) fragments when part of it wants its own
-            # colour (the quota figure turning yellow): padded with one space either side as before.
-            text = self.corner_fn() or ""
-            if isinstance(text, str):
-                return [("class:frame.corner", f" {text} " if text else "")]
-            return [("class:frame.corner", " "), *text, ("class:frame.corner", " ")] if text else []
+        self.left_fn = left or (lambda: [])
 
-        label = Label(corner_fragments, style="class:frame.border", dont_extend_width=True)
-        top_label = Label(
-            lambda: [("class:frame.corner", f" {text} " if (text := self.top_fn() or "") else "")],
-            style="class:frame.border", dont_extend_width=True,
-        )
+        def fragments(value, style: str, after: list | None = None) -> list:
+            if not value:
+                return []
+            frags = [(style, value)] if isinstance(value, str) else list(value)
+            return [("class:frame.border", " "), *frags, *(after or []), ("class:frame.border", " ")]
+
+        label = Label(lambda: fragments(self.corner_fn() or "", "class:frame.corner", [("class:frame.caret", " ▾")]),
+                      style="class:frame.border", dont_extend_width=True)
+        left_label = Label(lambda: fragments(self.left_fn() or "", "class:frame.folder"), style="class:frame.border", dont_extend_width=True)
+        top_label = Label(lambda: fragments(self.top_fn() or "", "class:frame.corner"), style="class:frame.border", dont_extend_width=True)
         self.container = HSplit(
             [
-                VSplit(
-                    [
-                        fill(width=1, height=1, char=Border.TOP_LEFT),
-                        fill(char=Border.HORIZONTAL),
-                        top_label,
-                        fill(width=1, height=1, char=Border.HORIZONTAL),
-                        fill(width=1, height=1, char=Border.TOP_RIGHT),
-                    ],
-                    height=1,
-                ),
-                VSplit([fill(width=1, char=Border.VERTICAL), body, fill(width=1, char=Border.VERTICAL)], padding=0),
-                VSplit(
-                    [
-                        fill(width=1, height=1, char=Border.BOTTOM_LEFT),
-                        fill(char=Border.HORIZONTAL),
-                        label,
-                        fill(width=1, height=1, char=Border.HORIZONTAL),
-                        fill(width=1, height=1, char=Border.BOTTOM_RIGHT),
-                    ],
-                    height=1,
-                ),
+                VSplit([fill(width=1, height=1, char="╭"), fill(char="─"), top_label, fill(width=1, height=1, char="─"),
+                        fill(width=1, height=1, char="╮")], height=1),
+                VSplit([fill(width=1, char="│"), body, fill(width=1, char="│")], padding=0),
+                VSplit([fill(width=1, height=1, char="╰"), fill(width=1, height=1, char="─"), left_label, fill(char="─"), label,
+                        fill(width=1, height=1, char="─"), fill(width=1, height=1, char="╯")], height=1),
             ],
             style="class:frame",
         )
@@ -2376,17 +2543,84 @@ class CornerFrame:
         return self.container
 
 
+CARD_MAX = 96  # the overlays' widest: past it a picker's rows would sit far from their descriptions
+
+
+def _card(body, title, kind: str = ""):
+    """A rounded card for an overlay (the model picker, a question form) on the raised fill, `title`
+    (a string or a callable giving one) set into its top border as Panes labels a group. `kind` "ask"
+    turns the edge and label amber: Vision is waiting on an answer. Sits two cells in, at most CARD_MAX wide."""
+    from functools import partial
+
+    edge = partial(Window, style="class:card.border")
+    pad = partial(Window, width=1, style="class:card.fill")
+    label = Label(lambda: [("class:card.label", f" {t} ")] if (t := title() if callable(title) else title) else [],
+                  style="class:card.border", dont_extend_width=True)
+    card = HSplit(
+        [
+            VSplit([edge(width=1, height=1, char="╭"), edge(width=1, height=1, char="─"), label, edge(char="─"),
+                    edge(width=1, height=1, char="╮")], height=1),
+            VSplit([edge(width=1, char="│"), pad(), body, pad(), edge(width=1, char="│")]),
+            VSplit([edge(width=1, height=1, char="╰"), edge(char="─"), edge(width=1, height=1, char="╯")], height=1),
+        ],
+        style=f"class:{kind}" if kind else "", width=Dimension(preferred=CARD_MAX, max=CARD_MAX),
+    )
+    return VSplit([Window(width=GUTTER), card, Window()])
+
+
+SCOUTS_SHOWN = 3  # scouts named on the status row, those waiting on you first
+# What a scout is up to in a word or two and its colour, by its buddy's mood (desktop scouts.ts stateOf);
+# a mood not listed (asleep, resting) keeps it off the status row.
+SCOUT_WORDS = {"worried": ("something failed", DANGER), "focused": ("working", ACCENT_HI), "curious": ("reading up", ACCENT_HI),
+               "proud": ("landed something", OK), "found_it": ("found it", OK), "waking": ("waking up", ACCENT_HI)}
+
+
+def scout_needs(project: dict) -> int:
+    """How many things wait on you from a scout: its threads' questions and work to look at, and its approval requests."""
+    t = project.get("threads") or {}
+    return int(t.get("waiting_on_you") or 0) + int(t.get("ready_for_review") or 0) + len(project.get("approvals") or [])
+
+
+def scout_state(project: dict) -> tuple[str, str] | None:
+    """(words, colour) for a scout on the status row: `needs you` / `2 need you` in amber, else its mood's
+    words; None for one that is archived or has nothing to say (asleep)."""
+    if project.get("status") == "archived":
+        return None
+    n = scout_needs(project)
+    if n:
+        return ("needs you" if n == 1 else f"{n} need you"), WARN
+    return SCOUT_WORDS.get(project.get("mood") or "")
+
+
+def scout_fragments(projects: list[dict], shown: int = SCOUTS_SHOWN) -> list[tuple[str, str]]:
+    """The scouts at the head of the status row, up to `shown`, those waiting on you first: a dot in the
+    scout's own colour (its buddy's body), its name in bold and what it is up to (scout_state)."""
+    rows = [(p, st) for p in projects or [] if (st := scout_state(p))]
+    rows.sort(key=lambda r: not scout_needs(r[0]))  # stable: otherwise the server's order, latest first
+    out: list[tuple[str, str]] = []
+    for p, (words, colour) in rows[:shown]:
+        scout = p.get("scout") or {}
+        if out:
+            out.append(("", "   "))
+        out += [(f"fg:{hsl(float(scout.get('hue') or 0), 54, 55)}", "● "),
+                (f"bold fg:{TEXT}", scout.get("name") or p.get("title") or "scout"), (f"fg:{colour}", " " + words)]
+    return out
+
+
 class ChatScreen:
-    """Claude-Code-style layout: scrolling transcript on top, framed input pinned to the bottom,
-    status line under it (the current mode at its left edge). Runs full-screen until `exit()`; voice
-    modes run on worker threads inside it, so `run()` only returns ("quit",)."""
+    """The chat, full-screen: the conversation's title pinned at the top, the scrolling transcript, the
+    composer card pinned to the bottom (the mode and folder in its bottom-left border, the model in its
+    bottom-right) and the status row under it (the scouts first). Runs until `exit()`; voice modes run
+    on worker threads inside it, so `run()` only returns ("quit",)."""
 
     def __init__(self, history_path: str, status: Callable[[], str], buddy: Buddy | None = None, mode: Callable[[], str] | None = None, status_right: Callable[[], str] | None = None, corner: Callable[[], str] | None = None):
         # history_path is unused: Up/Down is this conversation (ConversationHistory), not a global file.
         self.status_fn = status
         self.corner_fn = corner  # set into the input box's bottom-right border: the model typed input goes to
         self.status_right_fn = status_right  # pinned to the bottom-right corner of the status row (the wake-word switch)
-        self.mode_fn = mode  # "auto" | "plan"; None hides the indicator
+        self.mode_fn = mode  # "auto" | "plan", the chip in the composer's bottom-left border; None hides it
+        self.folder_fn: Callable[[], str] = lambda: ""  # the folder the chat works in, beside the title and the mode chip
+        self.scouts_fn: Callable[[], list[dict]] = lambda: []  # the scouts (GET /projects), cached by the chat; see scout_fragments
         self.buddy = buddy
         self.entries: list[_Entry] = []
         self.focused = True  # whether the terminal window has focus, from its focus reports (see _track_focus)
@@ -2462,7 +2696,7 @@ class ChatScreen:
         # Terminal tab: `Vision - <conversation title>` with a spinning mark in front while a reply is
         # in progress (see _sync_title). Set `title_fn` to the conversation's current title ("" = none).
         self.title_fn: Callable[[], str] | None = None
-        self.session_name = ""  # the same title, cut to fit, in the input box's top-right border (see CornerFrame)
+        self.session_name = ""  # the same title, cut to fit, pinned over the transcript (see _title_text)
         self._title = ""
         self._menu_idx = 0
         self._menu_moved = False  # cursor moved by hand → Enter picks the row even for arguments
@@ -2474,9 +2708,9 @@ class ChatScreen:
         # text, so long lines grow it just like Ctrl-J newlines do (dont_extend keeps it snug).
         self.area = TextArea(
             multiline=True, wrap_lines=True, history=ConversationHistory(),
-            prompt=lambda: [("class:shell.prompt", SHELL_MARK)] if self.shell_mode else [("class:frame.label", USER_MARK)],
-            height=Dimension(min=2, max=8), dont_extend_height=True,
-            input_processors=[Suggestion(self._suggestion_shown), WordWrap()],
+            prompt=lambda: [("class:shell.prompt", " " + SHELL_MARK)] if self.shell_mode else [("", " ")],
+            height=Dimension(min=2, max=8), dont_extend_height=True, style="class:composer",
+            input_processors=[Suggestion(self._ghost), WordWrap()],
         )
         form_open = Condition(lambda: self._form is not None)
         picker_open = Condition(lambda: self._picker is not None)
@@ -2801,7 +3035,10 @@ class ChatScreen:
             filter=Condition(lambda: self.scroll_top is not None),
         )
         transcript = FloatContainer(self.transcript, floats=[Float(jump_win, bottom=0)])
-        frame = CornerFrame(self.area, self.corner_fn or (lambda: ""))
+        # The conversation's title and folder pinned over the transcript, once it has a title.
+        title_win = ConditionalContainer(Window(FormattedTextControl(self._title_text, focusable=False), height=2),
+                                         filter=Condition(lambda: bool(self.session_name)))
+        frame = CornerFrame(self.area, self.corner_fn or (lambda: ""), left=self._chips)
         frame = HSplit([frame], style=lambda: "class:shell" if self.shell_mode else "")  # shell mode: a pink border
         status_win = Window(FormattedTextControl(self._status_text), height=1)
         # content-width window at the far right (the wake switch); the main status
@@ -2809,24 +3046,23 @@ class ChatScreen:
         right_win = Window(FormattedTextControl(self._status_right_text, focusable=False), height=1, dont_extend_width=True)
         status_win = VSplit([status_win, right_win])
         picker_win = ConditionalContainer(
-            Frame(
-                Window(FormattedTextControl(self._picker_text), height=lambda: _picker_height(self._picker["tabs"], framed=True) if self._picker else 1),
-                title=lambda: [("class:frame.label", f" {self._picker['title']} ")] if self._picker else "",
+            _card(
+                Window(FormattedTextControl(self._picker_text), height=lambda: _picker_height(self._picker["tabs"], framed=True) if self._picker else 1,
+                       style="class:card.fill"),
+                lambda: self._picker["title"] if self._picker else "",
             ),
             filter=picker_open,
         )
         form_win = ConditionalContainer(
-            Frame(
-                Window(FormattedTextControl(self._form_text), height=lambda: self._form.height() if self._form else 1),
-                title=[("class:frame.label", " Vision asks ")],
-            ),
+            _card(Window(FormattedTextControl(self._form_text), height=lambda: self._form.height() if self._form else 1, style="class:card.fill"),
+                  "Vision asks", "ask"),
             filter=form_open,
         )
         composer = frame
         if self.buddy:
-            # Pip owns a 16-column gutter on the bottom-left, beside the input box (the transcript
-            # above is flush left). He stays bottom-aligned while the input grows;
-            # narrow terminals fold him into the status row instead (see _status_text).
+            # The buddy owns a 16-column gutter on the bottom-left, beside the composer (the transcript
+            # above runs the full width). It stays bottom-aligned while the input grows; narrow
+            # terminals fold it into the status row instead (see _status_text).
             buddy_win = Window(
                 FormattedTextControl(lambda: self.buddy.render(self.busy), focusable=False),
                 width=Dimension.exact(BUDDY_WIDTH), height=Dimension.exact(BUDDY_HEIGHT), dont_extend_width=True,
@@ -2836,8 +3072,8 @@ class ChatScreen:
             buddy_gutter = ConditionalContainer(HSplit([filler, buddy_win]), filter=wide)
             composer = VSplit([buddy_gutter, frame])
             self.area.buffer.on_text_changed += lambda _buf: self.buddy.touch()
-        bottom = HSplit([composer, status_win])  # the status row runs the full width, under Pip too
-        body = HSplit([transcript, picker_win, form_win, menu_win, queued_win, bottom])
+        bottom = HSplit([composer, status_win])  # the status row runs the full width, under the buddy too
+        body = HSplit([title_win, transcript, picker_win, form_win, menu_win, queued_win, bottom])
         self.app = _snappy(Application(
             layout=Layout(body, focused_element=self.area),
             # Mouse on: the wheel scrolls the transcript and a click on a tool row expands its
@@ -2877,7 +3113,7 @@ class ChatScreen:
 
     def _transcript_height(self) -> int:
         try:
-            return max(3, self.app.output.get_size().rows - 6)
+            return max(3, self.app.output.get_size().rows - 8)
         except Exception:
             return 20
 
@@ -3128,6 +3364,25 @@ class ChatScreen:
     def _notice_active(self) -> bool:
         return bool(self._notice[0]) and time.time() < self._notice[1]
 
+    def _title_text(self):
+        """The pinned header: the conversation's title in bold and its folder dimmed, a hairline under them."""
+        folder = self.folder_fn() or ""
+        rule = "─" * max(0, self._width() - 2 * GUTTER)
+        return FormattedText([("", " " * GUTTER), ("class:title", self.session_name), ("", "  "), ("class:title.folder", folder),
+                              ("", "\n" + " " * GUTTER), ("class:title.rule", rule)])
+
+    def _chips(self) -> list:
+        """The composer's bottom-left chips: the mode (`⏵⏵ auto` amber, `⏸ plan` green) and the folder."""
+        out = []
+        if self.mode_fn:
+            mode = self.mode_fn()
+            out.append((f"class:mode.{mode}", MODE_BADGES.get(mode, mode)))
+        folder = self.folder_fn() or ""
+        if folder:
+            out += [("class:frame.sep", " · ")] if out else []
+            out.append(("class:frame.folder", folder))
+        return out
+
     def _status_text(self):
         self._sync_title()
         if self._notice_active():
@@ -3135,16 +3390,20 @@ class ChatScreen:
             # appended to its end can land off-screen, and the point is that it gets seen.
             return FormattedText([("class:status", "  "), ("class:status.key", self._notice[0])])
         parts = [("class:status", "  ")]
-        if self.mode_fn:
-            mode = self.mode_fn()
-            parts += [(f"class:mode.{mode}", MODE_BADGES.get(mode, mode)), ("class:status", "  ")]
+        narrow = self._width() < BUDDY_MIN_COLUMNS  # the buddy shares the row there: room for one scout
+        if self.buddy and narrow:  # first, where the gutter would have held him
+            parts.extend(self.buddy.render_inline(self.busy))
+            parts.append(("class:status", "  "))
+        try:
+            scouts = scout_fragments(self.scouts_fn(), 1 if narrow else SCOUTS_SHOWN)
+        except Exception:  # noqa: BLE001  (a status row must never break the screen)
+            scouts = []
+        if scouts:
+            parts += [*scouts, ("class:status", "   ")]
         parts.append(("class:status", self.status_fn()))
         if self.busy and self.busy_label:  # thinking/tool progress lives in the transcript (see _ReplyEntry)
             spin = SPINNER[int(time.time() * 8) % len(SPINNER)]
-            parts.append(("class:status.key", f"   {spin} {self.busy_label}"))
-        if self.buddy and self._width() < BUDDY_MIN_COLUMNS:
-            parts.append(("", "   "))
-            parts.extend(self.buddy.render_inline(self.busy))
+            parts += [("class:status", "   "), ("class:status.spin", spin), ("class:status.key", f" {self.busy_label}")]
         return FormattedText(parts)
 
     def _status_right_text(self):
@@ -3313,6 +3572,15 @@ class ChatScreen:
 
     def _set_text(self, text: str) -> None:
         self.area.buffer.document = Document(text, len(text))
+
+    def _ghost(self) -> str:
+        """What sits grey in the empty box: the suggestion when there is one, else the placeholder (not while
+        a form or picker has the box, nor in shell mode). Only the suggestion is sent by Enter."""
+        if self._suggestion_shown():
+            return self.suggestion
+        if self.shell_mode or self._form is not None or self._picker is not None or self._qsel is not None:
+            return ""
+        return self.placeholder
 
     def _suggestion_shown(self) -> str:
         """The suggestion while the box is empty and free (no reply, form, picker or queued edit), else ""."""

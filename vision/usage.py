@@ -18,17 +18,26 @@ from rich.text import Text
 from vision.providers import get as _provider
 from vision.providers import names as _provider_names
 
-from vision.theme import ACCENT
+from vision.theme import ACCENT, DANGER, LINE, WARN, mix, truecolor
+
+BAR_BLUE = "#5b8cff"  # where the bar's violet runs to, the apps' gradient
 
 
 def bar(pct: float) -> str:
+    """A 20-cell line on a quiet track: violet into blue while there's room, amber from 60%, red from 85%.
+    The gradient needs 24-bit colour; without it the fill is flat violet."""
     n = min(20, max(0, int(round(pct / 5))))
-    colour = "green" if pct < 60 else ("yellow" if pct < 85 else "red")
-    return f"[{colour}]{'█' * n}[/{colour}][dim]{'░' * (20 - n)}[/dim]"
+    if pct >= 60:
+        fill = f"[{DANGER if pct >= 85 else WARN}]{'━' * n}[/]"
+    elif truecolor():
+        fill = "".join(f"[{mix(ACCENT, BAR_BLUE, i / 20)}]━[/]" for i in range(n))
+    else:
+        fill = f"[{ACCENT}]{'━' * n}[/]"
+    return f"{fill}[{LINE}]{'━' * (20 - n)}[/]"
 
 
 def used_cell(pct: float | None) -> str:
-    return f"{bar(pct)} {pct:4.0f}%" if pct is not None else "?"
+    return f"{bar(pct)} [bold]{pct:4.0f}%[/bold]" if pct is not None else "?"
 
 
 def resets_cell(ts: float | None) -> str:
@@ -46,10 +55,10 @@ def resets_cell(ts: float | None) -> str:
 
 def usage_table(provider: str, plan: str | None = None) -> Table:
     title = f"{provider} subscription usage" + (f" ({plan})" if plan else "")
-    t = Table(title=title, header_style=ACCENT, show_edge=False)
+    t = Table(title=title, title_style="heading", title_justify="left", header_style="table.header", box=None, padding=(0, 3, 0, 0))
     t.add_column("window")
     t.add_column("used", justify="right")
-    t.add_column("resets")
+    t.add_column("resets", style="dim")
     return t
 
 
@@ -104,7 +113,7 @@ def add_banked(t: Table, banked: dict | None) -> None:
     one per kind and expiry date so each reset's own type and deadline show."""
     for i, g in enumerate(banked_groups(banked)):
         n, day = g["count"], _expiry(g.get("expires_at"))
-        t.add_row("Banked resets" if i == 0 else "", f"[{ACCENT}]{_resets(n, g.get('kind'))}[/{ACCENT}]",
+        t.add_row("Banked resets" if i == 0 else "", f"[accent]{_resets(n, g.get('kind'))}[/accent]",
                   _expires(n, day) if day else "")
 
 

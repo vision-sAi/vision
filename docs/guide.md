@@ -41,21 +41,30 @@ also type a message and press Enter at any time instead of speaking.
 While a voice conversation is on, typed input goes to the same conversation model as speech, so one
 model answers the whole chat; enabling speech playback alone does not turn a typed message into a
 voice conversation.
-The chat is a full-screen view like Claude Code's: the conversation scrolls at the top and a framed
-message box stays pinned to the bottom and grows as your text wraps (Enter sends, Ctrl-J adds a line,
+The chat is a full-screen view in the apps' look: the conversation's title and folder are pinned at the top
+once it has a title, the conversation scrolls under them, and the composer, a rounded card edged in violet,
+stays pinned to the bottom. Its bottom border carries the mode (`⏵⏵ auto` in amber, `⏸ plan` in green) and
+the folder on the left and the model on the right; the status row under it leads with up to three of your
+scouts, those waiting on you first (`● Atlas needs you`, `● Moss landed something`; asked of the local
+`vision serve` every 20 seconds, nothing when none runs). The composer grows as your text wraps (Enter sends, Ctrl-J adds a line,
 Ctrl-V pastes a picture from the clipboard as an attachment, or its text; it needs `wl-paste`, or `xclip` on X11, so on a Mac drag the picture in or paste its path instead;
 a pasted or dragged-in picture path attaches that picture too, shown as `[Image #N]` and a clickable link once sent,
 Up/Down recall your messages in this conversation, Esc cancels a reply in progress). PgUp/PgDn, Shift-↑/↓ or the mouse wheel scroll
 the transcript, Alt-Home/Alt-End jump to the top/bottom, and a reply that is still streaming will not
 pull you back down while you are reading; scroll to the bottom, click the "↓ Jump to bottom" pill, press Ctrl-End or send a message to follow again.
-Mouse support is on, so hold Shift while dragging to select text in the terminal. Your messages appear as highlighted
-bands, and replies stream beside a `Vision ›` prefix. `/clear` wipes the screen. `/copy` puts the last reply's
+Mouse support is on, so hold Shift while dragging to select text in the terminal. Your messages appear as bands
+shaded violet to blue across the width (flat where the terminal has no 24-bit colour), and replies stream
+indented under them, with no mark. Fenced code sits on a darker fill between two hairlines, the top one
+naming the language. A run of tool calls folds, once the reply moves on, into one quiet row saying what it
+did, `● Read 2 files, searched once, edited a file +12 −3 ›`, with the lines the edits added and removed;
+a click on the row, or Ctrl-O for the last reply's, unfolds it into a row per call (`✓ Bash git status`) and
+each edit's diff. `/clear` wipes the screen. `/copy` puts the last reply's
 last fenced code block on the clipboard (`/copy 2` the one before it, `/copy reply` the whole reply as
 markdown) through `wl-copy`, `xclip` or `xsel`, or an OSC 52 escape where none of those is around (over SSH or on a Mac,
 if the terminal allows it: iTerm2 with clipboard access allowed, Ghostty and kitty do, Terminal.app doesn't); it says how many lines went.
 While a reply is being worked out a spinner line says what Vision is doing (`thinking…`, `using Bash…`).
 When it delegates to subagents (Claude Code's Agent tool: Explore, Plan, general-purpose…) each one gets
-its own block above the reply — `⠋ Explore · what it was asked` with the tool calls it makes listed
+its own block above the reply — `⠋ Explore what it was asked` with the tool calls it makes listed
 underneath as they happen, ending in `✓ … · 3 tools · 4.2s` — so you can watch what they are up to
 instead of just seeing `using Agent…`. The block stays in the transcript afterwards.
 Vision runs on Opus 5 at medium effort out of the box; the input box's bottom-right corner shows the model
@@ -76,7 +85,7 @@ carries on there from the transcript so far, with your message sent again. `fail
 switches to the first of those that is ready without asking (a note in the chat says so), and
 `failover = "off"` leaves it to you. Once a turn has reported the provider's rate-limit windows, the
 corner label also shows how much of the tightest one is left (`Opus 5 (high) · 38% left`); at or under
-`quota_warn_pct` (15 by default) the figure turns yellow and a note says when the window resets. The
+`quota_warn_pct` (15 by default) the figure turns amber and a note says when the window resets. The
 figure comes from what turns and `/usage` already recorded, never from an extra call.
 The legacy `full` suffix (`/model sonnet full`) still works but is no longer needed; old `handoff`
 config settings are ignored. The incoming model's normal context limits still apply.
@@ -95,7 +104,7 @@ hands it over, and is thrown away afterwards: the chat's own brain is not asked,
 or remembered, and the next message goes to the chat's brain as before. The answers sit in a column
 each when the terminal is wide enough and stack otherwise, with each brain's time and output tokens
 underneath; Esc cancels the lot, and a phone joined to the chat gets the answers as one note.
-Vision has two modes, and the bottom-left corner of the status line always shows which one is on:
+Vision has two modes, and the composer's bottom-left corner always shows which one is on:
 `⏵⏵ auto` runs every tool without asking (the `denied_tools` patterns still apply); `⏸ plan` is read-only —
 Vision reads, searches and runs read-only commands, then presents a plan and a `Carry out this plan?`
 selector. Yes switches to auto mode and carries it out in the same turn; No (or typing what should change)
@@ -154,7 +163,7 @@ the real ears and voice warm up and it listens (say "Vision, what's the weather?
 straight away), then it dozes off again after a quiet follow-up window (`[wake]` in the config: `enabled`
 to start that way, `names`, `follow_up_s`; `vision --wake` too), `/listen`
 speaks one turn, `/voice narrator` changes the voice, `/mic` picks the microphone from a list (or `/mic snowball`,
-`/mic default`; it is saved as `input_device` and a running `/talk` or `/wake` moves over to it), `/new` starts a fresh conversation, `/cd <dir>` changes the working directory for this session (`/cd ~`, `/cd ..`, `/cd -` for the previous one, `~` and relative paths as in a shell; every brain works there from the next reply on, the status row shows it, bare `/cd` says where you are).
+`/mic default`; it is saved as `input_device` and a running `/talk` or `/wake` moves over to it), `/new` starts a fresh conversation, `/cd <dir>` changes the working directory for this session (`/cd ~`, `/cd ..`, `/cd -` for the previous one, `~` and relative paths as in a shell; every brain works there from the next reply on, the composer's corner shows it, bare `/cd` says where you are).
 A Claude conversation stays with its directory (Claude Code keeps it under that directory and finds it only
 from there), so `/cd` away from one starts a new conversation there that opens with the transcript so far,
 and `/session` on a Claude conversation from another directory moves to that directory (`/cd -` comes back).
@@ -229,20 +238,23 @@ memory export or what ChatGPT says it knows about you.
 Changing between Claude, Codex and Grok with `/model` starts a fresh conversation because their native
 thread stores are separate; changing models within one provider keeps that provider's conversation.
 `--continue` resumes the most recent thread for whichever provider owns the selected model.
-Pip uses the Obsidian design in the bottom-left gutter beside the input box: a graphite shell,
-recessed face, and jade eyes. He blinks while idle, passes a highlight across three dots while
-thinking, and scans a small cursor while tools run. While listening, the side rails pulse gently
-and a waveform follows actual microphone levels. He speaks along with the voice and dozes off
-after ten idle minutes. He slides in from the left when a chat opens (`slide_in = false` under
-`[buddy]` turns that off). Rename or hide him under `[buddy]` in the config.
+Vision's buddy sits in the bottom-left gutter beside the input box: the same violet creature with a
+sprout that the phone and desktop apps draw, in half-block pixels. Its face follows the chat: curious while idle (with a blink every few seconds and the odd glance
+aside), focused while thinking (dots count up by its head) and while a tool runs (a dot runs along its
+mouth), proud while the voice speaks (its mouth moves with it), worried after an error until you type
+again, and asleep, dimmed with a `z`, after ten idle minutes. While listening its mouth opens with the
+actual microphone level and its sides breathe gently in the quiet. It slides in from the left when a
+chat opens (`slide_in = false` under `[buddy]` turns that off); `enabled = false` there hides it. In a
+terminal narrower than 72 columns it becomes a tiny face on the status row with a word on what it is doing
+(`› Bash`, `listening`, `zz`).
 A reply that took longer than `notify_after_s` under `[chat]` (30 s by default; 0 = never) and finishes
 while the terminal is not the focused window puts a line on the desktop (`notify-send` on Linux,
 Notification Center on a Mac): how long it took and its first words. Spoken replies and ones from the
 phone don't; a terminal that doesn't report focus notifies past the threshold regardless.
-During `/talk` and `/listen` warmup, Pip's lower rim fills as speech recognition, voice, and the
+During `/talk` and `/listen` warmup, the buddy's bottom row fills as speech recognition, voice, and the
 optional interruption listener finish loading. The percentage counts ready components, not elapsed
 time: it holds during a slow load, excludes failed loads, and resets for the next warmup. Narrow
-terminals show the same percentage beside his inline face.
+terminals show the same percentage beside its inline face.
 
 ## The voice
 
@@ -892,7 +904,7 @@ vision/welcome.py  the provider tick list and the voice offer (`vision providers
 vision/service.py  `vision serve` as a background service: systemd user unit or launchd agent
 vision/voicecheck.py  `vision voice check`: the speakers, the microphone and the wake word, after an install
 vision/ui.py       input box, model picker, message rendering (prompt_toolkit + rich)
-vision/buddy.py    Pip, the input-gutter robot: state machine + sprite frames
+vision/buddy.py    the buddy in half-block pixels: face()/mini() for any scout, Buddy for the chat's gutter
 vision/persona.py  Vision's system prompt (text vs voice output rules)
 vision/config.py   config + paths
 vision/server.py   `vision serve`: HTTP + WebSocket API for the iOS app (token, pairing QR, history)

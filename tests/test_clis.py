@@ -194,9 +194,9 @@ class UpdateTests(unittest.TestCase):
         ]
         text = _update_summary(results)
         lines = text.splitlines()
-        self.assertTrue(lines[0].startswith("[green]✓[/green] Claude Code 1 → 2"))
+        self.assertTrue(lines[0].startswith("[ok]✓[/ok] Claude Code 1 → 2"))
         self.assertTrue(lines[1].startswith("[dim]·[/dim] Codex 1 (already up to date)"))
-        self.assertTrue(lines[2].startswith("[red]✗[/red] Grok: not installed"))
+        self.assertTrue(lines[2].startswith("[err]✗[/err] Grok: not installed"))
 
     def test_update_clis_runs_in_order_and_announces_each(self):
         started = []

@@ -17,7 +17,7 @@ import threading
 from vision import config
 from vision.config import load_config
 
-from vision.theme import ACCENT
+from vision.theme import heading, ok, warn
 LINE = "Hello. This is Vision. If you can hear me, the voice is working."
 WAKE_WAIT_S = 12  # how long it waits for the name
 HEAR_WAIT_S = 10  # how long it waits for you to start speaking
@@ -83,15 +83,15 @@ class Hands:
 
 
 def _heading(io, text: str) -> None:
-    io.say(f"\n[bold {ACCENT}]◆[/] [bold]{text}[/bold]")
+    io.say(heading(text))
 
 
 def _ok(io, text: str) -> None:
-    io.say(f"  [green]✓[/green] {text}")
+    io.say(ok(text))
 
 
 def _warn(io, text: str) -> None:
-    io.say(f"  [yellow]![/yellow] {text}")
+    io.say(warn(text))
 
 
 def _other_device(io, title: str, rows, current: str) -> str | None:
@@ -224,7 +224,7 @@ def check(io, cfg=None, hands=None) -> bool:
         if paused:
             _resume_service(io, hands)
     if heard and hears:
-        io.say("\n  [green]✓[/green] Voice is ready. /talk in a chat starts a voice conversation; /speak reads replies aloud.")
+        io.say("\n" + ok("Voice is ready. /talk in a chat starts a voice conversation; /speak reads replies aloud."))
     return heard and hears
 
 

@@ -22,7 +22,7 @@ from vision import providers
 from vision.config import STATE_DIR, load_config, save_config_value
 
 STATE = STATE_DIR / "onboarding.json"  # {"done": [step names], "finished": bool}
-from vision.theme import ACCENT
+from vision.theme import heading, ok, warn
 
 
 def load_state() -> dict:
@@ -54,11 +54,11 @@ def _toml_string(text: str) -> str:
 
 
 def _ok(io, text: str) -> None:
-    io.say(f"  [green]✓[/green] {text}")
+    io.say(ok(text))
 
 
 def _warn(io, text: str) -> None:
-    io.say(f"  [yellow]![/yellow] {text}")
+    io.say(warn(text))
 
 
 def _dim(io, text: str) -> None:
@@ -268,7 +268,7 @@ class Flow:
             for n, step in enumerate(steps, 1):
                 if step.name in done:
                     continue
-                io.say(f"\n[bold {ACCENT}]◆[/] [bold]{step.title}[/bold] [dim]· step {n} of {len(steps)}[/dim]")
+                io.say(heading(step.title, f"step {n} of {len(steps)}"))
                 try:
                     finished = step.run(self)
                 except Back:  # Esc at a question the step did not catch: on to the next one

@@ -38,7 +38,9 @@ class ScriptedIO:
     def say(self, text=""):
         from rich.console import Console
 
-        c = Console(record=True, width=120, file=StringIO())  # as plain text, markup and cards drawn
+        from vision.theme import RICH_THEME
+
+        c = Console(record=True, width=120, file=StringIO(), theme=RICH_THEME)  # as plain text, markup and cards drawn
         c.print(text)
         self.said.append(c.export_text().rstrip("\n"))
 
@@ -346,6 +348,34 @@ class WizardTests(WizardCase):
         self.assertNotIn("local", io.listed[0])  # something else is on :8080: no "Local · set up" row
         self.assertEqual((ready, self.saved), ([], []))
         self.assertIn("Nothing's ready yet", self.text(io))
+
+
+class ThemeMarkupTests(unittest.TestCase):
+    """The palette's names, as every command and wizard writes them, on the console they print to."""
+
+    def render(self, text: str) -> tuple[str, str]:
+        from rich.console import Console
+
+        from vision.theme import RICH_THEME
+
+        c = Console(record=True, width=100, file=StringIO(), theme=RICH_THEME, color_system="truecolor", force_terminal=True)
+        c.print(text)
+        return c.export_text().rstrip("\n"), c.file.getvalue()
+
+    def test_ok_warn_and_err_draw_their_marks_in_the_palette(self):
+        from vision.theme import DANGER, OK, WARN, err, ok, warn
+
+        for line, mark, hexed in ((ok("saved"), "✓", OK), (warn("not yet"), "!", WARN), (err("failed"), "✗", DANGER)):
+            plain, raw = self.render(line)
+            self.assertEqual(plain, f"  {mark} {line.split('] ', 1)[1]}")
+            r, g, b = (int(hexed[i:i + 2], 16) for i in (1, 3, 5))
+            self.assertIn(f"38;2;{r};{g};{b}m", raw)  # the theme's colour, not the terminal's own green/yellow/red
+
+    def test_a_heading_reads_the_same_as_before(self):
+        from vision.theme import heading
+
+        self.assertEqual(self.render(heading("You", "step 2 of 3"))[0], "\n◆ You · step 2 of 3")
+        self.assertEqual(self.render(heading("Voice"))[0], "\n◆ Voice")
 
 
 if __name__ == "__main__":
