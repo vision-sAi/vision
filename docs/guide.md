@@ -809,6 +809,18 @@ rules in their prompt only. Requests are kept in `approvals.json` beside the pro
 vision project set <id> leash=autonomous rule.publish=never rule.send=default
 ```
 
+**New scout** in the apps asks one thing: what should it do? Say when in the same words ("keep the tests
+green, check every morning", "every weekday at 7, give me three tech stories", "fix the flaky test when I ask")
+and the schedule is read out of them, with what's left as the goal; a line beneath shows the name, the goal
+and when it'll report before you send it (`POST /scouts/draft`, then `POST /scouts {text, workdir?}`). Nothing
+said about when means every morning at 8. More options opens the full form with all of it filled in.
+
+**Needs you** gathers what every scout is waiting on you for into one list, newest first (`GET /needs`): requests
+to run something (Approve, or Deny; Edit the command first on the desktop, from a long press on the phone),
+questions a thread asked (answer right there) and finished work (Apply lands its branch; on the phone, swipe a
+row for Approve, Deny or Apply). A row opens its scout. On the desktop the Scouts heading's count opens the list;
+on the phone, the "3 waiting on you" row atop the Scouts page.
+
 On the phone, the drawer's **Scouts** page lists them by their buddies, with what needs you first. A
 scout's chat shows its check-ins and thread reports as cards; the pill at its top opens its sheet: its
 requests to approve (or edit, or deny), its threads, Library and memory, and Check in now. Its settings

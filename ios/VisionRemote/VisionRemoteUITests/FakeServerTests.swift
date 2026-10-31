@@ -717,36 +717,102 @@ final class FakeServerTests: XCTestCase {
         XCTAssertEqual(opened?["project"] as? String, "p2")
         app.navigationBars.buttons.element(boundBy: 0).tap()
 
+        // New scout is one sentence: when it reports comes out of the words, shown before it's sent.
         let newScout = app.buttons["New scout"]
         XCTAssertTrue(newScout.waitForExistence(timeout: 5))
         newScout.tap()
-        let goal = app.textFields["Goal"]
-        XCTAssertTrue(goal.waitForExistence(timeout: 5))
-        goal.tap()
-        goal.typeText("Tidy the docs")
-        XCTAssertTrue(app.buttons["Create"].isEnabled, "a goal is enough: the folder is optional")
-        app.buttons["More options"].tap()
-        let name = app.textFields["Scout's name"]
-        XCTAssertEqual(name.value as? String, "Atlas", "a name none of the others has is suggested")
-        name.tap()
-        name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8) + "Quill")
-        app.buttons["sprout"].tap()
+        let ask = app.textFields["quick-scout-text"]
+        XCTAssertTrue(ask.waitForExistence(timeout: 5))
+        ask.tap()
+        ask.typeText("Tidy the docs every weekday at 9")
+        let when = app.staticTexts["quick-scout-when"]
+        XCTAssertTrue(when.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Atlas · reports weekdays at 9:00"].waitForExistence(timeout: 5), "one line says who and when: \(when.label)")
+        XCTAssertTrue(app.buttons["Create"].isEnabled, "a sentence is enough: the folder is optional")
         app.buttons["Folder"].tap()
         XCTAssertTrue(app.buttons["code"].waitForExistence(timeout: 5))
         app.buttons["code"].tap()
         app.buttons["Use this folder"].tap()
         app.buttons["Create"].tap()
+        let made = try frame { $0["type"] as? String == "_post_scouts" }
+        XCTAssertEqual(made?["text"] as? String, "Tidy the docs every weekday at 9")
+        XCTAssertEqual(made?["workdir"] as? String, "/home/me/code")
+        let scheduled = try frame { $0["type"] as? String == "_checkins" }
+        XCTAssertEqual(scheduled?["repeat"] as? String, "weekdays")
+        let openedNew = try frame { $0["type"] as? String == "new" && $0["project"] as? String == "p3" }
+        XCTAssertNotNil(openedNew, "the new scout's chat is opened")
+    }
+
+    /// More options on the one-sentence sheet opens the full form with the goal, name and schedule carried over.
+    func testMoreOptionsCarriesTheSentenceOver() throws {
+        try call("_scene", ["chats": [], "history": [:], "projects": [
+            ["id": "p1", "title": "Widget", "goal": "Ship the widget", "folder": "~/code/app", "chat": "", "status": "active",
+             "scout": ["name": "Atlas", "hue": 205, "trait": "antenna"]]]])
+        let app = launch()
+        app.buttons["Chats"].tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Scouts")).firstMatch.tap()
+        let newScout = app.buttons["New scout"]
+        XCTAssertTrue(newScout.waitForExistence(timeout: 5))
+        newScout.tap()
+        let ask = app.textFields["quick-scout-text"]
+        XCTAssertTrue(ask.waitForExistence(timeout: 5))
+        ask.tap()
+        ask.typeText("Tidy the docs every 2 hours")
+        XCTAssertTrue(app.staticTexts["Pip · reports every 2 hours"].waitForExistence(timeout: 5))
+        app.buttons["More options"].tap()
+        let goal = app.textFields["Goal"]
+        XCTAssertTrue(goal.waitForExistence(timeout: 5))
+        XCTAssertEqual(goal.value as? String, "Tidy the docs", "the goal, without the schedule's words")
+        app.buttons["More options"].tap()
+        let name = app.textFields["Scout's name"]
+        XCTAssertEqual(name.value as? String, "Pip", "the name the draft suggested, none of the others'")
+        name.tap()
+        name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8) + "Quill")
+        app.buttons["sprout"].tap()
+        app.buttons["Create"].tap()
         let made = try frame { $0["type"] as? String == "_post_projects" }
         XCTAssertEqual(made?["goal"] as? String, "Tidy the docs")
-        XCTAssertEqual(made?["workdir"] as? String, "/home/me/code")
         let scout = made?["scout"] as? [String: Any]
         XCTAssertEqual(scout?["name"] as? String, "Quill")
         XCTAssertEqual(scout?["trait"] as? String, "sprout")
-        XCTAssertEqual((made?["settings"] as? [String: Any])?["leash"] as? String, "checkins")
         let scheduled = try frame { $0["type"] as? String == "_checkins" }
-        XCTAssertEqual(scheduled?["repeat"] as? String, "daily", "a new scout checks in every morning unless told otherwise")
-        let openedNew = try frame { $0["type"] as? String == "new" && $0["project"] as? String == "p3" }
-        XCTAssertNotNil(openedNew, "the new project's chat is opened")
+        XCTAssertEqual(scheduled?["repeat"] as? String, "every")
+        XCTAssertEqual(scheduled?["every_minutes"] as? Int, 120)
+    }
+
+    /// Needs you: one list of what every scout waits on you for, each answered right there.
+    func testNeedsYouGathersEveryScoutsAsks() throws {
+        let projects: [[String: Any]] = [
+            ["id": "p1", "title": "Desktop app", "goal": "Keep the desktop app moving", "folder": "~/code/vision", "chat": "", "status": "active",
+             "scout": ["name": "Atlas", "hue": 205, "trait": "antenna"], "mood": "needs_you",
+             "approvals": [["id": "ap1", "target": "t1", "title": "Tray fix", "tool": "Bash", "command": "git push origin tray",
+                            "action": "publish", "state": "pending", "created": 30]]],
+            ["id": "p2", "title": "Homelab", "goal": "Keep the homelab tidy", "folder": "~", "chat": "", "status": "active",
+             "scout": ["name": "Juniper", "hue": 32, "trait": "sprout"], "mood": "needs_you"],
+        ]
+        let threads: [String: Any] = ["p2": [["id": "t2", "title": "Old images", "objective": "Clear old Docker images", "state": "waiting_on_you",
+                                               "question": "Keep the ones tagged latest?", "updated": 20, "created": 1, "edits": false]]]
+        try call("_scene", ["chats": [], "history": [:], "projects": projects, "threads": threads])
+        let app = launch()
+        app.buttons["Chats"].tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Scouts")).firstMatch.tap()
+        let banner = app.buttons["needs-banner"]
+        XCTAssertTrue(banner.waitForExistence(timeout: 10))
+        banner.tap()
+        XCTAssertTrue(text(app, containing: "git push origin tray").waitForExistence(timeout: 5), "Atlas's request")
+        XCTAssertTrue(text(app, containing: "Keep the ones tagged latest?").exists, "Juniper's question, in the same list")
+        let answer = app.textFields["Answer…"]
+        answer.tap()
+        answer.typeText("Yes, keep those")
+        app.buttons["Send"].tap()
+        let told = try frame { $0["type"] as? String == "_thread_message" }
+        XCTAssertEqual(told?["thread"] as? String, "t2")
+        XCTAssertEqual(told?["text"] as? String, "Yes, keep those")
+        XCTAssertTrue(text(app, containing: "Keep the ones tagged latest?").waitForNonExistence(timeout: 5), "answered, it leaves")
+        app.buttons["Approve"].tap()
+        let decided = try frame { $0["type"] as? String == "_decide" }
+        XCTAssertEqual(decided?["approval"] as? String, "ap1")
+        XCTAssertTrue(text(app, containing: "Nothing needs you").waitForExistence(timeout: 5))
     }
 
     /// A scout: its buddy and what needs you in the list, a request to run something approved from

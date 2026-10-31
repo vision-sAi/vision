@@ -762,6 +762,33 @@ final class VisionClient: ObservableObject {
         openProject(project)
     }
 
+    /// What one sentence would make (POST /scouts/draft): the goal, when it reports, and a name and look. Nothing is saved.
+    func draftScout(_ text: String) async throws -> ScoutDraft {
+        let data = try await perform(request("scouts/draft", method: "POST", json: ["text": text]))
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ClientError.badResponse }
+        return ScoutDraft(json)
+    }
+
+    /// A new scout from one sentence (POST /scouts): the machine reads the goal and schedule out of the words.
+    /// Its chat opens once it's made.
+    func createScout(text: String, folder: String?) async throws {
+        var body: [String: Any] = ["text": text]
+        if let folder, !folder.isEmpty { body["workdir"] = folder }
+        let data = try await perform(request("scouts", method: "POST", json: body))
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any], let project = ProjectInfo(json) else {
+            throw ClientError.badResponse
+        }
+        upsert(project)
+        openProject(project)
+    }
+
+    /// Everything every scout is waiting on you for, newest first (GET /needs).
+    func fetchNeeds() async throws -> [NeedItem] {
+        let data = try await perform(request("needs"))
+        guard let list = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { throw ClientError.badResponse }
+        return list.compactMap(NeedItem.init)
+    }
+
     /// Archive a project: it leaves the list and its chat carries on as an ordinary one. Nothing is deleted.
     func archiveProject(_ id: String) async throws {
         _ = try await perform(request("projects/\(id)", method: "DELETE"))

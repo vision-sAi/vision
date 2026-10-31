@@ -409,6 +409,109 @@ def suggest_scout(goal: str, others: list[dict], scout: dict | None = None) -> d
     return out
 
 
+# A new scout from one sentence ("keep the tests green, check every morning at 8"): when it reports is read out
+# of the words, and what's left is the goal. Nothing said about when: every morning at 8.
+_TIME = r"(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?|noon|midnight)"
+_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+_PARTS = {"morning": "08:00", "afternoon": "14:00", "evening": "18:00", "night": "21:00", "day": "09:00"}
+_LEAD = r"(?:[,;:]?\s*(?:and\s+|then\s+)?(?:(?:check(?:\s+in)?|report(?:\s+back)?|look|run|ping\s+me|tell\s+me|update\s+me)\s+)?)"
+_WHEN = [
+    ("on_call", re.compile(_LEAD + r"\b(?:only\s+)?(?:when(?:ever)?\s+i\s+ask(?:\s+(?:it|you))?|on\s+call)\b", re.I)),
+    ("every", re.compile(_LEAD + r"\bevery\s+(\d+|an?|one|two|three|four|six|eight|twelve)\s+(hours?|hrs?|minutes?|mins?)\b", re.I)),
+    ("hourly", re.compile(_LEAD + r"\b(?:every\s+hour|hourly)\b", re.I)),
+    ("weekdays", re.compile(_LEAD + r"\b(?:every\s+|on\s+)?weekdays?(?:\s+(morning|afternoon|evening|night)s?)?(?:\s+at\s+" + _TIME + r")?", re.I)),
+    ("weekly", re.compile(_LEAD + r"\b(?:every|on|each)\s+(" + "|".join(_DAYS) + r")s?(?:\s+(morning|afternoon|evening|night))?(?:\s+at\s+" + _TIME + r")?", re.I)),
+    ("weekly", re.compile(_LEAD + r"\b(?:weekly|every\s+week|once\s+a\s+week)(?:\s+at\s+" + _TIME + r")?", re.I)),
+    ("daily", re.compile(_LEAD + r"\b(?:every|each)\s+(morning|afternoon|evening|night|day)(?:\s+at\s+" + _TIME + r")?", re.I)),
+    ("daily", re.compile(_LEAD + r"\b(?:daily|once\s+a\s+day)(?:\s+at\s+" + _TIME + r")?", re.I)),
+    ("daily", re.compile(_LEAD + r"\b(?:tonight|in\s+the\s+(morning|afternoon|evening))?\s*at\s+" + _TIME + r"\b", re.I)),
+]
+_NUMBERS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "six": 6, "eight": 8, "twelve": 12}
+DEFAULT_REPORTS = {"repeat": "daily", "time": "08:00"}
+
+
+def _brief_time(text: str | None, part: str | None = None) -> str:
+    from vision.scheduled import parse_clock
+
+    if text:
+        t = text.strip().lower()
+        if t in ("noon", "midnight"):
+            return "12:00" if t == "noon" else "00:00"
+        try:
+            hhmm = parse_clock(t)
+        except ValueError:
+            return _PARTS.get((part or "").lower(), "08:00")
+        hh = int(hhmm[:2])
+        # "every evening at 6" means 18:00; a bare small hour with no am/pm in the evening or afternoon is pm.
+        if not re.search(r"am|pm", t) and (part or "").lower() in ("afternoon", "evening", "night") and hh < 12:
+            hhmm = f"{hh + 12:02d}{hhmm[2:]}"
+        return hhmm
+    return _PARTS.get((part or "").lower(), "08:00")
+
+
+def parse_brief(text: str) -> dict:
+    """One sentence → {goal, reports}: `reports` is what POST …/checkins takes ({repeat: off} for one that only
+    works when asked). The schedule's words are taken out of the goal."""
+    text = " ".join(str(text or "").split())
+    reports, found = dict(DEFAULT_REPORTS), None
+    for kind, pattern in _WHEN:
+        m = pattern.search(text)
+        if not m:
+            continue
+        g = m.groups()
+        if kind == "on_call":
+            reports = {"repeat": "off"}
+        elif kind == "every":
+            n = int(g[0]) if g[0].isdigit() else _NUMBERS[g[0].lower()]
+            minutes = n * 60 if g[1].lower().startswith("h") else n
+            reports = {"repeat": "every", "every_minutes": max(15, min(minutes, 7 * 24 * 60))}
+        elif kind == "hourly":
+            reports = {"repeat": "every", "every_minutes": 60}
+        elif kind == "weekdays":
+            reports = {"repeat": "weekdays", "time": _brief_time(g[1], g[0]) if (g[0] or g[1]) else "09:00"}
+        elif kind == "weekly" and len(g) == 3:
+            reports = {"repeat": "weekly", "weekday": _DAYS.index(g[0].lower()), "time": _brief_time(g[2], g[1]) if (g[1] or g[2]) else "09:00"}
+        elif kind == "weekly":
+            reports = {"repeat": "weekly", "weekday": 0, "time": _brief_time(g[0]) if g[0] else "09:00"}
+        elif len(g) == 2:
+            reports = {"repeat": "daily", "time": _brief_time(g[1], g[0])}
+        else:
+            reports = {"repeat": "daily", "time": _brief_time(g[0])}
+        found = m
+        break
+    goal = text
+    if found is not None:
+        start = found.start()
+        if start == 0:  # "Ping me every evening…": the lead verb is the sentence's own, so it stays
+            start = re.match(_LEAD, found.group(0), re.I).end()
+        goal = text[:start] + text[found.end():]
+    goal = re.sub(r"\s+([,.;:!?])", r"\1", goal)
+    goal = re.sub(r"\s{2,}", " ", goal).strip(" ,;:-")
+    goal = re.sub(r"\s+(?:and|then)$", "", goal, flags=re.I).strip(" ,;:-")
+    if goal:
+        goal = goal[0].upper() + goal[1:]
+    return {"goal": goal, "reports": reports}
+
+
+def reports_words(reports: dict) -> str:
+    """"Reports every morning at 8:00", "Reports every 2 hours", "Works only when you ask"."""
+    repeat = reports.get("repeat")
+    if repeat == "off":
+        return "Works only when you ask"
+    if repeat == "every":
+        m = int(reports.get("every_minutes") or 60)
+        return f"Reports every {m} minutes" if m % 60 else "Reports every hour" if m == 60 else f"Reports every {m // 60} hours"
+    at = str(reports.get("time") or "08:00").lstrip("0") or "0:00"
+    at = at if not at.startswith(":") else "0" + at
+    if repeat == "weekdays":
+        return f"Reports weekdays at {at}"
+    if repeat == "weekly":
+        return f"Reports every {_DAYS[int(reports.get('weekday') or 0)].title()} at {at}"
+    hh = int(str(reports.get("time") or "08:00")[:2])
+    part = "morning" if 5 <= hh < 12 else "afternoon" if 12 <= hh < 17 else "evening" if 17 <= hh < 21 else "night"
+    return f"Reports every {part} at {at}"
+
+
 def _working_mood(activity: str) -> str:
     """curious while a thread only looks (reads, searches), focused while it edits or runs things."""
     return "curious" if re.search(r"inspecting|searching|reading|delegating", activity or "") else "focused"
