@@ -1050,6 +1050,21 @@ function fillQuestion(box: HTMLElement, qs: Question[]) {
   box.append(actions);
 }
 
+/** How full the chat's context is: a thin ring and the percentage, amber from 70%, red from 90%, as on the phone. */
+function drawContext(ctx: { tokens: number; window: number } | null | undefined) {
+  const el = $("context");
+  el.hidden = !ctx?.window;
+  if (!ctx?.window) return;
+  const fraction = Math.min(1, ctx.tokens / ctx.window);
+  const percent = Math.round(fraction * 100);
+  el.style.setProperty("--fill", String(percent));
+  el.classList.toggle("warn", fraction >= 0.7 && fraction < 0.9);
+  el.classList.toggle("full", fraction >= 0.9);
+  $("context-text").textContent = `${percent}%`;
+  const k = (n: number) => n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+  el.title = `Context: ${k(ctx.tokens)} of ${k(ctx.window)} tokens`;
+}
+
 /** The composer's buttons, as the chat (or draft) stands. */
 function drawDock() {
   const c = active ? chats.get(active) : undefined;
@@ -1065,6 +1080,7 @@ function drawDock() {
   $("folder").title = draft ? "Choose the folder this chat works in" : "A chat stays in the folder it started in";
   $("model-text").textContent = draft ? draft.modelLabel || "Model" : [c?.model, c?.effort].filter(Boolean).join(" · ") || "Model";
   $("model").hidden = !draft && !c;
+  drawContext(draft ? undefined : c?.context);
   // Model and mode hold still while a reply runs: the chips grey out rather than refuse a click.
   for (const id of ["model", "mode"]) $<HTMLButtonElement>(id).disabled = busy && !draft;
   $("model").title = busy && !draft ? "Switch models once this reply has finished" : "Model and effort";
@@ -1779,6 +1795,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   const input = $<HTMLTextAreaElement>("input");
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
+    // Shift+Return breaks the line itself rather than trusting the webview to: undoable, and the box grows with it.
+    if (e.key === "Enter" && e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      if (!document.execCommand("insertText", false, "\n")) input.setRangeText("\n", input.selectionStart, input.selectionEnd, "end");
+      grow(input);
+    }
     if (e.key === "Tab" && e.shiftKey && !$("mode").hidden) { e.preventDefault(); $("mode").click(); }
     if (e.key === "Tab" && !e.shiftKey && suggested && !input.value) {
       e.preventDefault();
