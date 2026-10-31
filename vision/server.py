@@ -2455,6 +2455,31 @@ class Hub:
 
         return approvals(self.projects.root / pid, pending_only=True)
 
+    def needs(self) -> list[dict]:
+        """Everything every live scout is waiting on the user for, newest first: requests to run something
+        (`approval`), questions a thread asked (`question`) and finished work to look at (`review`, `can_apply`
+        when it has a branch to land). Each names its scout, so one list serves them all."""
+        out = []
+        for project in self.projects.list():
+            scout = project.get("scout") or {}
+            who = {"project": project["id"], "name": scout.get("name") or project.get("title") or "Scout",
+                   "hue": scout.get("hue", 205), "trait": scout.get("trait") or "antenna"}
+            for a in self.pending_approvals(project["id"]):
+                out.append({**who, "kind": "approval", "id": a["id"], "title": f"{a.get('title') or who['name']} asks to run",
+                            "text": a.get("command") or "", "tool": a.get("tool") or "", "at": a.get("created") or 0})
+            pt = self.threads.get(project["id"])
+            if pt is None and (self.projects.root / project["id"] / "threads.json").exists():
+                pt = self.project_threads(project)
+            for t in pt.list() if pt is not None else []:
+                result = t.get("last_result") or {}
+                if t.get("state") == "waiting_on_you":
+                    out.append({**who, "kind": "question", "id": t["id"], "title": t.get("title") or "A question",
+                                "text": t.get("question") or result.get("question") or "", "at": t.get("updated") or 0})
+                elif t.get("state") == "ready_for_review":
+                    out.append({**who, "kind": "review", "id": t["id"], "title": t.get("title") or "Finished work",
+                                "text": result.get("summary") or "", "can_apply": bool(t.get("branch")), "at": t.get("updated") or 0})
+        return sorted(out, key=lambda n: -float(n["at"] or 0))
+
     def mood_of(self, project: dict, pt=None, pending: list[dict] | None = None) -> str:
         from vision.projects import mood
 
@@ -3762,6 +3787,36 @@ def create_app(hub: Hub) -> FastAPI:
         hub.log(f"project saved: {project['id']} {project['title']!r}")
         hub.project_saved(project, before)
         return hub.view_project(project)
+
+    def scout_draft(body: dict) -> dict:
+        from vision.projects import parse_brief, reports_words, suggest_scout
+
+        brief = parse_brief(str(body.get("text") or ""))
+        others = [p.get("scout") or {} for p in hub.projects.list()]
+        return {**brief, "words": reports_words(brief["reports"]), "scout": suggest_scout(brief["goal"], others)}
+
+    @app.post("/scouts/draft", dependencies=[Depends(bearer)])
+    async def scouts_draft(body: dict) -> dict:
+        """What one sentence {text} would make: {goal, reports, words ("Reports every morning at 8:00"),
+        scout: {name, hue, trait}}. Nothing is saved; the apps show it as you type."""
+        return scout_draft(body)
+
+    @app.post("/scouts", dependencies=[Depends(bearer)])
+    async def scouts_new(body: dict) -> dict:
+        """A new scout from one sentence {text, workdir?, scout?}: the goal, when it reports and whether it only
+        works when asked come out of the words (POST /scouts/draft shows them first). Answers the project."""
+        draft = scout_draft(body)
+        if not draft["goal"]:
+            raise HTTPException(status_code=400, detail="say what it should do")
+        scout = {**draft["scout"], **{k: v for k, v in (body.get("scout") or {}).items() if v not in (None, "")}}
+        project = await projects_save({"goal": draft["goal"], "scout": scout,
+                                       **({"workdir": body["workdir"]} if body.get("workdir") else {})})
+        return await project_checkins(project["id"], draft["reports"])
+
+    @app.get("/needs", dependencies=[Depends(bearer)])
+    async def needs_list() -> list[dict]:
+        """The Needs you inbox: what every scout is waiting on you for, newest first (Hub.needs)."""
+        return await run_off_loop(hub.needs)
 
     @app.post("/projects/adopt", dependencies=[Depends(bearer)])
     async def projects_adopt(body: dict) -> dict:

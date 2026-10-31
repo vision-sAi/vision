@@ -130,6 +130,21 @@
     "POST projects": (q, b) => ({ id: "p9", title: b.goal, goal: b.goal, status: "active", folder: "~/code/vision", threads: {}, chat: "",
       scout: { name: b.scout?.name ?? "Pip", hue: b.scout?.hue ?? 205, trait: b.scout?.trait ?? "antenna" }, mood: "asleep", leash: "checkins" }),
   };
+  SCOUT_HTTP["POST scouts/draft"] = (q, b) => /^Every weekday at 7, /.test(b.text)
+    ? { goal: "Give me the three tech stories worth reading", reports: { repeat: "weekdays", time: "07:00" }, words: "Reports weekdays at 7:00", scout: { name: "Fern", hue: 175, trait: "curl" } }
+    : /every morning/.test(b.text)
+    ? { goal: b.text.replace(/,? check every morning/, ""), reports: { repeat: "daily", time: "08:00" }, words: "Reports every morning at 8:00", scout: { name: "Pip", hue: 340, trait: "ears" } }
+    : { goal: b.text, reports: { repeat: "daily", time: "08:00" }, words: "Reports every morning at 8:00", scout: { name: "Pip", hue: 340, trait: "ears" } };
+  SCOUT_HTTP["POST scouts"] = (q, b) => ({ ...SCOUT_HTTP["POST projects"](q, { goal: SCOUT_HTTP["POST scouts/draft"](q, b).goal, scout: { name: "Pip", hue: 340, trait: "ears" } }),
+    checkin: { schedule: { id: "k9", repeat: "daily", time: "08:00", enabled: true, next_run: now + 3600 }, last: null, running: null } });
+  let needsDone = new Set();
+  const NEEDS = [
+    { project: "p1", name: "Atlas", hue: 205, trait: "antenna", kind: "approval", id: "ap1", title: "Add notifications for finished replies asks to run", text: "git push -u origin vision/t-review", tool: "Bash", at: now - 900 },
+    { project: "p2", name: "Juniper", hue: 32, trait: "sprout", kind: "question", id: "t-disk", title: "Clear old Docker images", text: "There are 41 GB of images older than 90 days. Remove all of them, or keep the ones tagged latest?", at: now - 1500 },
+    { project: "p1", name: "Atlas", hue: 205, trait: "antenna", kind: "review", id: "t-review", title: "Add notifications for finished replies", text: "Notifications fire for finished replies and questions when the window isn't focused. Tests pass.", can_apply: true, at: now - 2400 },
+  ];
+  SCOUT_HTTP["GET needs"] = () => NEEDS.filter((n) => !needsDone.has(n.id));
+  SCOUT_HTTP["POST projects/p2/threads/t-disk/message"] = (q, b) => { needsDone.add("t-disk"); return { id: "t-disk", project: "p2", title: "Clear old Docker images", state: "working", told: b.text }; };
   for (const pid of ["p2", "p3", "p4"]) { SCOUT_HTTP[`GET projects/${pid}/activity`] = { events: [] }; SCOUT_HTTP[`GET projects/${pid}/memory`] = { facts: [] }; }
   const openAtlas = { wait: 300, run: () => [...document.querySelectorAll(".chat-item.scout")].find((x) => x.textContent.includes("Atlas")).click() };
   const sentOf = (type) => window.__sent.filter((f) => f.type === type);
@@ -390,7 +405,7 @@
       { wait: 300, check: "a scout waiting on you says so in amber", fn: () => document.querySelector(".chat-item.scout .scout-line")?.classList.contains("tone-ask") },
       { wait: 300, check: "the sidebar lists scouts with what they're doing", fn: () => document.querySelector(".chat-item.scout .scout-line")?.textContent.endsWith("3 need you") },
       { check: "a scout's own chat isn't listed with the chats", fn: () => ![...document.querySelectorAll(".chat-item:not(.scout) .chat-name")].some((n) => n.textContent === "Vision desktop app") },
-      { check: "the Scouts heading adds up what each scout's row says", fn: () => document.querySelector(".scouts-head b")?.textContent === "3 need you" && document.querySelector(".chat-item.scout .scout-line")?.textContent === "3 need you" },
+      { check: "the Scouts heading adds up what each scout's row says", fn: () => document.querySelector(".scouts-head .needs-link")?.textContent === "3 need you" && document.querySelector(".chat-item.scout .scout-line")?.textContent === "3 need you" },
       openAtlas,
       { wait: 300, check: "a scout's page shows its name and goal", fn: () => document.querySelector(".scout-titles .scout-name")?.textContent === "Atlas" && document.querySelector(".scout-leash")?.hidden && !!document.querySelector(".scout-goal")?.textContent },
       { check: "the rail has its four sections", fn: () => [...document.querySelectorAll(".rail-head h3")].map((h) => h.textContent).join(",") === "Needs you,Activity,Schedule,Remembers" },
@@ -475,6 +490,7 @@
       if (f.type === "new" && f.project === "p9") emit({ type: "chat", ...CHATS[0], chat: "sc9", title: "Watch the homelab", project: "p9", opened: true });
     }, steps: [
       { wait: 300, run: () => document.querySelector(".chat-item.new-scout").click() },
+      { wait: 100, run: () => [...document.querySelectorAll(".scout-foot .link")].find((b) => b.textContent === "More options").click() },
       { wait: 200, check: "New scout opens a sheet with a live buddy", fn: () => !!document.querySelector(".scout-sheet .scout-preview .buddy svg") },
       { check: "it suggests a name nobody has", fn: () => document.querySelector(".scout-name-input").value === "Pip" },
       { run: () => document.querySelector(".trait[data-trait=ears]").click() },
@@ -485,7 +501,34 @@
       { wait: 200, check: "Send scout opens its page", fn: () => document.querySelector(".scout-titles .scout-name")?.textContent === "Pip" },
       { check: "with its check-ins set", fn: () => window.__http.some((r) => r.path === "projects/p9/checkins" && r.body?.repeat === "daily" && r.body?.time === "08:00") },
       { run: () => document.querySelector(".chat-item.new-scout").click() },
+      { wait: 100, run: () => [...document.querySelectorAll(".scout-foot .link")].find((b) => b.textContent === "More options").click() },
       { wait: 150, run: () => { document.querySelector(".scout-goal-input").value = "Keep the dependencies up to date, one tidy PR at a time"; document.querySelector(".trait[data-trait=sprout]").click(); } },
+    ] },
+
+    quickscout: { ...base, http: SCOUT_HTTP, onSend: (f, emit) => {
+      if (f.type === "new" && f.project === "p9") emit({ type: "chat", ...CHATS[0], chat: "sc9", title: "Keep the server tests green", project: "p9", opened: true });
+    }, steps: [
+      { wait: 300, run: () => document.querySelector(".chat-item.new-scout").click() },
+      { wait: 150, check: "New scout asks one thing", fn: () => document.querySelector(".quick-input")?.placeholder.startsWith("What should it do?") && !document.querySelector(".scout-name-input") },
+      { type: [".quick-input", "Keep the server tests green, check every morning"] },
+      { wait: 450, check: "one line says who it'll be and when it reports, from the words", fn: () => document.querySelector(".quick-line")?.textContent === "Pip · reports every morning at 8:00" },
+      { run: () => document.querySelector(".quick-sheet .scout-foot .primary").click() },
+      { wait: 250, check: "Send scout makes it in one call and opens its page", fn: () => window.__http.some((r) => r.path === "scouts" && r.body?.text?.startsWith("Keep the server"))
+        && document.querySelector(".scout-titles .scout-name")?.textContent === "Pip" },
+      { run: () => document.querySelector(".chat-item.new-scout").click() },
+      { wait: 150, type: [".quick-input", "Every weekday at 7, give me the three tech stories worth reading"] },
+      { wait: 450, run: () => {} },
+    ] },
+
+    needsinbox: { ...base, http: SCOUT_HTTP, steps: [
+      { wait: 300, run: () => document.querySelector(".scouts-head .needs-link").click() },
+      { wait: 200, check: "Needs you gathers every scout's asks, newest first", fn: () => [...document.querySelectorAll(".inbox-row")].map((c) => c.classList[1]).join() === "kind-approval,kind-question,kind-review" },
+      { check: "each row says who wants what", fn: () => [...document.querySelectorAll(".inbox-lead b")].map((b) => b.textContent).join("|") === "Atlas wants to run|Juniper asked|Atlas finished “Add notifications for finished replies”" },
+      { check: "finished work offers Apply, not Land", fn: () => document.querySelector(".kind-review .link-btn")?.textContent === "Apply" },
+      { type: [".inbox-answer", "Keep the ones tagged latest"] },
+      { run: () => [...document.querySelectorAll(".kind-question .link-btn")].find((b) => b.textContent === "Send").click() },
+      { wait: 500, check: "an answer goes to its thread and the row leaves", fn: () => window.__http.some((r) => r.path === "projects/p2/threads/t-disk/message" && r.body?.text === "Keep the ones tagged latest")
+        && document.querySelectorAll(".inbox-row").length === 2 },
     ] },
 
     noscouts: { ...base, projects: [], steps: [

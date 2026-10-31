@@ -296,6 +296,61 @@ async def projects_save(request: Request) -> dict:
     return project
 
 
+@app.post("/scouts/draft")
+async def scouts_draft(request: Request) -> dict:
+    """What one sentence would make, read as the real server reads it (projects.parse_brief)."""
+    from vision.projects import parse_brief, reports_words
+
+    brief = parse_brief((await request.json()).get("text", ""))
+    taken = {(p.get("scout") or {}).get("name") for p in scene.get("projects", [])}
+    name = next(n for n in ("Atlas", "Pip", "Wren", "Fern", "Moss") if n not in taken)
+    return {**brief, "words": reports_words(brief["reports"]), "scout": {"name": name, "hue": 340, "trait": "ears"}}
+
+
+@app.post("/scouts")
+async def scouts_new(request: Request) -> JSONResponse:
+    """A new scout from one sentence: a project made from the draft, its schedule recorded as `_checkins`."""
+    body = await request.json()
+    frames.append({"type": "_post_scouts", **body})
+    draft = await scouts_draft(_Body(body))
+    if not draft["goal"]:
+        return JSONResponse({"detail": "say what it should do"}, status_code=400)
+    project = await projects_save(_Body({"goal": draft["goal"], "scout": draft["scout"],
+                                          **({"workdir": body["workdir"]} if body.get("workdir") else {})}))
+    frames.append({"type": "_checkins", "project": project["id"], **draft["reports"]})
+    return JSONResponse(project)
+
+
+class _Body:
+    """A request whose JSON is `body` (one handler calling another)."""
+
+    def __init__(self, body: dict):
+        self.body = body
+
+    async def json(self) -> dict:
+        return self.body
+
+
+@app.get("/needs")
+async def needs() -> list[dict]:
+    """Every scout's asks, as the real server gathers them: waiting approvals, questions and finished work."""
+    out = []
+    for p in scene.get("projects", []):
+        scout = p.get("scout") or {}
+        who = {"project": p["id"], "name": scout.get("name") or p.get("title", ""), "hue": scout.get("hue", 205), "trait": scout.get("trait", "antenna")}
+        for a in p.get("approvals") or []:
+            if a.get("state", "pending") == "pending":
+                out.append({**who, "kind": "approval", "id": a["id"], "title": f"{a.get('title') or who['name']} asks to run",
+                            "text": a.get("command", ""), "tool": a.get("tool", ""), "at": a.get("created", 0)})
+        for t in _threads(p["id"]):
+            if t["state"] == "waiting_on_you":
+                out.append({**who, "kind": "question", "id": t["id"], "title": t["title"], "text": t.get("question") or "", "at": t.get("updated", 0)})
+            elif t["state"] == "ready_for_review":
+                out.append({**who, "kind": "review", "id": t["id"], "title": t["title"], "text": (t.get("last_result") or {}).get("summary", ""),
+                            "can_apply": bool(t.get("branch")), "at": t.get("updated", 0)})
+    return sorted(out, key=lambda n: -n["at"])
+
+
 @app.post("/projects/{pid}/approvals/{aid}")
 async def approvals_decide(pid: str, aid: str, request: Request) -> JSONResponse:
     """A scout's request approved or denied: gone from its project's `approvals`, as the real server does."""

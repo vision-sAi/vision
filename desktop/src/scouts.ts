@@ -166,8 +166,14 @@ export function drawSidebar(nav: HTMLElement, query: string, onPage: boolean) {
   const head = el("div", "group scouts-head");
   head.append(el("span", "", "Scouts"));
   const needs = all.reduce((n, p) => n + needCount(p), 0);  // things, not scouts: the same count as each row
-  if (needs) head.append(el("b", "", `${needs} need${needs === 1 ? "s" : ""} you`));
+  if (needs) {
+    const b = el("button", "needs-link", `${needs} need${needs === 1 ? "s" : ""} you`);
+    b.title = "Everything your scouts are waiting on you for";
+    b.onclick = () => openInbox();
+    head.append(b);
+  }
   nav.append(head);
+  inboxChanged();
   if (!all.length && !query) {
     const first = el("button", "first-scout");
     first.append(buddy({ hue: 205, trait: "sprout" }, "asleep", 34, { still: true }));
@@ -221,7 +227,14 @@ export function drawHome(box: HTMLElement) {
   const add = el("button", "home-add");
   add.append(icon("Plus", 13), el("span", "", "New scout"));
   add.onclick = () => openNew();
-  head.append(el("span", "", "Your scouts"), add);
+  const waiting = all.reduce((n, p) => n + needCount(p), 0);
+  head.append(el("span", "", "Your scouts"));
+  if (waiting) {
+    const b = el("button", "home-add needs", `${waiting} need${waiting === 1 ? "s" : ""} you`);
+    b.onclick = () => openInbox();
+    head.append(b);
+  }
+  head.append(add);
   box.append(head, grid);
 }
 
@@ -704,20 +717,27 @@ const EXAMPLES = [
   "Keep the dependencies up to date, one tidy PR at a time",
 ];
 
-/** The sheet for a new scout, or for editing `edit`'s name, colour, trait, goal and leash. */
+/** A new scout (the one-sentence sheet), or the full form for editing `edit`. */
 export function openNew(edit?: Json) {
+  if (edit) openForm(edit);
+  else openQuick();
+}
+
+/** The full form: a new scout's every choice (`prefill` carries over what the quick sheet had), or editing
+ * `edit`'s name, colour, trait, goal and leash. */
+function openForm(edit?: Json, prefill?: { goal?: string; reports?: Json; workdir?: string; folder?: string }) {
   const others = live().filter((p) => p.id !== edit?.id).map((p) => p.scout ?? {});
   const takenNames = new Set(others.map((s) => String(s.name ?? "").toLowerCase()));
   const usedHues = others.map((s) => s.hue).filter((h) => Number.isFinite(h));
   const gap = (h: number) => Math.min(360, ...usedHues.map((u) => Math.min(Math.abs(h - u), 360 - Math.abs(h - u))));
   const fewest = TRAITS.map((t) => [t, others.filter((s) => s.trait === t).length] as const).sort((a, b) => a[1] - b[1])[0][0];
   const state = {
-    goal: edit?.goal ?? "",
+    goal: edit?.goal ?? prefill?.goal ?? "",
     name: edit?.scout?.name ?? NAMES.find((n) => !takenNames.has(n.toLowerCase())) ?? "Scout",
     hue: edit?.scout?.hue ?? [...HUES].sort((a, b) => gap(b) - gap(a))[0],
     trait: edit?.scout?.trait ?? fewest,
     leash: edit?.leash ?? "checkins",
-    workdir: "", folder: edit?.folder ?? "",
+    workdir: prefill?.workdir ?? "", folder: edit?.folder ?? prefill?.folder ?? "",
   };
   const sheet = document.getElementById("settings")!;
   const card = document.getElementById("settings-card")!;
@@ -790,8 +810,9 @@ export function openNew(edit?: Json) {
 
   const leash = askSwitch(asksFirst(state.leash), (on) => (state.leash = leashOf(on)));
 
-  let schedule: Json = edit ? { repeat: "keep" } : { repeat: "daily", time: "08:00" };
-  const scheduleBox = scheduleEditor(edit ? edit.checkin?.schedule : { repeat: "daily", time: "08:00", enabled: true }, (b) => (schedule = b), true);
+  const start: Json = prefill?.reports ?? { repeat: "daily", time: "08:00" };
+  let schedule: Json = edit ? { repeat: "keep" } : start;
+  const scheduleBox = scheduleEditor(edit ? edit.checkin?.schedule : start.repeat === "off" ? null : { ...start, enabled: true }, (b) => (schedule = b), true);
 
   const field = (label: string, ...controls: HTMLElement[]) => {
     const f = el("div", "scout-field");
@@ -838,4 +859,241 @@ export function openNew(edit?: Json) {
   drawPreview();
   sheet.hidden = false;
   if (!edit) goal.focus();
+}
+
+// ---------------------------------------------------------------- New scout in one sentence
+
+const QUICK_EXAMPLES = [
+  "Keep the server tests green, check every morning",
+  "Every weekday at 7, give me the three tech stories worth reading",
+  "Watch my homelab and tell me when something looks off, every 2 hours",
+  "Keep the dependencies up to date, one tidy PR at a time, weekly",
+];
+
+/** "Pip · reports every morning at 8:00": the draft's name and its words, as the one line under the box. */
+const draftLine = (d: Json) => `${d.scout?.name || "Scout"} · ${String(d.words || "").replace(/^\w/, (c) => c.toLowerCase())}`;
+
+/** New scout: say what it should do (and when, in the same words); the server reads out the schedule and
+ * picks it a name, shown in one line beneath as you type. More options opens the full form with it filled in. */
+function openQuick() {
+  const sheet = document.getElementById("settings")!;
+  const card = document.getElementById("settings-card")!;
+  card.classList.add("scout-sheet", "quick-sheet");
+  const close = () => { sheet.hidden = true; card.classList.remove("scout-sheet", "quick-sheet"); };
+  let draft: Json | null = null;
+  let workdir = "", folderLabel = "";
+
+  const head = el("div", "set-head");
+  head.append(el("h2", "", "New scout"));
+  const x = el("button", "icon-btn");
+  x.append(icon("X", 16));
+  x.onclick = close;
+  head.append(x);
+
+  const body = el("div", "set-body scout-form");
+  const text = el("textarea", "scout-goal-input quick-input") as HTMLTextAreaElement;
+  text.rows = 3;
+  const example = QUICK_EXAMPLES[Math.floor(Math.random() * QUICK_EXAMPLES.length)];
+  text.placeholder = `What should it do? e.g. ${example}`;
+  const line = el("p", "quick-line");
+  const drawLine = () => { line.textContent = draft && draft.goal ? draftLine(draft) : "Say when in the same words: every morning, weekdays at 9, every 2 hours, only when I ask."; };
+  let timer = 0, asked = 0;
+  const refresh = () => {
+    clearTimeout(timer);
+    const value = text.value.trim();
+    if (!value) { draft = null; drawLine(); return; }
+    timer = window.setTimeout(async () => {
+      const n = ++asked;
+      try {
+        const d = await host.http("POST", "scouts/draft", undefined, { text: value });
+        if (n === asked) { draft = d; drawLine(); }
+      } catch { /* an older server: the button still sends it */ }
+    }, 220);
+  };
+  text.oninput = refresh;
+  text.onkeydown = (e) => {
+    if (e.key === "Tab" && !e.shiftKey && !text.value) { e.preventDefault(); text.value = example; refresh(); }
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); go.click(); }
+  };
+
+  const folder = el("button", "chip-btn bordered folder-pick") as HTMLButtonElement;
+  const drawFolder = () => folder.replaceChildren(icon("Folder", 14), el("span", "", folderLabel || "No folder: pick one for code or files"));
+  folder.title = "Where it works (optional)";
+  folder.onclick = (e) => { e.stopPropagation(); host.pickFolder(folder, (path, label) => { workdir = path; folderLabel = label; drawFolder(); }); };
+  drawFolder();
+  drawLine();
+  body.append(text, line, folder);
+
+  const foot = el("div", "scout-foot");
+  const error = el("p", "error small");
+  error.hidden = true;
+  const more = el("button", "link", "More options");
+  more.onclick = () => {
+    close();
+    openForm(undefined, { goal: draft?.goal || text.value.trim(), reports: draft?.reports, workdir, folder: folderLabel });
+  };
+  const go = el("button", "primary", "Send scout") as HTMLButtonElement;
+  go.onclick = async () => {
+    const value = text.value.trim();
+    if (!value) { error.hidden = false; error.textContent = "Say what it should do first."; text.focus(); return; }
+    go.disabled = true;
+    try {
+      const p = await host.http("POST", "scouts", undefined, { text: value, workdir: workdir || undefined });
+      close();
+      host.open(p.id, p);
+    } catch (e) {
+      error.hidden = false;
+      error.textContent = String(e);
+      go.disabled = false;
+    }
+  };
+  foot.append(error, more, go);
+  card.replaceChildren(head, body, foot);
+  sheet.hidden = false;
+  text.focus();
+}
+
+// ---------------------------------------------------------------- Needs you: every scout's asks in one place
+
+let inbox: HTMLElement | null = null; // the sheet's list while it's open
+let inboxTimer = 0;
+
+/** Something changed that might add to or clear the inbox: fetch it again, once things settle. */
+export function inboxChanged() {
+  if (!inbox) return;
+  clearTimeout(inboxTimer);
+  inboxTimer = window.setTimeout(() => void fillInbox(), 300);
+}
+
+/** The Needs you sheet: what every scout is waiting on you for (GET /needs), newest first, a row each with
+ * its one next step: Approve a request, answer a question, Apply finished work. A row opens its scout. */
+export function openInbox() {
+  const sheet = document.getElementById("settings")!;
+  const card = document.getElementById("settings-card")!;
+  card.classList.add("scout-sheet", "inbox-sheet");
+  const head = el("div", "set-head");
+  head.append(el("h2", "", "Needs you"));
+  const x = el("button", "icon-btn");
+  x.append(icon("X", 16));
+  const close = () => { sheet.hidden = true; inbox = null; card.classList.remove("scout-sheet", "inbox-sheet"); };
+  x.onclick = close;
+  head.append(x);
+  inbox = el("div", "set-body inbox-list");
+  inbox.append(el("p", "rail-empty", "Loading…"));
+  card.replaceChildren(head, inbox);
+  sheet.hidden = false;
+  void fillInbox();
+}
+
+async function fillInbox() {
+  const box = inbox;
+  if (!box) return;
+  let items: Json[];
+  try { items = await host.http("GET", "needs"); } catch (e) { box.replaceChildren(el("p", "error small", String(e))); return; }
+  if (box !== inbox) return;
+  box.replaceChildren();
+  if (!items.length) {
+    const empty = el("div", "inbox-empty");
+    empty.append(buddy({ hue: 140, trait: "sprout" }, "proud", 64, { still: true }), el("b", "", "Nothing needs you"),
+      el("span", "dim small", "Your scouts are getting on with it. Anything that needs a yes lands here."));
+    box.append(empty);
+    return;
+  }
+  for (const n of items) box.append(inboxRow(n));
+}
+
+/** "15m", "2h", "3d". */
+function ago(ts: number): string {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  return s < 3600 ? `${Math.max(1, Math.round(s / 60))}m` : s < 86400 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`;
+}
+
+/** The two lines a need reads as: who wants what, and the thing itself. */
+function needWords(n: Json): [string, string] {
+  if (n.kind === "approval") return [`${n.name} wants to run`, n.text];
+  if (n.kind === "question") return [`${n.name} asked`, n.text];
+  return [`${n.name} finished “${n.title}”`, n.text];
+}
+
+function inboxRow(n: Json): HTMLElement {
+  const row = el("div", `inbox-row kind-${n.kind}`);
+  const open = () => {
+    document.getElementById("settings")!.hidden = true;
+    inbox = null;
+    host.open(n.project);
+    if (n.kind !== "approval") setTimeout(() => agents.selectThread(n.project, n.id), 200);
+  };
+  row.onclick = open;
+  row.append(buddy({ hue: n.hue, trait: n.trait }, n.kind === "review" ? "proud" : "needs_you", 24, { still: true }));
+  const text = el("div", "inbox-text");
+  const [lead, detail] = needWords(n);
+  const top = el("div", "inbox-lead");
+  top.append(el("b", "", lead), el("span", "inbox-when", ago(n.at)));
+  const detailEl = n.kind === "approval" ? el("code", "inbox-command", detail) : el("div", "inbox-detail", detail);
+  text.append(top, detailEl);
+  const actions = el("div", "inbox-actions");
+  const error = el("p", "error small");
+  error.hidden = true;
+  const stop = (e: Event) => e.stopPropagation();
+  const link = (label: string, run: () => Promise<unknown>) => {
+    const b = el("button", "link-btn", label) as HTMLButtonElement;
+    b.onclick = async (e) => {
+      stop(e);
+      actions.querySelectorAll("button").forEach((x) => ((x as HTMLButtonElement).disabled = true));
+      error.hidden = true;
+      try {
+        await run();
+        row.classList.add("done");
+        inboxChanged();
+      } catch (err) {
+        error.hidden = false;
+        error.textContent = String(err);
+        actions.querySelectorAll("button").forEach((x) => ((x as HTMLButtonElement).disabled = false));
+      }
+    };
+    actions.append(b);
+    return b;
+  };
+  const decide = (decision: string, command?: string) => async () => {
+    const r = await host.http("POST", `projects/${n.project}/approvals/${n.id}`, undefined, { decision, ...(command ? { command } : {}) });
+    onApproval(n.project, r);
+  };
+  if (n.kind === "approval") {
+    link("Approve", decide("approve"));
+    if (n.tool === "Bash") {
+      const edit = el("button", "link-btn dim", "Edit");
+      edit.onclick = (e) => {
+        stop(e);
+        const input = el("textarea", "approval-edit") as HTMLTextAreaElement;
+        input.value = n.text;
+        input.rows = 2;
+        input.onclick = stop;
+        detailEl.replaceWith(input);
+        input.focus();
+        actions.replaceChildren();
+        link("Approve edited", async () => decide("approve", input.value.trim())());
+      };
+      actions.append(edit);
+    }
+    link("Deny", decide("deny")).classList.add("dim");
+  } else if (n.kind === "question") {
+    const answer = el("input", "inbox-answer") as HTMLInputElement;
+    answer.placeholder = "Answer…";
+    answer.onclick = stop;
+    const send = link("Send", async () => {
+      if (!answer.value.trim()) { answer.focus(); throw new Error("Type an answer first."); }
+      const r = await host.http("POST", `projects/${n.project}/threads/${n.id}/message`, undefined, { text: answer.value.trim() });
+      agents.onThread(n.project, r);
+    });
+    answer.addEventListener("keydown", (e) => { if (e.key === "Enter") send.click(); });
+    actions.prepend(answer);
+  } else if (n.can_apply) {
+    link("Apply", async () => {
+      const r = await host.http("POST", `projects/${n.project}/threads/${n.id}/land`, undefined, {});
+      agents.onThread(n.project, r);
+    });
+  }
+  text.append(actions, error);
+  row.append(text);
+  return row;
 }

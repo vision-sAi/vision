@@ -46,6 +46,29 @@ class SuggestTest(unittest.TestCase):
                 clean({"goal": "g", "scout": bad})
 
 
+class BriefTest(unittest.TestCase):
+    def test_when_it_reports_comes_out_of_the_sentence(self):
+        cases = {
+            "Keep the server tests green, check every morning": ("Keep the server tests green", {"repeat": "daily", "time": "08:00"}),
+            "Triage new issues every 2 hours": ("Triage new issues", {"repeat": "every", "every_minutes": 120}),
+            "Summarise HN every weekday at 7:30": ("Summarise HN", {"repeat": "weekdays", "time": "07:30"}),
+            "Digest new Rust crates every friday at 5pm": ("Digest new Rust crates", {"repeat": "weekly", "weekday": 4, "time": "17:00"}),
+            "Ping me every evening at 6 with what changed": ("Ping me with what changed", {"repeat": "daily", "time": "18:00"}),
+            "Every morning, read the news and give me three stories": ("Read the news and give me three stories", {"repeat": "daily", "time": "08:00"}),
+            "Fix the flaky tests only when I ask": ("Fix the flaky tests", {"repeat": "off"}),
+            "watch this page for a price drop": ("Watch this page for a price drop", {"repeat": "daily", "time": "08:00"}),
+        }
+        for text, (goal, reports) in cases.items():
+            self.assertEqual(projects.parse_brief(text), {"goal": goal, "reports": reports}, text)
+
+    def test_the_words_the_apps_show(self):
+        w = projects.reports_words
+        self.assertEqual(w({"repeat": "daily", "time": "08:00"}), "Reports every morning at 8:00")
+        self.assertEqual(w({"repeat": "every", "every_minutes": 60}), "Reports every hour")
+        self.assertEqual(w({"repeat": "weekly", "weekday": 4, "time": "17:00"}), "Reports every Friday at 17:00")
+        self.assertEqual(w({"repeat": "off"}), "Works only when you ask")
+
+
 class StoreTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -411,6 +434,49 @@ class CheckinServerTest(unittest.TestCase):
         with TestClient(self.server.create_app(self.hub)):
             self.assertEqual(self.hub.projects.get(p["id"])["settings"]["leash"], "checkins")
             self.assertFalse(self.hub.schedule.for_project(p["id"])["enabled"])
+
+
+class QuickScoutTest(unittest.TestCase):
+    setUp = CheckinServerTest.setUp
+
+    def test_one_sentence_makes_a_scout_with_its_schedule(self):
+        from fastapi.testclient import TestClient
+
+        with TestClient(self.server.create_app(self.hub)) as tc:
+            draft = tc.post("/scouts/draft", json={"text": "Tidy the notes every weekday at 9"}, headers=self.auth).json()
+            self.assertEqual((draft["goal"], draft["words"]), ("Tidy the notes", "Reports weekdays at 9:00"))
+            self.assertIn(draft["scout"]["name"], SCOUT_NAMES)
+            p = tc.post("/scouts", json={"text": "Tidy the notes every weekday at 9", "workdir": self.dir.name}, headers=self.auth).json()
+            self.assertEqual((p["goal"], p["scout"]["name"]), ("Tidy the notes", draft["scout"]["name"]))
+            task = self.hub.schedule.for_project(p["id"])
+            self.assertEqual((task["repeat"], task["time"]), ("weekdays", "09:00"))
+            asked = tc.post("/scouts", json={"text": "Fix the flaky test when I ask", "scout": {"name": "Bo"}}, headers=self.auth).json()
+            self.assertEqual(asked["scout"]["name"], "Bo")
+            self.assertIsNone(self.hub.schedule.for_project(asked["id"]))
+            self.assertEqual(tc.post("/scouts", json={"text": "every morning"}, headers=self.auth).status_code, 400)
+
+    def test_needs_gathers_every_scouts_asks(self):
+        from fastapi.testclient import TestClient
+
+        from vision.projects import add_approval
+
+        with TestClient(self.server.create_app(self.hub)) as tc:
+            a = tc.post("/projects", json={"goal": "Ship it", "workdir": self.dir.name, "scout": {"name": "Atlas"}}, headers=self.auth).json()
+            b = tc.post("/projects", json={"goal": "Docs", "workdir": self.dir.name, "scout": {"name": "Wren"}}, headers=self.auth).json()
+            now = time.time()
+            (self.hub.projects.root / a["id"] / "threads.json").write_text(json.dumps([
+                {"id": "t1", "title": "Tray fix", "state": "ready_for_review", "branch": "vision/tray", "updated": now - 60,
+                 "workdir": self.dir.name, "last_result": {"summary": "Fixed the tray"}},
+                {"id": "t2", "title": "Icons", "state": "working", "updated": now, "workdir": self.dir.name}]))
+            (self.hub.projects.root / b["id"] / "threads.json").write_text(json.dumps([
+                {"id": "t3", "title": "Style", "state": "waiting_on_you", "question": "British or US spelling?",
+                 "updated": now - 30, "workdir": self.dir.name}]))
+            approval, _ = add_approval(self.hub.projects.root / a["id"], target="coordinator", tool="Bash",
+                                       tool_input={"command": "git push"}, rule="Bash(git push:*)", title="Atlas")
+            needs = tc.get("/needs", headers=self.auth).json()
+            self.assertEqual([(n["kind"], n["name"], n["id"]) for n in needs],
+                             [("approval", "Atlas", approval["id"]), ("question", "Wren", "t3"), ("review", "Atlas", "t1")])
+            self.assertEqual((needs[1]["text"], needs[2]["can_apply"]), ("British or US spelling?", True))
 
 
 def asyncio_run(hub, coro):

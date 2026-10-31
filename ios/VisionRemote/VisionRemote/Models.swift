@@ -701,6 +701,60 @@ struct ScoutLook: Equatable {
     static let traits = ["antenna", "sprout", "ears", "curl"]
 }
 
+/// What one sentence would make as a scout (POST /scouts/draft).
+struct ScoutDraft: Equatable {
+    var goal: String
+    /// "Reports every morning at 8:00", "Works only when you ask".
+    var words: String
+    var look: ScoutLook
+    /// When it reports; nil: only when asked.
+    var reports: ScoutCheckins.Schedule?
+    /// What POST …/checkins takes, as the draft has it.
+    var reportsJSON: [String: Any] {
+        guard let r = reports else { return ["repeat": "off"] }
+        var body: [String: Any] = ["repeat": r.repeatKind]
+        if r.repeatKind == "every" { body["every_minutes"] = r.everyMinutes } else { body["time"] = r.time }
+        if r.repeatKind == "weekly" { body["weekday"] = r.weekday }
+        return body
+    }
+
+    init(_ d: [String: Any]) {
+        goal = d["goal"] as? String ?? ""
+        words = d["words"] as? String ?? ""
+        look = ScoutLook(d["scout"] as? [String: Any] ?? [:])
+        if let r = d["reports"] as? [String: Any], let kind = r["repeat"] as? String, kind != "off" {
+            reports = .init(repeatKind: kind, time: r["time"] as? String ?? "08:00", everyMinutes: r["every_minutes"] as? Int ?? 120,
+                            enabled: true, weekday: r["weekday"] as? Int ?? 0)
+        }
+    }
+}
+
+/// One thing a scout is waiting on you for (GET /needs): a request to run something, a question, or finished work.
+struct NeedItem: Equatable, Identifiable {
+    enum Kind: String { case approval, question, review }
+    let kind: Kind
+    /// The approval's id, or the thread's.
+    let id: String
+    var project: String
+    var look: ScoutLook
+    var title: String
+    var text: String
+    var tool: String
+    var canApply: Bool
+    var at: Double
+
+    init?(_ d: [String: Any]) {
+        guard let kind = Kind(rawValue: d["kind"] as? String ?? ""), let id = d["id"] as? String, let project = d["project"] as? String else { return nil }
+        (self.kind, self.id, self.project) = (kind, id, project)
+        look = ScoutLook(d)
+        title = d["title"] as? String ?? ""
+        text = d["text"] as? String ?? ""
+        tool = d["tool"] as? String ?? ""
+        canApply = d["can_apply"] as? Bool ?? false
+        at = (d["at"] as? NSNumber)?.doubleValue ?? 0
+    }
+}
+
 /// One action a scout may take, and whether it does it, asks first or never does (projects.py ACTIONS).
 struct ScoutRule: Equatable, Identifiable {
     let action: String
