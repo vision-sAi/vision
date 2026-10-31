@@ -41,16 +41,16 @@ from rich.theme import Theme
 from vision.buddy import HEIGHT as BUDDY_HEIGHT, MIN_COLUMNS as BUDDY_MIN_COLUMNS, WIDTH as BUDDY_WIDTH, Buddy, face
 from vision.brain import clock
 from vision.checklist import ACTIVE, DONE, TODO_TOOLS
-from vision.theme import (ACCENT, ACCENT_HI, BAND, BAND_FLAT, BAND_INK, CARD, CARD_EDGE, CHIP_BG, CHIP_INK, CODE, DANGER, DIM, FAINT, LINE, OK,
+from vision.theme import (ACCENT, ACCENT_HI, CARD, CARD_EDGE, CHIP_BG, CHIP_INK, CODE, DANGER, DIM, FAINT, LINE, OK,
                           RICH_THEME, SELECTION, SHELL, TEXT, WARN, hsl, mix, truecolor)
 
-USER_STYLE = f"bold {BAND_INK}"  # the user's own words, on the band (see GradientBand)
+USER_STYLE = f"bold {TEXT}"  # the user's own words, behind the violet bar (see MarkedLines)
 SEL_STYLE = f"bg:{SELECTION}"  # a mouse selection over the transcript
 PREFIX_W = BUDDY_WIDTH  # the buddy's input gutter width
-# The transcript's two-cell gutter: Vision's prose sits indented behind it with no mark (the user's band
-# says who is talking), `◉ ` marks words still being heard and `! ` a shell command on its band. Copying
+# The transcript's two-cell gutter: the user's words sit behind a violet `▌` on every row, Vision's prose
+# indented behind it with no mark, `◉ ` marks words still being heard and `! ` a shell command. Copying
 # drops the gutter with the margin (see selected_text), so the marks are kept in GUTTER_MARKS.
-USER_MARK, REPLY_MARK, HEAR_MARK, SHELL_MARK = "› ", "  ", "◉ ", "! "
+USER_MARK, REPLY_MARK, HEAR_MARK, SHELL_MARK = "▌ ", "  ", "◉ ", "! "
 GUTTER = 2
 GUTTER_MARKS = {USER_MARK, REPLY_MARK, HEAR_MARK, SHELL_MARK}
 SHELL_STYLE = SHELL  # shell mode (`!`): its prompt, border and transcript mark stay pink
@@ -297,12 +297,10 @@ class WordWrap(Processor):
 
 
 # ---------------------------------------------------------------- transcript rendering
-class GradientBand:
-    """The user's message as the apps draw their bubble: a band across the whole width, violet to blue
-    when the terminal draws 24-bit colour (one shade per cell) and flat otherwise, the words in bold near
-    white behind a two-cell pad, wrapped, with a band row of air above and below. `mark` (shell mode's
-    pink `!`) sits in the pad of the first row. Cells with a background of their own (an `[Image #N]`
-    chip) keep it."""
+class MarkedLines:
+    """The user's message: a violet `▌` down its left edge, one per wrapped row, the words in bold beside
+    it, no fill. `mark` (shell mode's pink `!`) takes the first row and the rows under it hang blank. Only
+    the words' own styles colour anything (an `[Image #N]` chip keeps its background)."""
 
     def __init__(self, body: Text, mark: Text | None = None):
         self.body = body
@@ -310,29 +308,14 @@ class GradientBand:
 
     def __rich_console__(self, console, options):
         width = options.max_width
-        lines = list(self.body.wrap(console, max(1, width - 2 * GUTTER)))
-        flat = not truecolor()
-        shades = [RichStyle(bgcolor=BAND_FLAT if flat else mix(BAND[0], BAND[1], x / max(1, width - 1))) for x in range(width)]
-        for n, line in enumerate([Text(""), *lines, Text("")]):
-            row = (self.mark.copy() if self.mark is not None and n == 1 else Text(" " * GUTTER))
+        lines = list(self.body.wrap(console, max(1, width - GUTTER)))
+        for n, line in enumerate(lines):
+            if self.mark is not None:
+                row = self.mark.copy() if n == 0 else Text(" " * GUTTER)
+            else:
+                row = Text(USER_MARK, style=ACCENT)
             row.append_text(line)
-            row.truncate(width)
-            row.pad_right(width - row.cell_len)
-            x = 0
-            out: list[Segment] = []
-            for seg in row.render(console):
-                for ch in seg.text:
-                    w = max(1, get_cwidth(ch))
-                    style = seg.style or RichStyle()
-                    if style.bgcolor is None:
-                        style = style + shades[min(x, width - 1)]
-                    if out and out[-1].style == style:
-                        out[-1] = Segment(out[-1].text + ch, style)
-                    else:
-                        out.append(Segment(ch, style))
-                    x += w
-            yield from out
-            yield Segment.line()
+            yield row
 
     def __rich_measure__(self, console, options):
         from rich.measure import Measurement
@@ -340,8 +323,8 @@ class GradientBand:
         return Measurement(options.max_width, options.max_width)
 
 
-def user_grid(text: str) -> GradientBand:
-    """The user's message on its band (GradientBand). An attached picture's line (`[Attached image:
+def user_grid(text: str) -> MarkedLines:
+    """The user's message behind its violet bar (MarkedLines). An attached picture's line (`[Attached image:
     path]`) shows as an `[Image #N]` chip, a file:// link to it, inline with the words around it as typed."""
     body = Text(style=USER_STYLE)
     joined = False  # the last line was a picture: it sits inline with the text around it, as typed
@@ -356,7 +339,7 @@ def user_grid(text: str) -> GradientBand:
         else:
             body.append(line)
         joined = bool(m)
-    return GradientBand(body)
+    return MarkedLines(body)
 
 
 def reply_grid(text: str, markdown: bool = True) -> Group:
@@ -373,9 +356,9 @@ def hearing_grid(text: str) -> Table:
     return _reply_grid(body, HEAR_MARK)
 
 
-def shell_grid(command: str) -> GradientBand:
-    """A command run in shell mode: on the band like the user's own message, behind a pink `!`."""
-    return GradientBand(Text(command, style=USER_STYLE), Text(SHELL_MARK, style=f"bold {SHELL}"))
+def shell_grid(command: str) -> MarkedLines:
+    """A command run in shell mode: like the user's own message, behind a pink `!` instead of the bar."""
+    return MarkedLines(Text(command, style=USER_STYLE), Text(SHELL_MARK, style=f"bold {SHELL}"))
 
 
 def shell_output_grid(output: str, code: int | None, running: bool = False) -> Padding:
@@ -830,7 +813,7 @@ class ReplyView:
         self._live = Live(_reply_grid(Text(""), REPLY_MARK), console=console, auto_refresh=False, vertical_overflow="visible")
 
     def __enter__(self):
-        self.console.print()  # a blank line between the user's band and the reply
+        self.console.print()  # a blank line between the user's message and the reply
         self._live.__enter__()
         self._painter = threading.Thread(target=self._paint, daemon=True)
         self._painter.start()
@@ -2174,7 +2157,7 @@ class _ReplyEntry(_Entry):
                 if len(rows) < floor:
                     rows = [*rows, *([[]] * (floor - len(rows)))]
                 self._floor[width] = len(rows)
-            out = [[], *rows]  # a blank line between the user's band and the reply, as under it
+            out = [[], *rows]  # a blank line between the user's message and the reply, as under it
             if self.done:
                 out.append([])
             self._lines[width] = out
