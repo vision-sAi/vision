@@ -236,17 +236,19 @@ class CompareView:
         from rich.console import Group
         from rich.text import Text
 
+        from vision.theme import DANGER, DIM, WARN
         from vision.ui import ChatMarkdown
 
+        # Hexes rather than the theme's names: this draws in the transcript, whatever console that is.
         parts = []
         if a.text.strip():
             parts.append(ChatMarkdown(a.text.strip()))
         if a.error and a.error != "cancelled":
-            parts.append(Text(f"could not answer: {a.error}", style="red"))
+            parts.append(Text(f"could not answer: {a.error}", style=DANGER))
         elif a.error:
-            parts.append(Text("cancelled", style="yellow"))
+            parts.append(Text("cancelled", style=WARN))
         elif not a.text.strip():
-            parts.append(Text("(no answer)", style="dim"))
+            parts.append(Text("(no answer)", style=DIM))
         return Group(*parts)
 
     def __rich_console__(self, console, options):
@@ -255,22 +257,24 @@ class CompareView:
         from rich.table import Table
         from rich.text import Text
 
+        from vision.theme import DIM, LINE, TEXT
+
         width = options.max_width
         n = len(self.answers)
         if n and width // n >= MIN_COLUMN:
-            table = Table(box=ROUNDED, expand=True, show_header=True, show_footer=True, padding=(0, 1), border_style="dim")
+            table = Table(box=ROUNDED, expand=True, show_header=True, show_footer=True, padding=(0, 1), border_style=LINE)
             for a in self.answers:
-                table.add_column(Text(a.pick.label(), style="bold"), footer=Text(a.stats(), style="dim"), ratio=1, overflow="fold")
+                table.add_column(Text(a.pick.label(), style=f"bold {TEXT}"), footer=Text(a.stats(), style=DIM), ratio=1, overflow="fold")
             table.add_row(*(self._cell(a) for a in self.answers))
             yield table
         else:
             for a in self.answers:
-                yield Panel(self._cell(a), title=Text(a.pick.label(), style="bold"), subtitle=Text(a.stats(), style="dim"),
-                            title_align="left", subtitle_align="right", box=ROUNDED, border_style="dim")
+                yield Panel(self._cell(a), title=Text(a.pick.label(), style=f"bold {TEXT}"), subtitle=Text(a.stats(), style=DIM),
+                            title_align="left", subtitle_align="right", box=ROUNDED, border_style=LINE)
         tail = "compared outside the conversation"
         if self.untouched:
             tail += f" · nothing was sent to {self.untouched}"
-        yield Text(tail, style="dim")
+        yield Text(tail, style=DIM)
 
 
 def as_markdown(answers: list[Answer], prompt: str) -> str:

@@ -196,14 +196,14 @@ def check(cfg: ListenConfig, audio, note=None) -> tuple[bool, float | None]:
     if not enrolled():
         if not _noted and note:
             _noted = True
-            note("[yellow]only_me is on but no voice is enrolled: `vision voice enrol`[/yellow]")
+            note("[warn]only_me is on but no voice is enrolled: `vision voice enrol`[/warn]")
         return True, None
     try:
         score = shared().score(audio)
     except Exception as e:  # noqa: BLE001
         if not _noted and note:
             _noted = True
-            note(f"[yellow]the speaker check is off: {e}[/yellow]")
+            note(f"[warn]the speaker check is off: {e}[/warn]")
         return True, None
     if score is None:
         return True, None

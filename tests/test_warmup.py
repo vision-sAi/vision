@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 from prompt_toolkit.utils import get_cwidth
 
-from vision.buddy import Buddy, HEIGHT, WIDTH
+from vision.buddy import HEIGHT, WIDTH, Buddy, palette
+from vision.theme import VISION_HUE
 from vision.warmup import WarmupProgress, warm_voice
 
 
@@ -117,19 +118,26 @@ class VoiceWarmupTests(unittest.TestCase):
                 self.assertIn("listener", progress.status.ready)
 
 
-class PipWarmupTests(unittest.TestCase):
+class BuddyWarmupTests(unittest.TestCase):
     def setUp(self):
-        self.pip = Buddy()
+        self.buddy = Buddy()
         self.progress = WarmupProgress(("ears", "voice", "listener"))
-        self.pip.warming(self.progress)
+        self.buddy.warming(self.progress)
+        self.glow = palette(VISION_HUE, "focused")["glow"]
 
     def render(self, now):
         with patch("vision.buddy.time.time", return_value=now):
-            return self.pip.render(True)
+            return self.buddy.render(True)
+
+    def lit(self):
+        """How many of the bottom row's seven pixels are fully lit."""
+        return self.buddy._paint(True, 0).pixels[6].count(self.glow)
 
     def test_fill_is_driven_by_completion_and_preserves_terminal_geometry(self):
         self.assertEqual(self.render(0), self.render(10000))
         initial = self.render(0)
+        self.assertEqual(self.lit(), 0)
+        filled = []
         for name, percent in (("listener", 33), ("ears", 66), ("voice", 100)):
             self.progress.run(name, lambda: None)
             full = self.render(0)
@@ -139,29 +147,34 @@ class PipWarmupTests(unittest.TestCase):
             self.assertEqual(len(rows), HEIGHT)
             self.assertEqual([get_cwidth(row) for row in rows], [WIDTH] * HEIGHT)
             self.assertTrue(all(row[-1] == " " for row in rows))
-            self.assertIn(f"{percent}%", "".join(text for _, text in self.pip.render_inline(True)))
-        self.assertEqual(sum(style == "#a9d8bd" for style, _ in full), 7)
+            self.assertIn(f"{percent}%", "".join(text for _, text in self.buddy.render_inline(True)))
+            filled.append(self.lit())
+        self.assertEqual(filled, [2, 4, 7])  # left to right, a third of the row each
+        row = self.buddy._paint(True, 0).pixels[6]
+        self.assertEqual(row[4:11], [self.glow] * 7)
+        self.assertEqual(sum(style.startswith(f"fg:{self.glow}") for style, _ in full), 7)  # the top halves of the last row
 
     def test_detached_attempt_cannot_restore_warmup_or_update_new_attempt(self):
-        self.pip.rest()
+        self.buddy.rest()
         self.progress.run("ears", lambda: None)
-        self.assertEqual(self.pip.resolve(False), "idle")
-        self.assertNotIn("warmup", "".join(text for _, text in self.pip.render_inline(False)))
+        self.assertEqual(self.buddy.resolve(False), "idle")
+        self.assertNotIn("warmup", "".join(text for _, text in self.buddy.render_inline(False)))
         new = WarmupProgress(("ears", "voice"))
-        self.pip.warming(new)
+        self.buddy.warming(new)
         self.progress.run("voice", lambda: None)
         self.progress.run("listener", lambda: None)
         with patch("vision.buddy.time.time", return_value=0):
-            self.assertIn("warmup 0%", "".join(text for _, text in self.pip.render_inline(True)))
+            self.assertIn("warmup 0%", "".join(text for _, text in self.buddy.render_inline(True)))
 
     def test_other_states_detach_the_progress_display(self):
-        for transition in (lambda: self.pip.chore("transcribing"), self.pip.listening,
-                           self.pip.fail, lambda: self.pip.using("Bash")):
-            self.pip.warming(self.progress)
+        self.progress.run("ears", lambda: None)
+        for transition in (lambda: self.buddy.chore("transcribing"), self.buddy.listening,
+                           self.buddy.fail, lambda: self.buddy.using("Bash")):
+            self.buddy.warming(self.progress)
             transition()
             self.assertNotIn("warmup", "".join(text for _, text in self.render(0)))
-            self.assertIsNone(self.pip._warmup)
-            self.assertFalse(any(style == "#a9d8bd" for style, _ in self.render(0)))
+            self.assertIsNone(self.buddy._warmup)
+            self.assertFalse(any(style.startswith(f"fg:{self.glow}") for style, _ in self.render(0)))
 
 
 if __name__ == "__main__":

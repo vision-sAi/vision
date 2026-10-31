@@ -57,6 +57,8 @@ from vision.providers import names as provider_names
 from vision.planvoice import plan_question
 from vision.reply import status_label
 from rich.markup import escape
+from typer import rich_utils as _rich_help
+from vision.theme import ACCENT_HI, DANGER, DIM, FAINT, LINE, RICH_THEME, WARN
 from vision.ui import PLACEHOLDER, ChatScreen, ReplyView, SlashCommand, answered_grid, header_renderable, notice_grid, pick, short_path, show_header, user_grid, reply_grid, hearing_grid
 
 app = typer.Typer(
@@ -65,9 +67,23 @@ app = typer.Typer(
     no_args_is_help=False,
     rich_markup_mode="rich",
 )
-console = Console()
-from vision.theme import ACCENT
-NAME = f"[bold {ACCENT}]Vision[/bold {ACCENT}]"
+console = Console(theme=RICH_THEME)
+NAME = "[accent.bold]Vision[/accent.bold]"
+
+# `--help` is drawn by typer's own console, which knows nothing of RICH_THEME: its styles are module
+# constants it reads at render time, so they take the palette's hexes here.
+_rich_help.STYLE_OPTION = _rich_help.STYLE_COMMANDS_TABLE_FIRST_COLUMN = f"bold {ACCENT_HI}"
+_rich_help.STYLE_SWITCH = f"bold {ACCENT_HI}"
+_rich_help.STYLE_NEGATIVE_OPTION = _rich_help.STYLE_NEGATIVE_SWITCH = f"bold {DIM}"
+_rich_help.STYLE_TYPES = _rich_help.STYLE_TYPES_SEPARATOR = FAINT
+_rich_help.STYLE_USAGE = ACCENT_HI
+_rich_help.STYLE_HELPTEXT = _rich_help.STYLE_OPTION_DEFAULT = _rich_help.STYLE_ERRORS_SUGGESTION = DIM
+_rich_help.STYLE_OPTION_ENVVAR = FAINT
+_rich_help.STYLE_REQUIRED_SHORT = _rich_help.STYLE_DEPRECATED = _rich_help.STYLE_ABORTED = DANGER
+_rich_help.STYLE_REQUIRED_LONG = DANGER
+_rich_help.STYLE_DEPRECATED_COMMAND = FAINT
+_rich_help.STYLE_OPTIONS_PANEL_BORDER = _rich_help.STYLE_COMMANDS_PANEL_BORDER = LINE
+_rich_help.STYLE_ERRORS_PANEL_BORDER = DANGER
 
 _EXIT_PHRASES = {"exit", "quit", "goodbye", "bye", "goodbye vision", "bye vision", "that's all", "that is all", "stop listening"}
 
@@ -91,7 +107,7 @@ def _cfg(model: Optional[str], voice: Optional[str], effort: Optional[str] = Non
     RETIRED_NOTES.extend(cfg.providers.notes)  # a [providers.<name>] table Vision couldn't use
     if not quiet:
         for n in RETIRED_NOTES:
-            console.print(f"[yellow]{n}[/yellow]")
+            console.print(f"[warn]![/warn] {n}")
     if model:
         cfg.brain.model = model
     if effort:
@@ -455,8 +471,8 @@ def _update_cell(check: clis.UpdateCheck | None):
     if check.available is None:
         return Text(f"? {check.error or 'unknown'}"[:60], style="dim")
     if check.available:
-        return Text(f"{check.latest} available", style="yellow")
-    return Text("up to date", style="green")
+        return Text(f"{check.latest} available", style="warn")
+    return Text("up to date", style="ok")
 
 
 def _versions_renderable(
@@ -467,7 +483,7 @@ def _versions_renderable(
     infos = clis.cli_versions(providers) if infos is None else infos
     if check and checks is None:
         checks = {i.provider: clis.check_update(i.provider) for i in infos if i.ok}
-    t = Table(header_style=ACCENT, show_edge=False)
+    t = Table(header_style="table.header", show_edge=False, border_style=LINE)
     t.add_column("tool")
     t.add_column("version")
     if check:
@@ -479,7 +495,7 @@ def _versions_renderable(
         if i.ok:
             t.add_row(i.label, i.version, *([_update_cell((checks or {}).get(i.provider))] if check else []), short_path(i.path or ""))
         else:
-            t.add_row(i.label, Text("missing", style="red"), *([""] if check else []), Text(i.error or "", style="red"))
+            t.add_row(i.label, Text("missing", style="err"), *([""] if check else []), Text(i.error or "", style="err"))
     return t
 
 
@@ -488,9 +504,9 @@ def _update_summary(results: list[clis.UpdateResult]) -> str:
     lines = []
     for r in results:
         if r.error or not r.ok:
-            lines.append(f"[red]✗[/red] {escape(r.summary())}")
+            lines.append(f"[err]✗[/err] {escape(r.summary())}")
         elif r.changed:
-            lines.append(f"[green]✓[/green] {escape(r.summary())}")
+            lines.append(f"[ok]✓[/ok] {escape(r.summary())}")
         else:
             lines.append(f"[dim]·[/dim] {escape(r.summary())}")
     return "\n".join(lines)
@@ -519,9 +535,9 @@ def update(
         raise typer.BadParameter(str(e))
     results = []
     for p in which:
-        console.rule(f"[{ACCENT}]{provider_label(p, cli=True)}[/{ACCENT}]", style="dim")
+        console.rule(f"[accent]{provider_label(p, cli=True)}[/accent]")
         results.append(clis.update_cli(p, stream=True))
-    console.rule(style="dim")
+    console.rule()
     console.print(_update_summary(results))
     if any(not r.ok for r in results):
         raise typer.Exit(1)
@@ -564,7 +580,7 @@ def _render_usage_text(text: str, full: bool = False) -> None:
 def _usage_fallback_renderable(usage: dict | None):
     """Fallback using the rate-limit event attached to the last reply."""
     if not usage:
-        return Text("No usage data yet. Ask Vision something first, or run `vision usage`.", style="yellow")
+        return Text("No usage data yet. Ask Vision something first, or run `vision usage`.", style="warn")
     info, at = usage.get("info", {}), usage.get("at", 0)
     wins = info.get("unifiedWindows") or {}
     t = usage_ui.usage_table("Claude")
@@ -719,15 +735,16 @@ def _corner_label(cfg: Config, brain, quota: dict | None = None) -> str:
 
 
 def _corner_fragments(cfg: Config, brain, quota: dict | None) -> str | list[tuple[str, str]]:
-    """The corner label for the frame: a plain string, or fragments with the quota figure in yellow
+    """The corner label for the frame: a plain string, or fragments with the quota figure in amber
     once it is at or under [brain].quota_warn_pct."""
     from vision.failover import corner_text, low
+    from vision.theme import WARN
 
     label = _corner_label(cfg, brain, quota)
     if not low(quota, cfg.brain.quota_warn_pct):
         return label
     head = label[: -len(corner_text(quota))]
-    return [("class:frame.corner", head), ("class:frame.corner fg:ansiyellow", corner_text(quota))]
+    return [("class:frame.corner", head), (f"class:frame.corner fg:{WARN}", corner_text(quota))]
 
 
 def _active_summary(cfg: Config, brain, talk: bool, sep: str = " · ") -> str:
@@ -772,7 +789,7 @@ HELP_TEXT = (
     "[bold]/say <text>[/bold] speak text\n"
     "[bold]/mode[/bold] (or Shift-Tab) switch between [bold]auto[/bold] (every tool runs, no approvals; denied_tools still apply, "
     "and ask_tools patterns show a Yes/No selector first) "
-    "and [bold]plan[/bold] (read-only: Vision proposes a plan and carries it out once you approve it) · shown bottom left\n"
+    "and [bold]plan[/bold] (read-only: Vision proposes a plan and carries it out once you approve it) · shown in the box's bottom-left corner\n"
     "[bold]/cd <dir>[/bold] change the working directory for this session (/cd ~, /cd .., /cd - for the previous one; "
     "the brains work there from the next reply on; bare /cd says where you are) · "
     "[bold]/instructions[/bold] the folder's own instructions every brain reads: a .vision.md in the working directory or a folder above it "
@@ -813,7 +830,7 @@ HELP_TEXT = (
     "Enter sends (mid-reply it queues) · Ctrl-X sends it into the running reply now (empty box: the oldest queued one) · "
     "↑ on an empty box picks a queued message: Enter edits, Del removes, Esc leaves (the queue waits meanwhile) · "
     "Ctrl-J newline · Ctrl-V pastes a picture or text · PgUp/PgDn or Shift-↑/↓ scroll (Alt-End follows again) · "
-    "Esc cancels a reply · Ctrl-O unfolds the last reply's tool calls · Ctrl-D quits[/dim]"
+    "Esc cancels a reply · Ctrl-O unfolds the last reply's tool calls (a click unfolds one folded row) · Ctrl-D quits[/dim]"
 )
 
 
@@ -1100,7 +1117,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
         try:
             save_voice_enabled(on)
         except Exception as e:  # noqa: BLE001
-            note(f"[red]could not save config.toml: {e}[/red]")
+            note(f"[err]could not save config.toml: {e}[/err]")
             return
         cfg.voice.enabled = on
         told = set_service_voice(on)
@@ -1118,7 +1135,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                     try:
                         resource.close()
                     except Exception as e:  # noqa: BLE001
-                        note(f"[yellow]{key} did not unload cleanly: {e}[/yellow]")
+                        note(f"[warn]{key} did not unload cleanly: {e}[/warn]")
             state["mic"] = None
 
         background(unload)
@@ -1181,12 +1198,13 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
         k = failover.key(q)
         if k and failover.low(q, cfg.brain.quota_warn_pct) and k not in state["quota_warned"]:
             state["quota_warned"].add(k)
-            note(f"[yellow]{failover.warning(provider_label(brain.provider), q, cfg.brain.quota_warn_pct)}[/yellow]")
+            note(f"[warn]{failover.warning(provider_label(brain.provider), q, cfg.brain.quota_warn_pct)}[/warn]")
         screen.app.invalidate()
 
     def status_line() -> str:
         # The model that answers sits in the input box's corner (see corner_label): the brain, or the
-        # conversation model while talking, which then answers typed turns too.
+        # conversation model while talking, which then answers typed turns too. The folder is in the
+        # box's other corner and the scouts lead the row (see scout_list).
         parts = []
         if state["talk"]:
             parts.append(f"talk · {state['hearing'] or 'replying'}")
@@ -1198,7 +1216,6 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             from vision.compare import armed_label
 
             parts.append(f"comparing next: {armed_label(list(state['compare']))}")
-        parts.append(short_path(brain.workdir))
         update_notice()
         return "  ·  ".join(parts)
 
@@ -1210,9 +1227,36 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
         parts.append("wake on" if state["wake"] else "wake off")
         return "  ·  ".join(parts)
 
+    # The scouts (vision serve's projects) for the status row and the open card: asked for in the background
+    # every SCOUT_POLL_S and read from this cache meanwhile, so a repaint never waits on the server; none
+    # while no server runs.
+    scouts = {"list": [], "at": 0.0, "asking": False, "known": False}
+
+    def scout_list() -> list[dict]:
+        if not scouts["asking"] and time.monotonic() - scouts["at"] > SCOUT_POLL_S:
+            scouts["asking"] = True
+            background(fetch_scouts)
+        return scouts["list"]
+
+    def fetch_scouts() -> None:
+        try:
+            got = _serve_call("/projects", why="the scouts live there")
+        except (SystemExit, Exception):  # noqa: BLE001  (no server, or one that didn't answer: no scouts shown)
+            got = []
+        got = [p for p in got if isinstance(p, dict) and p.get("status") != "archived"] if isinstance(got, list) else []
+        first = not scouts["known"]
+        scouts.update(list=got, at=time.monotonic(), asking=False, known=True)
+        entry = state.get("open_card")
+        if first and got and entry is not None and entry in screen.entries:
+            entry.renderable = open_card()  # the card was drawn before the scouts were known
+            entry.invalidate()
+        screen.app.invalidate()
+
     buddy = Buddy(cfg.buddy.name, slide_in=cfg.buddy.slide_in) if cfg.buddy.enabled else None
     screen = ChatScreen(str(STATE_DIR / "history"), status_line, buddy=buddy, mode=lambda: cfg.brain.mode, status_right=wake_status,
                         corner=corner_label)
+    screen.folder_fn = lambda: short_path(brain.workdir)  # beside the title and the mode chip
+    screen.scouts_fn = scout_list
     if buddy:
         buddy.speaking_fn = lambda: bool(state["ss"] and state["ss"].speaking)
     screen.commands = _menu_commands(cfg, lambda: brain)
@@ -1230,21 +1274,33 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
     load_arrow_history()
 
     def note(msg: str, kind: str = "info"):
-        """A system line in the transcript. A message wrapped whole in `[red]…[/red]` is an error,
-        `[yellow]…[/yellow]` a warning: they get the `✗` / `⚠` mark instead of the info `·`."""
-        for colour, k in (("red", "error"), ("yellow", "warn")):
-            if msg.startswith(f"[{colour}]") and msg.endswith(f"[/{colour}]"):
-                msg, kind = msg[len(colour) + 2 : -(len(colour) + 3)], k
+        """A system line in the transcript. A message wrapped whole in `[err]…[/err]` is an error,
+        `[warn]…[/warn]` a warning: they get the `✗` / `⚠` mark instead of the info `·`. The older
+        `[red]`/`[yellow]` wrappers still count, for callers outside this file."""
+        for tag, k in (("err", "error"), ("red", "error"), ("warn", "warn"), ("yellow", "warn")):
+            if msg.startswith(f"[{tag}]") and msg.endswith(f"[/{tag}]"):
+                msg, kind = msg[len(tag) + 2 : -(len(tag) + 3)], k
+                break
         screen.add(notice_grid(msg, kind))
 
-    def paint_open():
-        """The session card: Pip + model / directory / voice. First block on open and after /clear."""
-        screen.add(header_renderable(
-            model=_active_summary(cfg, brain, state["talk"], " "),  # "Opus 5 high", like the status row
+    def open_card():
+        """The open card: the buddy, Vision's version, the model, the folder, the voice and the scouts."""
+        from vision.ui import scout_needs
+
+        found = scouts["list"] if scouts["known"] else []
+        return header_renderable(
+            model=_active_summary(cfg, brain, state["talk"]),  # "Opus 5 · high", as in the composer's corner
             directory=short_path(brain.workdir),
             voice=cfg.voice.voice if state["speak"] else "off",
             resumed=bool(brain.session_id),
-        ))
+            version=__version__,
+            scouts=len(found) or None,
+            needing=sum(scout_needs(p) > 0 for p in found),
+        )
+
+    def paint_open():
+        """The open card, first block on open and after /clear (see open_card)."""
+        state["open_card"] = screen.add(open_card())
 
     def show_history(provider: str, sid: str, limit: int = SHOWN_HISTORY):
         """A resumed conversation's earlier turns, in the transcript where they can be scrolled, not
@@ -1460,7 +1516,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             # what the answer leads to (the plan being carried out, the next step) is a fresh reply.
             blocks = [answered_grid(questions, answers)]
             if questions == [PLAN_QUESTION] and (answers or {}).get(PLAN_QUESTION["question"]) == "Yes":
-                blocks.append(Text.from_markup("plan approved → [yellow]auto mode[/yellow] (Shift-Tab or /mode plan to plan again)"))
+                blocks.append(Text.from_markup("plan approved → [warn]auto mode[/warn] (Shift-Tab or /mode plan to plan again)"))
             entry = screen.split_reply(entry, *blocks)
             return answers
 
@@ -1753,7 +1809,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
         for p in picks:
             why = providers.setup_note(p.model, cfg) or providers.unavailable_reason(provider_for(p.model), cfg)
             if why:
-                note(f"[yellow]{why}[/yellow]")
+                note(f"[warn]{why}[/warn]")
                 return
         state["compare"] = ()
         enqueue_turn(text, shown=queue_or_add(text), recorded=True, compare=tuple(picks))
@@ -1788,7 +1844,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
 
         why = providers.setup_note(model, cfg) or providers.unavailable_reason(provider_for(model), cfg)
         if why:
-            note(f"[yellow]{why}[/yellow]")
+            note(f"[warn]{why}[/warn]")
             return
         if screen.busy:
             note("still replying — switch models once it has finished (Esc cancels)")
@@ -1835,7 +1891,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             state["quota"] = None  # the new provider's figure comes with its first turn
             return True
         except Exception as e:  # noqa: BLE001
-            note(f"[red]model switch failed: {e}[/red]")
+            note(f"[err]model switch failed: {e}[/err]")
             if link:
                 link.post({"type": "error", "text": f"model switch failed: {e}"})
             return False
@@ -1856,7 +1912,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
         current = brain.provider
         options = failover.candidates(cfg, current, tried)
         if not options:
-            note(f"[yellow]{provider_label(current)}'s usage limit is hit and no other provider is set up here (/providers).[/yellow]")
+            note(f"[warn]{provider_label(current)}'s usage limit is hit and no other provider is set up here (/providers).[/warn]")
             return False
         if isinstance(cfg.brain.failover, list):
             model = options[0][0]
@@ -1896,7 +1952,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             try:
                 chats = list_remote_chats(server)
             except Exception as e:  # noqa: BLE001  (the descriptor outlived the server, or it is starting)
-                note(f"[yellow]vision serve is not answering: {e}[/yellow]")
+                note(f"[warn]vision serve is not answering: {e}[/warn]")
                 server = None
         state["server"] = server
         return chats
@@ -1907,7 +1963,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
         from vision.remote import CLOSED_ON_PHONE, RemoteBrain, remote_history
 
         if screen.busy or state["turn_active"]:
-            note("[yellow]wait for the current reply to finish (Esc cancels it), then /session again[/yellow]")
+            note("[warn]wait for the current reply to finish (Esc cancels it), then /session again[/warn]")
             return
         forget_suggestion()  # the phone chat's own comes with its summary
         if joined() and brain.chat_id == info["chat"]:
@@ -1922,7 +1978,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             enqueue_turn(text, follow=True)
 
         def on_note(text: str, kind: str):
-            note(f"[red]{text}[/red]" if kind == "error" else text)
+            note(f"[err]{text}[/err]" if kind == "error" else text)
 
         def suggested(text: str):
             # The server's guess at the next message: grey in the empty box, as after a reply here.
@@ -1956,7 +2012,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             remote.connect()
         except Exception as e:  # noqa: BLE001
             cfg.brain.model, cfg.brain.effort, cfg.brain.workdir = before
-            note(f"[red]could not join that chat: {e}[/red]")
+            note(f"[err]could not join that chat: {e}[/err]")
             return
         if joined():
             brain.close()
@@ -2033,7 +2089,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
         )
         if listener_error is not None:
             state["cut_in"] = False
-            note(f"[yellow]cutting in by voice is off: {listener_error}[/yellow]")
+            note(f"[warn]cutting in by voice is off: {listener_error}[/warn]")
         return mic, stt
 
     def small_listener():
@@ -2058,7 +2114,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             return BargeIn(small_listener(), cfg.listen.barge_in, on_cut=cancel_reply).start()
         except Exception as e:  # noqa: BLE001  the model or the mic failed: say so once, keep talking
             state["cut_in"] = False
-            note(f"[yellow]cutting in by voice is off: {e}[/yellow]")
+            note(f"[warn]cutting in by voice is off: {e}[/warn]")
             return None
 
     def cut_in_done(barge) -> tuple | None:
@@ -2068,7 +2124,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
         hit = barge.stop()
         if barge.error is not None:
             state["cut_in"] = False
-            note(f"[yellow]cutting in by voice is off: {barge.error}[/yellow]")
+            note(f"[warn]cutting in by voice is off: {barge.error}[/warn]")
         return hit
 
     def hear_plan_answer(question: dict, closed: threading.Event, ss) -> None:
@@ -2297,7 +2353,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 if hit is not None:
                     pending, expect_name = hit[0], "anywhere" if cfg.listen.barge_in == "wake" else ""
         except (Exception, SystemExit) as e:  # noqa: BLE001  SystemExit: no such input device
-            note(f"[red]listening failed: {e}[/red]")
+            note(f"[err]listening failed: {e}[/err]")
             if buddy:
                 buddy.fail()
         finally:
@@ -2321,7 +2377,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                         unload_errors.append(str(e))
             state["thread"] = None
             if unload_errors:
-                note(f"[yellow]speech did not unload cleanly: {'; '.join(unload_errors)}[/yellow]")
+                note(f"[warn]speech did not unload cleanly: {'; '.join(unload_errors)}[/warn]")
             if not once and woken is None:
                 note("voice conversation off")
             start_wake()  # back to waiting for the name, if the wake word is on
@@ -2338,7 +2394,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
         if stale is not None and stale.is_alive():
             stale.join(timeout=1)  # the last conversation is still letting go of the mic
             if stale.is_alive():  # stuck inside the audio library: a second stream on top would hang too
-                note("[yellow]the mic from the last voice conversation hasn't closed yet; if this keeps up, restart Vision[/yellow]")
+                note("[warn]the mic from the last voice conversation hasn't closed yet; if this keeps up, restart Vision[/warn]")
                 return
         stop_wake(join=True)  # one mic stream at a time: the wake listener lets go before the ears open
         state["talk"], state["once"], state["typed"] = True, once, queue.Queue()
@@ -2395,7 +2451,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 start_listening(once=False, woken=hit, cut=cut["yes"])  # no chime when a request came with the name
         except (Exception, SystemExit) as e:  # SystemExit: no such input device
             state["wake"] = False
-            note(f"[red]wake word off: {e}[/red]")
+            note(f"[err]wake word off: {e}[/err]")
             if buddy:
                 buddy.fail()
         finally:
@@ -2540,8 +2596,8 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
         if cmd in ("speak", "voice", "say", "talk", "listen", "wake", "mic") and voice_backend() is None:
             from vision.install import voice_hardware
 
-            note("[yellow]Voice isn't set up here. Quit and run `vision voice setup` to add it.[/yellow]" if voice_hardware()
-                 else "[yellow]Voice needs an Apple Silicon Mac or an NVIDIA graphics card, so this machine is text only.[/yellow]")
+            note("[warn]Voice isn't set up here. Quit and run `vision voice setup` to add it.[/warn]" if voice_hardware()
+                 else "[warn]Voice needs an Apple Silicon Mac or an NVIDIA graphics card, so this machine is text only.[/warn]")
         elif cmd in ("quit", "exit", "q"):
             if not quit_after_review():
                 screen.exit(("quit",))
@@ -2571,7 +2627,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             elif what in ("reply", "all"):
                 text, label = reply.strip(), "the reply"
             elif what and not what.isdigit():
-                note("[yellow]/copy copies the last reply's last code block; /copy reply all of it, /copy 2 the block before last[/yellow]")
+                note("[warn]/copy copies the last reply's last code block; /copy reply all of it, /copy 2 the block before last[/warn]")
             else:
                 blocks = code_blocks(reply)
                 n = int(what) if what else 1
@@ -2586,7 +2642,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 how = copy_to_clipboard(text, screen.app.output)
                 lines = text.count("\n") + 1
                 note(f"copied {lines} line{'s' if lines != 1 else ''}: {label}" if how
-                     else "[yellow]could not reach the clipboard (no wl-copy, xclip or xsel, and the terminal took no OSC 52)[/yellow]")
+                     else "[warn]could not reach the clipboard (no wl-copy, xclip or xsel, and the terminal took no OSC 52)[/warn]")
         elif cmd == "model":
             choice, full = _split_model_arg(arg)
             if choice.lower() == "default":
@@ -2621,7 +2677,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             try:
                 enabled = _fast_value(arg, cfg.brain.fast)
             except ValueError as e:
-                note(f"[yellow]{e}[/yellow]")
+                note(f"[warn]{e}[/warn]")
                 return
             screen.busy = True
 
@@ -2634,7 +2690,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                     note(f"{msg}{'; ' + detail if detail else ''}")
                     screen.app.invalidate()
                 except Exception as e:  # noqa: BLE001
-                    note(f"[red]fast mode failed: {e}[/red]")
+                    note(f"[err]fast mode failed: {e}[/err]")
                 finally:
                     screen.busy = False
 
@@ -2649,7 +2705,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 from vision.providers import setup_note
 
                 if setup_note(model_choice, cfg):
-                    note(f"[yellow]{setup_note(model_choice, cfg)}[/yellow]")
+                    note(f"[warn]{setup_note(model_choice, cfg)}[/warn]")
                     return
                 selected_effort, _ = coerce_effort(model_choice, saved_effort)
                 screen.open_picker(
@@ -2664,7 +2720,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             try:
                 which, full = _split_usage_arg(arg)
             except Exception as e:  # unknown word, or that provider's CLI is not installed
-                note(f"[red]{e}[/red]")
+                note(f"[err]{e}[/err]")
                 return
             label = "all provider" if which == "all" else provider_label((which or brain.provider), cli=True)
             owns_busy = not screen.busy
@@ -2676,7 +2732,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                     screen.add(_usage_selection(cfg, brain, which, full=full))
                     refresh_quota()
                 except Exception as e:  # an unavailable provider selected by name
-                    note(f"[red]{e}[/red]")
+                    note(f"[err]{e}[/err]")
                 finally:
                     if owns_busy and not state["turn_active"]:
                         screen.busy, screen.busy_label = False, ""
@@ -2685,7 +2741,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             try:
                 show_vision, providers = clis.parse_version_arg(arg)
             except ValueError as e:
-                note(f"[red]{e}[/red]")
+                note(f"[err]{e}[/err]")
                 return
             owns_busy = not screen.busy
             if owns_busy:
@@ -2702,7 +2758,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             try:
                 which = clis.parse_update_arg(arg)
             except ValueError as e:
-                note(f"[red]{e}[/red]")
+                note(f"[err]{e}[/err]")
                 return
             if screen.busy:
                 note("still busy — run /update once the reply has finished (Esc cancels)")
@@ -2748,7 +2804,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 note(f"remembered: {remember(rest, topic)}")
                 warm_brain()  # memory is part of the persona: the process for it boots now
             except ValueError as e:
-                note(f"[red]{e}[/red]")
+                note(f"[err]{e}[/err]")
         elif cmd == "forget":
             from vision.memory import forget
 
@@ -2758,7 +2814,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 if gone:
                     warm_brain()
             except ValueError as e:
-                note(f"[red]{e}[/red]")
+                note(f"[err]{e}[/err]")
         elif cmd == "export":
             from vision.sessions import SessionInfo, export_session
 
@@ -2770,7 +2826,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 try:
                     path = export_session(info, arg, model=_model_label(brain))
                 except (OSError, ValueError) as e:
-                    note(f"[red]couldn't export: {escape(str(e))}[/red]")
+                    note(f"[err]couldn't export: {escape(str(e))}[/err]")
                 else:
                     note(f"saved to {escape(short_path(path))}")
         elif cmd in ("threads", "tell"):
@@ -2794,14 +2850,14 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                                f"[dim]{t['id']}[/dim] {escape(t['title'])} [dim]· {escape(_thread_state(t))}[/dim]" for t in rows)
                      or f"[dim]no threads in {escape(found[0]['title'])} yet[/dim]")
             except SystemExit as e:  # the server's refusal, or no server: said here, the chat goes on
-                note(f"[red]{escape(str(e))}[/red]")
+                note(f"[err]{escape(str(e))}[/err]")
         elif cmd == "project":
             # This chat becomes a project's, as it is (projects live in `vision serve`): a joined chat is
             # adopted where it runs; this terminal's own conversation is opened there first, then joined,
             # so threads can report to it after this window is gone. A fresh chat with no goal given
             # joins the project this folder already has instead.
             if screen.busy or state["turn_active"]:
-                note("[yellow]wait for the reply to finish (Esc cancels it), then /project again[/yellow]")
+                note("[warn]wait for the reply to finish (Esc cancels it), then /project again[/warn]")
                 return
             goal = arg.strip()
 
@@ -2841,18 +2897,18 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                     start_link()
                     note(f"the project “{escape(out['project']['title'])}” is made · vision project open {out['project']['id']} joins its chat")
             except SystemExit as e:
-                note(f"[red]{escape(str(e))}[/red]")
+                note(f"[err]{escape(str(e))}[/err]")
         elif cmd == "cd":
             if not arg.strip():
                 note(f"working in {short_path(brain.workdir)}{folder_note(brain.workdir)} · /cd <dir>, /cd ~, /cd .. or /cd - moves")
                 return
             if joined():
-                note("[yellow]this chat runs under vision serve; its directory is set there[/yellow]")
+                note("[warn]this chat runs under vision serve; its directory is set there[/warn]")
                 return
             try:
                 target = _cd_target(arg, brain.workdir, state["prev_dir"])
             except ValueError as e:
-                note(f"[red]{e}[/red]")
+                note(f"[err]{e}[/err]")
                 return
             if target == brain.workdir:
                 note(f"already in {short_path(target)}")
@@ -2908,13 +2964,13 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             from vision.ui import diff_grid
 
             if joined():
-                note("[yellow]this chat runs under vision serve, which keeps no checkpoints[/yellow]")
+                note("[warn]this chat runs under vision serve, which keeps no checkpoints[/warn]")
                 return
             if not cfg.brain.checkpoints:
-                note("[yellow]checkpoints are off (checkpoints under [brain] in the config)[/yellow]")
+                note("[warn]checkpoints are off (checkpoints under [brain] in the config)[/warn]")
                 return
             if checkpoints.repo_root(brain.workdir) is None:
-                note(f"[yellow]{short_path(brain.workdir)} is not in a git repository, so there are no checkpoints here[/yellow]")
+                note(f"[warn]{short_path(brain.workdir)} is not in a git repository, so there are no checkpoints here[/warn]")
                 return
             cps = checkpoint_list()
             if cmd == "diff" and arg.strip().lower() == "list":
@@ -2924,7 +2980,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 return
             cp = checkpoints.pick(cps, arg)
             if cp is None:
-                note("no checkpoints yet: one is taken before each reply" if not cps else f"[yellow]no checkpoint {arg.strip()}: /diff list shows them (1 to {len(cps)})[/yellow]")
+                note("no checkpoints yet: one is taken before each reply" if not cps else f"[warn]no checkpoint {arg.strip()}: /diff list shows them (1 to {len(cps)})[/warn]")
                 return
             if cmd == "rewind" and screen.busy:
                 note("still replying — rewind once it has finished (Esc cancels)")
@@ -2935,7 +2991,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 try:
                     stat, patch = checkpoints.diff(cp)
                 except checkpoints.CheckpointError as e:
-                    note(f"[red]{e}[/red]")
+                    note(f"[err]{e}[/err]")
                     return
                 if not stat:
                     note(f"nothing has changed since {which}")
@@ -2953,7 +3009,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 try:
                     before = checkpoints.restore(cp)
                 except checkpoints.CheckpointError as e:
-                    note(f"[red]rewind failed: {e}[/red]")
+                    note(f"[err]rewind failed: {e}[/err]")
                     return
                 cps.append(before)  # so /rewind 1 undoes the rewind
                 del cps[:-checkpoints.PER_SESSION]
@@ -2979,7 +3035,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
         elif cmd in ("mode", "auto", "plan"):
             word = cmd if cmd != "mode" else arg.strip().lower()
             if word and word not in MODES:
-                note(f"[yellow]unknown mode “{word}”: auto or plan[/yellow]")
+                note(f"[warn]unknown mode “{word}”: auto or plan[/warn]")
                 return
             cfg.brain.mode = word or ("plan" if cfg.brain.mode == "auto" else "auto")  # bare /mode or Shift-Tab: toggle
             warm_brain()
@@ -2994,18 +3050,18 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
 
             def resume(key: str):
                 if screen.busy:
-                    note("[yellow]wait for the current reply to finish (Esc cancels it), then /session again[/yellow]")
+                    note("[warn]wait for the current reply to finish (Esc cancels it), then /session again[/warn]")
                     return
                 if is_remote_key(key):
                     hit = remote_from_key(key, phone)
                     if hit is None:
-                        note("[red]that chat is gone from the phone[/red]")
+                        note("[err]that chat is gone from the phone[/err]")
                     else:
                         attach(hit)
                     return
                 info = session_from_key(key, listed) or find_any_session(key, prefer=brain.provider)
                 if info is None:
-                    note(f"[red]no conversation starts with “{key}”[/red]")
+                    note(f"[err]no conversation starts with “{key}”[/err]")
                     return
                 if session_key(info) in live:  # open on the phone: join it rather than fork a second copy
                     attach(live[session_key(info)])
@@ -3039,7 +3095,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                     elif remote:
                         attach(remote)
                     else:
-                        note(f"[red]no conversation starts with “{arg.strip()}”[/red]")
+                        note(f"[err]no conversation starts with “{arg.strip()}”[/err]")
                 elif not listed and not phone:
                     note("no earlier conversations found")
                 else:
@@ -3072,7 +3128,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                         progress.run("voice", lambda: _load_voice(speaker(), cfg.voice))
                         note(f"voice ready · {speaker().voice} on {speaker().device_note}")
                     except Exception as e:  # noqa: BLE001
-                        note(f"[red]voice failed to load: {e}[/red]")
+                        note(f"[err]voice failed to load: {e}[/err]")
 
                 background(warm)
         elif cmd == "voice" and arg.strip().lower() in ("on", "off"):
@@ -3085,7 +3141,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                     if speaker()._loaded and cfg.voice.filler:
                         speaker().prepare_fillers(cfg.voice.filler_phrases)
                 except Exception as e:
-                    note(f"[red]{e}[/red]")
+                    note(f"[err]{e}[/err]")
             background(go)
         elif cmd == "say":
             if not refuse_voice():
@@ -3103,7 +3159,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 try:
                     return input_device_choices()
                 except Exception as e:  # noqa: BLE001  no PortAudio, no PipeWire
-                    note(f"[red]can't list microphones: {e}[/red]")
+                    note(f"[err]can't list microphones: {e}[/err]")
                     return []
 
             def use(spec: str):
@@ -3114,7 +3170,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 try:
                     resolve_device(spec, "input", fresh=True)
                 except SystemExit as e:
-                    note(f"[red]{e}[/red]")
+                    note(f"[err]{e}[/err]")
                     return
                 cfg.listen.input_device = spec
                 save_input_device(spec)
@@ -3133,7 +3189,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 note(f"mic → {mic_note}" + (" · reopening it" if talking or waking else ""))
                 if talking:
                     if state["thread"] is not None and state["thread"].is_alive():
-                        note("[yellow]the old voice conversation is still busy: /talk when it's done[/yellow]")
+                        note("[warn]the old voice conversation is still busy: /talk when it's done[/warn]")
                     else:
                         start_listening(once=False)
                 elif waking:
@@ -3155,7 +3211,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
 
             def apply(chosen: list[str]) -> None:
                 if not chosen:
-                    note("[yellow]keep at least one provider[/yellow]")
+                    note("[warn]keep at least one provider[/warn]")
                     return
                 cfg.providers.enabled = chosen
                 save_enabled_providers(chosen)
@@ -3167,7 +3223,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             if words:
                 bad = [w for w in words if w not in prov.REGISTRY]
                 if bad:
-                    note(f"[yellow]unknown provider {', '.join(bad)}: pick from {', '.join(prov.REGISTRY)}[/yellow]")
+                    note(f"[warn]unknown provider {', '.join(bad)}: pick from {', '.join(prov.REGISTRY)}[/warn]")
                 else:
                     apply([n for n in words if n in prov.REGISTRY])
             else:
@@ -3189,7 +3245,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
         elif cmd == "wake":
             word = arg.strip().lower()
             if word and word not in ("on", "off"):
-                note("[yellow]/wake on or /wake off[/yellow]")
+                note("[warn]/wake on or /wake off[/warn]")
                 return
             on = word == "on" if word else not state["wake"]
             state["wake"] = on
@@ -3214,7 +3270,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                 return
             picks, prompt, err = compare.parse(arg, cfg.brain.effort)
             if err:
-                note(f"[yellow]{err}[/yellow]")
+                note(f"[warn]{err}[/warn]")
             elif picks and prompt:
                 start_compare(prompt, picks)
             elif picks:
@@ -3236,7 +3292,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                         return
                     picks = compare.picks_from_labels(next(iter(answers.values())), cfg.brain.effort)
                     if len(picks) < 2:
-                        note("[yellow]tick at least two models to compare[/yellow]")
+                        note("[warn]tick at least two models to compare[/warn]")
                         return
                     state["compare"] = tuple(picks)
                     note(f"the next message goes to {compare.armed_label(picks)} side by side (/compare off drops it)")
@@ -3249,10 +3305,10 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             try:
                 override = parse_command(text, cfg.router)
             except OverrideError as e:
-                note(f"[red]{e}[/red]")
+                note(f"[err]{e}[/err]")
                 return
             if override is None:
-                note(f"[red]unknown command /{cmd}[/red]")
+                note(f"[err]unknown command /{cmd}[/err]")
                 return
             if override.kind == "cancel" or override.text:
                 send(text)  # the front end parses it again and acts on it
@@ -3266,7 +3322,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             words = arg.lower().split()
             mode = words[0] if words else ""
             if mode and mode not in ROUTER_MODES:
-                note(f"[yellow]unknown router mode “{mode}”: off, audit or on[/yellow]")
+                note(f"[warn]unknown router mode “{mode}”: off, audit or on[/warn]")
                 return
             if mode:
                 cfg.router.mode = mode
@@ -3279,7 +3335,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
                  f"{cfg.router.default_effort}, hard tasks {cfg.router.high_effort} · agents: {agents} · log ~/.local/state/vision/routing.jsonl")
             screen.app.invalidate()
         else:
-            note(f"[red]unknown command /{cmd}[/red]")
+            note(f"[err]unknown command /{cmd}[/err]")
 
     def send(text: str):
         if state["talk"]:
@@ -3496,11 +3552,11 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
             state["link"].start()
         except Exception as e:  # noqa: BLE001  (a read-only state dir: the phone just does not see this chat)
             state["link"] = None
-            note(f"[yellow]not visible to the phone: {e}[/yellow]")
+            note(f"[warn]not visible to the phone: {e}[/warn]")
     if not join:  # a `--join` window mirrors a phone chat; it only lists itself if the join misses
         start_link()
     for n in RETIRED_NOTES:  # a saved model its provider no longer lists (see _cfg)
-        note(f"[yellow]{n}[/yellow]")
+        note(f"[warn]{n}[/warn]")
 
     def join_on_start():
         """`vision --join <chat>` (the phone's "Open on computer"): attach once the screen is up, so
@@ -3510,7 +3566,7 @@ def chat(speak: bool, model: Optional[str], effort: Optional[str], voice: Option
         phone = phone_chats()
         hit = remote_from_key(join, phone)
         if hit is None:
-            note(f"[red]no phone chat starts with “{join}”[/red]" if state["server"] else "[red]vision serve is not running, so there is no phone chat to join[/red]")
+            note(f"[err]no phone chat starts with “{join}”[/err]" if state["server"] else "[err]vision serve is not running, so there is no phone chat to join[/err]")
             start_link()
             return
         attach(hit)
@@ -3595,11 +3651,11 @@ def _listen_once(cfg: Config, mic, stt, ptt: bool = False, cancel: threading.Eve
             chime("listen", out_dev)
         from vision.stt import LiveTranscript
 
-        with console.status(f"[{ACCENT}]listening…[/{ACCENT}]", spinner="dots") as st:
-            live = LiveTranscript(stt, lambda t: st.update(f"[{ACCENT}]hearing you…[/{ACCENT}] [italic]{escape(t)}[/italic]")) if cfg.listen.live_ms else None
+        with console.status("[accent]listening…[/accent]", spinner="dots") as st:
+            live = LiveTranscript(stt, lambda t: st.update(f"[accent]hearing you…[/accent] [italic]{escape(t)}[/italic]")) if cfg.listen.live_ms else None
             try:
                 audio = mic.record_utterance(
-                    on_speech_start=lambda: st.update(f"[{ACCENT}]hearing you…[/{ACCENT}]"), cancel=cancel,
+                    on_speech_start=lambda: st.update("[accent]hearing you…[/accent]"), cancel=cancel,
                     on_audio=live.feed if live is not None else None, every_ms=cfg.listen.live_ms,
                     on_speech_end=live.feed_final if live is not None else None,
                 )
@@ -3653,7 +3709,7 @@ def ask(
         if plain:
             turn = brain.ask(text)
             if turn.is_error and not turn.text:
-                console.print(f"[red]{turn.error}[/red]", file=sys.stderr)
+                console.print(f"[err]✗[/err] {turn.error}", file=sys.stderr)
                 raise typer.Exit(1)
             print(turn.text)
             if speak:
@@ -3849,14 +3905,14 @@ def voices(
     cfg = load_config()
     choices = voice_choices(cfg.voice)
     if cfg.voice.engine == "orpheus":
-        t = Table(title="Orpheus voices", show_header=True, header_style=ACCENT)
+        t = Table(title="Orpheus voices", show_header=True, header_style="table.header", border_style=LINE, title_style="heading", title_justify="left")
         t.add_column("voice"), t.add_column("note")
         for n, note in choices:
             t.add_row(n, note or ("female" if n in ("tara", "leah", "jess", "mia", "zoe") else "male"))
         console.print(t)
         console.print("[dim]Inline sounds the model can act: <laugh> <chuckle> <sigh> <gasp> <groan> <yawn> <cough> <sniffle>[/dim]")
     else:
-        t = Table(title=f"Qwen3-TTS voices in {VOICES_DIR}", show_header=True, header_style=ACCENT)
+        t = Table(title=f"Qwen3-TTS voices in {VOICES_DIR}", show_header=True, header_style="table.header", border_style=LINE, title_style="heading", title_justify="left")
         t.add_column("voice"), t.add_column("kind"), t.add_column("description")
         for n, note in choices:
             design = voice_dir(n) / "design.txt"
@@ -3890,18 +3946,18 @@ def provider_list():
     from vision.providers import REGISTRY, ready
 
     cfg = load_config()
-    t = Table(header_style=ACCENT, show_edge=False)
+    t = Table(header_style="table.header", show_edge=False, border_style=LINE)
     for col in ("provider", "on", "ready", "runs through"):
         t.add_column(col)
     for p in REGISTRY.values():
         on = p.name in cfg.providers.enabled
         ok = ready(p.name, cfg)
         where = p.endpoint.base_url if p.endpoint else p.product if p.cli else p.note.removeprefix("via ")
-        t.add_row(f"{p.label} [dim]({p.name})[/dim]", "[green]yes[/green]" if on else "[dim]no[/dim]",
-                  "[green]yes[/green]" if ok else f"[yellow]no[/yellow] [dim]{p.setup}[/dim]", where)
+        t.add_row(f"{p.label} [dim]({p.name})[/dim]", "[ok]yes[/ok]" if on else "[dim]no[/dim]",
+                  "[ok]yes[/ok]" if ok else f"[warn]no[/warn] [dim]{p.setup}[/dim]", where)
     console.print(t)
     for n in cfg.providers.notes:
-        console.print(f"[yellow]{n}[/yellow]")
+        console.print(f"[warn]![/warn] {n}")
 
 
 @app.command("providers")
@@ -3923,10 +3979,10 @@ def provider_status(as_json: bool = typer.Option(False, "--json", help="Print it
     if as_json:
         print(json.dumps(rows))
         return
-    t = Table(header_style=ACCENT, show_edge=False)
+    t = Table(header_style="table.header", show_edge=False, border_style=LINE)
     for col in ("provider", "installed", "signed in", "sign in with"):
         t.add_column(col)
-    yes, no = "[green]yes[/green]", "[yellow]no[/yellow]"
+    yes, no = "[ok]yes[/ok]", "[warn]no[/warn]"
     for r in rows:
         t.add_row(r["product"], yes if r["installed"] else no, yes if r["signed_in"] else no, " ".join(r["login_cmd"]))
     console.print(t)
@@ -3972,10 +4028,10 @@ def provider_add(
     if command:
         argv = command.split()
         if not shutil.which(argv[0]):
-            console.print(f"[yellow]{argv[0]} is not on PATH here; the provider will show as not set up until it is.[/yellow]")
+            console.print(f"[warn]![/warn] {argv[0]} is not on PATH here; the provider will show as not set up until it is.")
         ids = [m.strip() for m in (models or "").split(",") if m.strip()]
         save_provider_table(name, {"type": "acp", "command": argv, "label": label or "", "models": ids, "model_flag": model_flag or ""})
-        console.print(f"[green]✓[/green] [providers.{name}] saved to {CONFIG_PATH}: an ACP agent, in /model as {name}/default"
+        console.print(f"[ok]✓[/ok] \\[providers.{name}] saved to {CONFIG_PATH}: an ACP agent, in /model as {name}/default"
                       + (f" and {name}/<model>" if ids else "") + ". Restart Vision (`vision restart`) to pick it up.")
         return
     asked = url is None  # given as options, the rest isn't asked for either (scripts, no terminal)
@@ -3985,7 +4041,7 @@ def provider_add(
     if key_env is None:
         key_env = typer.prompt("Environment variable holding the API key (blank if none)", default="", show_default=False).strip() if asked else ""
     if key_env and not os.environ.get(key_env):
-        console.print(f"[yellow]{key_env} is not set in this shell; the server will be asked without a key for now.[/yellow]")
+        console.print(f"[warn]![/warn] {key_env} is not set in this shell; the server will be asked without a key for now.")
     ep = Endpoint(url, api_key_env=key_env or "", context=context or 32768)
     ids: list[str] = [m.strip() for m in (models or "").split(",") if m.strip()]
     if not ids:
@@ -3998,14 +4054,14 @@ def provider_add(
                     data = json.loads(r.read().decode())
                 ids = [str(m["id"]) for m in data.get("data") or [] if isinstance(m, dict) and m.get("id")]
             except Exception as e:  # noqa: BLE001
-                console.print(f"[red]{url}/models did not answer: {e}[/red]")
+                console.print(f"[err]✗[/err] {url}/models did not answer: {e}")
                 if not typer.confirm("Save it anyway?", default=False):
                     raise typer.Exit(1)
     if ids:
         console.print(f"[dim]{len(ids)} model{'s' if len(ids) != 1 else ''}: {', '.join(ids[:6])}{'…' if len(ids) > 6 else ''}[/dim]")
     values = {"base_url": url, "label": label or "", "api_key_env": key_env or "", "context": context, "models": [m.strip() for m in (models or "").split(",") if m.strip()]}
     save_provider_table(name, values)
-    console.print(f"[green]✓[/green] [providers.{name}] saved to {CONFIG_PATH}: its models show in /model as {name}/<model>."
+    console.print(f"[ok]✓[/ok] \\[providers.{name}] saved to {CONFIG_PATH}: its models show in /model as {name}/<model>."
                   + " Restart Vision (`vision restart`) to pick it up." )
 
 
@@ -4022,7 +4078,7 @@ def provider_remove(name: str = typer.Argument(..., help="The provider's short n
     if p is None:
         raise typer.BadParameter(f"no [providers.{name}] in {CONFIG_PATH}")
     remove_provider_table(name)
-    console.print(f"[green]✓[/green] [providers.{name}] removed from {CONFIG_PATH}")
+    console.print(f"[ok]✓[/ok] \\[providers.{name}] removed from {CONFIG_PATH}")
 
 
 def _save_voice(name: str, audio, transcript: str | None, design: str | None) -> Path:
@@ -4072,7 +4128,7 @@ def voice_check():
     from vision.welcome import ConsoleIO
 
     if voice_backend() is None:
-        console.print("[yellow]Voice isn't installed here.[/yellow] `vision voice setup` adds it.")
+        console.print("[warn]Voice isn't installed here.[/warn] `vision voice setup` adds it.")
         raise typer.Exit(1)
     try:
         ok = voicecheck.check(ConsoleIO(console))
@@ -4140,14 +4196,14 @@ def voice_design(
             if ans.isdigit() and 1 <= int(ans) <= len(clips):
                 keep = int(ans)
                 break
-            console.print("[red]number, r or q[/red]")
+            console.print("[err]✗[/err] number, r or q")
     if not 1 <= keep <= len(clips):
         raise typer.BadParameter(f"--keep must be 1..{len(clips)}")
     d = _save_voice(name, clips[keep - 1], text, description)
-    console.print(f"[green]✓[/green] voice [bold]{name}[/bold] saved in {d}")
+    console.print(f"[ok]✓[/ok] voice [bold]{name}[/bold] saved in {d}")
     if use or cfg.voice.voice == name:
         save_voice_default(name)
-        console.print(f"[green]✓[/green] default voice → {name}")
+        console.print(f"[ok]✓[/ok] default voice → {name}")
     else:
         console.print(f"[dim]use it: `vision voice use {name}` or `/voice {name}` in a chat[/dim]")
 
@@ -4175,7 +4231,7 @@ def voice_add(
     if secs < 2:
         raise typer.BadParameter("the clip is too short; give the model at least a few seconds of speech")
     if secs > 30:
-        console.print("[yellow]![/yellow] clips over ~15 s do not clone better; using the first 20 s")
+        console.print("[warn]![/warn] clips over ~15 s do not clone better; using the first 20 s")
         audio = audio[: SAMPLE_RATE * 20]
     if text is None:
         from vision.stt import Transcriber
@@ -4185,13 +4241,13 @@ def voice_add(
             text = Transcriber(cfg.listen).transcribe(audio, SAMPLE_RATE).strip()
         console.print(f"[dim]heard: {text}[/dim]")
         if not text:
-            console.print("[yellow]![/yellow] nothing transcribed; saving without a transcript (speaker-embedding only, a little less faithful)")
+            console.print("[warn]![/warn] nothing transcribed; saving without a transcript (speaker-embedding only, a little less faithful)")
             text = None
     d = _save_voice(name, audio, text, None)
-    console.print(f"[green]✓[/green] voice [bold]{name}[/bold] saved in {d}")
+    console.print(f"[ok]✓[/ok] voice [bold]{name}[/bold] saved in {d}")
     if use:
         save_voice_default(name)
-        console.print(f"[green]✓[/green] default voice → {name}")
+        console.print(f"[ok]✓[/ok] default voice → {name}")
 
 
 ENROL_PHRASES = (
@@ -4228,7 +4284,7 @@ def voice_enrol(
     from vision import voiceid
 
     if forget:
-        console.print(f"[green]✓[/green] enrolment removed" if voiceid.forget_enrolment() else "nothing enrolled")
+        console.print(f"[ok]✓[/ok] enrolment removed" if voiceid.forget_enrolment() else "nothing enrolled")
         return
     cfg = load_config()
     with console.status("[dim]loading the speaker model (downloads 26 MB on first run)…[/dim]"):
@@ -4236,11 +4292,11 @@ def voice_enrol(
         vid.load()
     if check:
         if not voiceid.enrolled():
-            console.print("[yellow]nothing enrolled yet[/yellow]  → vision voice enrol")
+            console.print("[warn]nothing enrolled yet[/warn]  → vision voice enrol")
             raise typer.Exit(1)
         audio = _clip_16k(clips[0]) if clips else _record_phrase(cfg, "say anything, a sentence or two")
         if audio is None or audio.size == 0:
-            console.print("[yellow]didn't catch that[/yellow]")
+            console.print("[warn]![/warn] didn't catch that")
             raise typer.Exit(1)
         score = vid.score(audio)
         verdict = "that's you" if score >= cfg.listen.only_me_threshold else "not recognised"
@@ -4258,7 +4314,7 @@ def voice_enrol(
         for phrase in ENROL_PHRASES:
             audio = _record_phrase(cfg, f"say: [bold]{phrase}[/bold]")
             if audio is None or audio.size == 0:
-                console.print("[yellow]didn't catch that; once more[/yellow]")
+                console.print("[warn]![/warn] didn't catch that; once more")
                 audio = _record_phrase(cfg, f"say: [bold]{phrase}[/bold]")
             if audio is None or audio.size == 0:
                 raise typer.Exit(1)
@@ -4268,10 +4324,10 @@ def voice_enrol(
         path = voiceid.save_enrolment(embeddings)
         vid._enrolment = None  # re-read: the scores below are against what was just saved
         scores = [vid.score(a) for a in takes]
-    console.print(f"[green]✓[/green] your voice is enrolled ({path})")
+    console.print(f"[ok]✓[/ok] your voice is enrolled ({path})")
     console.print(f"  each phrase against the voiceprint: {', '.join(f'{s:.2f}' for s in scores)} (threshold {cfg.listen.only_me_threshold:.2f})")
     if min(scores) < cfg.listen.only_me_threshold + 0.1:
-        console.print("[yellow]![/yellow] one phrase scores close to the threshold: enrol again somewhere quieter, or lower only_me_threshold a little")
+        console.print("[warn]![/warn] one phrase scores close to the threshold: enrol again somewhere quieter, or lower only_me_threshold a little")
     if not cfg.listen.only_me:
         console.print("  switch it on with [bold]only_me = true[/bold] under \\[listen] in the config (vision config --edit)")
 
@@ -4285,8 +4341,8 @@ def _record_phrase(cfg: Config, prompt: str):
     mic = Microphone(cfg.listen)
     if cfg.listen.chime:
         chime("listen", resolve_device(cfg.voice.output_device, "output"))
-    with console.status(f"[{ACCENT}]{prompt}[/{ACCENT}]", spinner="dots") as st:
-        return mic.record_utterance(on_speech_start=lambda: st.update(f"[{ACCENT}]hearing you…[/{ACCENT}]"), start_timeout_s=20)
+    with console.status(f"[accent]{prompt}[/accent]", spinner="dots") as st:
+        return mic.record_utterance(on_speech_start=lambda: st.update("[accent]hearing you…[/accent]"), start_timeout_s=20)
 
 
 @voice_app.command("use")
@@ -4297,7 +4353,7 @@ def voice_use(name: str = typer.Argument(..., help="A saved voice (qwen3) or an 
     if name not in names:
         raise typer.BadParameter(f"unknown voice {name!r}; run `vision voices`")
     save_voice_default(name)
-    console.print(f"[green]✓[/green] default voice → {name}")
+    console.print(f"[ok]✓[/ok] default voice → {name}")
 
 
 @voice_app.command("rm")
@@ -4308,7 +4364,7 @@ def voice_rm(name: str = typer.Argument(..., help="A saved voice to delete.")):
     if name not in saved_voices():
         raise typer.BadParameter(f"no saved voice {name!r}")
     _shutil.rmtree(voice_dir(name))
-    console.print(f"[green]✓[/green] removed {name}")
+    console.print(f"[ok]✓[/ok] removed {name}")
 
 
 # ---------------------------------------------------------------- remote (iOS app)
@@ -4334,7 +4390,7 @@ def recover_turns():
                     label = " ".join(part for part in (tool.get("name"), tool.get("detail")) if part)
                     console.print(Text(f"  {label or 'Tool'} ({status})"))
                 if row.get("error"):
-                    console.print(f"[yellow]{row['error']}[/yellow]")
+                    console.print(f"[warn]![/warn] {row['error']}")
 
 
 @app.command()
@@ -4372,7 +4428,7 @@ def serve(
     elif other:
         ours = service.running() and not service.waiting(other)  # a waiting service is not the one serving
         what = "as the background service" if ours else f"in another window (pid {other['pid']})"
-        console.print(f"[yellow]vision serve is already running {what}.[/yellow] "
+        console.print(f"[warn]vision serve is already running {what}.[/warn] "
                       "`vision pair` shows its pairing code, `vision restart` restarts it"
                       + (", `vision service remove` stops the service." if ours else "."))
         raise typer.Exit(1)
@@ -4416,7 +4472,7 @@ def _print_pairing(info: dict) -> None:
     console.print(f"   [dim]or enter by hand:[/dim] {info['url']}  [dim]token[/dim] {info['token']}")
     if info["url"] == info["local"]:
         where = "on this computer only" if info["local"].startswith("http://127.") else "on this Wi-Fi only"
-        console.print(f"   [yellow]{where}:[/yellow] [dim]for anywhere, `tailscale serve --bg {info['port']}` then `vision pair` "
+        console.print(f"   [warn]{where}:[/warn] [dim]for anywhere, `tailscale serve --bg {info['port']}` then `vision pair` "
                       "for a new code (docs/guide.md, Remote).[/dim]")
     console.print()
 
@@ -4432,7 +4488,7 @@ def pair():
     server = running_server()
     _print_pairing(pairing_info(cfg, None, server.get("port") if server else None, None))
     if server is None:
-        console.print("[yellow]vision serve isn't running[/yellow], so the phone can't connect yet: "
+        console.print("[warn]vision serve isn't running[/warn], so the phone can't connect yet: "
                       "`vision serve` in a terminal, or `vision service install` to keep it running in the background.")
         raise typer.Exit(1)
 
@@ -4451,14 +4507,14 @@ def service_install():
 
     server = running_server()
     if server and not service.running():
-        console.print(f"[yellow]vision serve is running in another window (pid {server['pid']}).[/yellow] Stop it there first (Ctrl-C); the service takes the same port.")
+        console.print(f"[warn]vision serve is running in another window (pid {server['pid']}).[/warn] Stop it there first (Ctrl-C); the service takes the same port.")
         raise typer.Exit(1)
     try:
         path = service.install()
     except service.ServiceError as e:
-        console.print(f"[red]{e}[/red]")
+        console.print(f"[err]✗[/err] {e}")
         raise typer.Exit(1)
-    console.print(f"[green]✓[/green] vision serve runs in the background now and at every login [dim]({short_path(str(path))})[/dim]")
+    console.print(f"[ok]✓[/ok] vision serve runs in the background now and at every login [dim]({short_path(str(path))})[/dim]")
     if service.lingers() is False:
         console.print("[dim]It stops when you log out. `loginctl enable-linger` keeps it running without a login session.[/dim]")
     console.print(f"[dim]`vision pair` shows the pairing code · `vision restart` after an update · logs: {service.logs_hint()}[/dim]")
@@ -4472,9 +4528,9 @@ def service_remove():
     try:
         removed = service.remove()
     except service.ServiceError as e:
-        console.print(f"[red]{e}[/red]")
+        console.print(f"[err]✗[/err] {e}")
         raise typer.Exit(1)
-    console.print("[green]✓[/green] the background service is gone; `vision serve` in a terminal still works" if removed
+    console.print("[ok]✓[/ok] the background service is gone; `vision serve` in a terminal still works" if removed
                   else "[dim]no background service was installed[/dim]")
 
 
@@ -4489,13 +4545,13 @@ def service_status():
         raise typer.Exit(1)
     server = running_server()
     if service.waiting(server):
-        console.print(f"[yellow]waiting[/yellow] behind the vision serve in a terminal [dim](pid {server['pid']})[/dim]; "
+        console.print(f"[warn]waiting[/warn] behind the vision serve in a terminal [dim](pid {server['pid']})[/dim]; "
                       f"it takes over when that one stops. [dim]Logs: {service.logs_hint()}[/dim]")
         return
     if service.running() and server:
-        console.print(f"[green]✓[/green] running [dim]({server['url']}, pid {server['pid']}) · logs: {service.logs_hint()}[/dim]")
+        console.print(f"[ok]✓[/ok] running [dim]({server['url']}, pid {server['pid']}) · logs: {service.logs_hint()}[/dim]")
         return
-    console.print(f"[yellow]installed but not answering.[/yellow] Logs: {service.logs_hint()}")
+    console.print(f"[warn]installed but not answering.[/warn] Logs: {service.logs_hint()}")
     raise typer.Exit(1)
 
 
@@ -4506,7 +4562,7 @@ def upgrade():
     from vision.remote import running_server
 
     if not selfupdate.installed():
-        console.print("[yellow]This Vision is a working checkout, not the installed one.[/yellow] Update it with `git pull`.")
+        console.print("[warn]This Vision is a working checkout, not the installed one.[/warn] Update it with `git pull`.")
         raise typer.Exit(1)
     try:
         gone = selfupdate.orphaned()
@@ -4516,13 +4572,13 @@ def upgrade():
         try:
             now = selfupdate.follow_default()
         except (OSError, subprocess.SubprocessError, RuntimeError) as e:
-            console.print(f"[red]`{gone}`, the branch this Vision was installed from, is gone from its remote, "
-                          f"and it couldn't be moved to the main one:[/red] {e}")
+            console.print(f"[err]`{gone}`, the branch this Vision was installed from, is gone from its remote, "
+                          f"and it couldn't be moved to the main one:[/err] {e}")
             raise typer.Exit(1)
         console.print(f"`{gone}`, the branch this Vision was installed from, is gone from its remote: now following `{now}`.")
     done = subprocess.run(["sh", str(selfupdate.ROOT / "install.sh")])
     if done.returncode != 0:
-        console.print("[red]The installer failed[/red]; the running Vision is unchanged.")
+        console.print("[err]The installer failed[/err]; the running Vision is unchanged.")
         raise typer.Exit(done.returncode)
     selfupdate.forget()
     if running_server() is None:
@@ -4540,7 +4596,7 @@ def restart():
 
     server = running_server()
     if server is None:
-        console.print("[yellow]vision serve isn't running[/yellow]")
+        console.print("[warn]![/warn] vision serve isn't running")
         raise typer.Exit(1)
     req = urllib.request.Request(server["url"] + "/restart", data=b"{}", method="POST",
                                  headers={"Authorization": f"Bearer {server['token']}", "Content-Type": "application/json"})
@@ -4548,12 +4604,15 @@ def restart():
         with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310  (our own loopback server)
             waiting = int(json.loads(resp.read().decode()).get("waiting") or 0)
     except OSError as e:
-        console.print(f"[red]couldn't reach vision serve:[/red] {e}")
+        console.print(f"[err]couldn't reach vision serve:[/err] {e}")
         raise typer.Exit(1)
     if waiting:
         console.print(f"restarting once {waiting} chat{'s' * (waiting != 1)} finish{'es' * (waiting == 1)} replying")
     else:
         console.print("restarting now")
+
+
+SCOUT_POLL_S = 20  # how often the chat asks vision serve for its scouts (the status row, the open card)
 
 
 # ---------------------------------------------------------------- reminders and scheduled turns
@@ -4685,7 +4744,7 @@ def _sessions_providers(provider: str) -> tuple[str, ...] | None:
     if not word:
         return None
     if word not in PROVIDERS:
-        console.print(f"[red]no provider called {escape(provider)}[/red] (one of {', '.join(PROVIDERS)})")
+        console.print(f"[err]no provider called {escape(provider)}[/err] (one of {', '.join(PROVIDERS)})")
         raise typer.Exit(2)
     return (word,)
 
@@ -4697,7 +4756,7 @@ def _print_sessions(provider: str, n: int) -> None:
     if not rows:
         console.print("[dim]no earlier conversations[/dim]")
         return
-    t = Table(header_style=ACCENT, show_edge=False, box=None, padding=(0, 2, 0, 0))
+    t = Table(header_style="table.header", show_edge=False, box=None, padding=(0, 2, 0, 0))
     for col in ("id", "conversation", "provider", "last active", "folder"):
         t.add_column(col, no_wrap=col != "conversation", overflow="ellipsis")
     now = time.time()
@@ -4745,7 +4804,7 @@ def sessions_grep(words: list[str] = typer.Argument(..., help="Words that must a
         for role, line in m.lines:
             row = Text("  ").append("you › " if role == "user" else "vision › ", style="dim")
             row.append(match_window(line, needles))
-            row.highlight_words(needles, "bold yellow", case_sensitive=False)
+            row.highlight_words(needles, f"bold {WARN}", case_sensitive=False)
             console.print(row)
         if m.total > len(m.lines):
             console.print(f"  [dim]+{m.total - len(m.lines)} more lines (--all-lines shows them)[/dim]")
@@ -4759,12 +4818,12 @@ def sessions_export(ref: str = typer.Argument(..., help="The conversation's id, 
 
     info = find_any_session(ref)
     if info is None:
-        console.print(f"[red]no conversation starts with “{escape(ref)}”[/red]")
+        console.print(f"[err]✗[/err] no conversation starts with “{escape(ref)}”")
         raise typer.Exit(1)
     try:
         path = export_session(info, out)
     except (OSError, ValueError) as e:
-        console.print(f"[red]{escape(str(e))}[/red]")
+        console.print(f"[err]✗[/err] {escape(str(e))}")
         raise typer.Exit(1)
     console.print(f"saved to {escape(short_path(path))}")
 
@@ -4836,13 +4895,68 @@ def project_list(all_: bool = typer.Option(False, "--all", "-a", help="Archived 
     if not projects:
         console.print("[dim]no projects yet: start one with[/dim] vision project new \"what it's for\"")
         return
-    t = Table(header_style=ACCENT, show_edge=False, box=None, padding=(0, 2, 0, 0))
-    for col in ("id", "project", "folder", "updated"):
-        t.add_column(col, no_wrap=col != "project", overflow="ellipsis")
+    from vision.buddy import mini
+
+    t = Table(header_style="table.header", show_edge=False, box=None, padding=(0, 2, 1, 0))  # a blank line under each row
+    t.add_column("", min_width=6, max_width=6, no_wrap=True)
+    for col in ("scout", "project", "doing", "next check-in", "leash", "updated"):
+        t.add_column(col, no_wrap=col not in ("project", "doing"), overflow="ellipsis")  # those two wrap on a narrow terminal
     for p in projects:
-        name = escape(p["title"]) + (" [dim](archived)[/dim]" if p.get("status") == "archived" else "")
-        t.add_row(f"[dim]{p['id']}[/dim]", name, escape(p.get("folder") or "") or "[dim]default[/dim]", f"[dim]{_ago(p.get('updated'))}[/dim]")
+        scout = p.get("scout") or {}
+        mood = "asleep" if p.get("status") == "archived" else p.get("mood") or "asleep"
+        face = mini(scout.get("hue", 248), scout.get("trait", "sprout"), mood) if scout.get("name") else []
+        # Each row is two lines, beside the face's two: the scout's name over the id you type, the project
+        # over its folder.
+        who = Text.assemble((scout.get("name") or "—", "heading" if scout.get("name") else "faint"), (f"\n{p['id']}", "faint"))
+        title = escape(p["title"]) + (" [dim](archived)[/dim]" if p.get("status") == "archived" else "")
+        doing, colour = _scout_doing(p)
+        t.add_row(Text("\n").join(face), who, f"{title}\n[faint]{escape(p.get('folder') or '') or 'default'}[/faint]",
+                  Text(doing, style=colour), _next_checkin(p.get("checkin") or {}),
+                  Text(_LEASH_WORDS.get(p.get("leash") or "", p.get("leash") or ""), style="dim"),
+                  Text(_ago(p.get("updated")), style="dim"))
     console.print(t)
+
+
+_LEASH_WORDS = {"on_call": "on call", "checkins": "check-ins", "autonomous": "autonomous"}
+_MOOD_WORDS = {"worried": ("something failed", "err"), "focused": ("working", "accent"), "curious": ("reading up", "accent"),
+               "proud": ("landed something", "ok"), "found_it": ("found it", "ok"), "waking": ("waking up", "accent"),
+               "out_cold": ("paused while asleep", "faint"), "needs_you": ("needs you", "warn"), "still_waiting": ("needs you", "warn")}
+
+
+def _scout_doing(p: dict) -> tuple[str, str]:
+    """What a project's scout is up to in a few words, and its colour: the desktop's words (scouts.ts stateOf)."""
+    if p.get("status") == "archived":
+        return "retired", "faint"
+    approvals = p.get("approvals") or []
+    threads = p.get("threads") or {}
+    n = (threads.get("waiting_on_you") or 0) + (threads.get("ready_for_review") or 0) + len(approvals)
+    if n == 1 and approvals:
+        return f"needs you: {approvals[0].get('command') or approvals[0].get('title') or 'an approval'}", "warn"
+    if n:
+        return f"{n} need{'s' if n == 1 else ''} you", "warn"
+    if word := _MOOD_WORDS.get(p.get("mood") or ""):
+        return word
+    if p.get("status") == "paused":
+        return "paused", "faint"
+    return "asleep", "faint"
+
+
+def _next_checkin(checkin: dict) -> Text:
+    """When a scout next checks in: `today 6:00 PM`, `tomorrow 9:00 AM`, `Mon 7:00 AM`; now, off or a dash."""
+    import datetime
+
+    if checkin.get("running"):
+        return Text("checking in now", style="accent")
+    schedule = checkin.get("schedule") or {}
+    if not schedule:
+        return Text("—", style="faint")
+    if not schedule.get("enabled", True) or not schedule.get("next_run"):
+        return Text("off", style="faint")
+    at = time.localtime(schedule["next_run"])
+    days = (datetime.date(*at[:3]) - datetime.date.today()).days
+    clock = time.strftime("%I:%M %p", at).lstrip("0")
+    day = "today" if days == 0 else "tomorrow" if days == 1 else time.strftime("%a" if days < 7 else "%b %-d", at)
+    return Text(f"{day} {clock}", style="dim")
 
 
 @project_app.command("show")
@@ -4958,7 +5072,7 @@ app.add_typer(thread_app, name="thread")
 _PROJECT = typer.Option("", "--project", "-p", help="The project's id or the start of it (default: the project of the chat "
                                                     "this runs in, else the only one).")
 _STATE_MARKS = {"working": "●", "waiting_on_you": "?", "ready_for_review": "✓", "landing": "↗", "idle": "○", "resolved": "–"}
-_THREAD_COLOURS = {"working": ACCENT, "waiting_on_you": "yellow", "ready_for_review": "green", "landing": "magenta", "idle": "dim", "resolved": "dim"}
+_THREAD_COLOURS = {"working": "accent", "waiting_on_you": "warn", "ready_for_review": "ok", "landing": "#5b8cff", "idle": "faint", "resolved": "faint"}
 
 
 def _thread_project(ref: str) -> dict:
@@ -5036,7 +5150,7 @@ def thread_list(project: str = _PROJECT, all_: bool = typer.Option(False, "--all
     if not threads:
         console.print(f"[dim]no threads in {escape(p['title'])} yet: start one with[/dim] vision thread new \"what to do\"")
         return
-    t = Table(header_style=ACCENT, show_edge=False, box=None, padding=(0, 2, 0, 0))
+    t = Table(header_style="table.header", show_edge=False, box=None, padding=(0, 2, 0, 0))
     for col in ("id", "thread", "state", "updated"):
         t.add_column(col, no_wrap=col != "thread", overflow="ellipsis")
     for th in threads:
@@ -5053,7 +5167,7 @@ def thread_show(ref: str = typer.Argument(..., help="The thread's id, or the sta
     t = _project_call(f"{pid}/threads/{ref}")
     if history:
         for m in _project_call(f"{pid}/threads/{t['id']}/history").get("messages") or []:
-            who = "[dim]vision →[/dim]" if m["role"] == "user" else f"[{ACCENT}]thread ←[/{ACCENT}]"
+            who = "[dim]vision →[/dim]" if m["role"] == "user" else "[accent]thread ←[/accent]"
             console.print(f"{who} {escape(m['text'])}\n")
     _show_thread(t)
 
@@ -5179,16 +5293,16 @@ def _setup_mlx(cfg, retime: bool) -> None:
         if not mlx_present(cfg.voice.mlx_model):
             with console.status(f"[dim]downloading {cfg.voice.mlx_model}…[/dim]"):
                 mlx_fetch(cfg.voice.mlx_model)
-        console.print(f"[green]✓[/green] MLX voice model {cfg.voice.mlx_model} (set as [voice] mlx_model)")
+        console.print(f"[ok]✓[/ok] MLX voice model {cfg.voice.mlx_model} (set as [voice] mlx_model)")
         return
     prev = mlx_choice()
     if not retime and prev.get("chip") == mac_chip() and prev.get("model") and mlx_present(prev["model"]):
-        console.print(f"[green]✓[/green] MLX voice model {prev['model']} ({prev.get('rtf', '?')} s per second of speech on this Mac)")
+        console.print(f"[ok]✓[/ok] MLX voice model {prev['model']} ({prev.get('rtf', '?')} s per second of speech on this Mac)")
         return
     voices = saved_voices()
     voice = cfg.voice.voice if cfg.voice.voice in voices else (voices[0] if voices else None)
     if voice is None:
-        console.print(f"[yellow]![/yellow] no saved voice to time the MLX models with; using {MLX_TTS_TIERS[0]}")
+        console.print(f"[warn]![/warn] no saved voice to time the MLX models with; using {MLX_TTS_TIERS[0]}")
         with console.status(f"[dim]downloading {MLX_TTS_TIERS[0]}…[/dim]"):
             mlx_fetch(MLX_TTS_TIERS[0])
         return
@@ -5201,7 +5315,7 @@ def _setup_mlx(cfg, retime: bool) -> None:
             with console.status(f"[dim]timing {repo} on this Mac…[/dim]"):
                 rtf = time_mlx(dataclasses.replace(cfg.voice, voice=voice), repo)
         except TTSError as e:
-            console.print(f"[yellow]![/yellow] {repo}: {e}")
+            console.print(f"[warn]![/warn] {repo}: {e}")
             continue
         timed.append((rtf, repo))
         console.print(f"[dim]  {repo}: {rtf:.2f} s per second of speech[/dim]")
@@ -5212,9 +5326,9 @@ def _setup_mlx(cfg, retime: bool) -> None:
     rtf, repo = min(timed) if timed[-1][0] > MLX_TARGET_RTF else timed[-1]
     save_mlx_choice(repo, rtf)
     if rtf <= 1.0:
-        console.print(f"[green]✓[/green] MLX voice model {repo} ({rtf:.2f} s per second of speech on this Mac)")
+        console.print(f"[ok]✓[/ok] MLX voice model {repo} ({rtf:.2f} s per second of speech on this Mac)")
     else:
-        console.print(f"[yellow]![/yellow] MLX voice model {repo}: {rtf:.2f} s per second of speech, slower than real time on this Mac")
+        console.print(f"[warn]![/warn] MLX voice model {repo}: {rtf:.2f} s per second of speech, slower than real time on this Mac")
 
 
 @app.command()
@@ -5232,7 +5346,7 @@ def setup(
         if not mlx:
             if not qwen_present():
                 _fetch_hf(QWEN_TTS_BASE)
-            console.print(f"[green]✓[/green] Qwen3-TTS voice model ({QWEN_TTS_BASE})")
+            console.print(f"[ok]✓[/ok] Qwen3-TTS voice model ({QWEN_TTS_BASE})")
         if cfg.voice.voice in VOICE_DESIGNS and cfg.voice.voice not in saved_voices():
             console.print(f"[dim]no voice named {cfg.voice.voice!r} yet: designing it (first take, no audition)[/dim]")
             voice_design(cfg.voice.voice, None, None, takes=1, keep=1, use=False)
@@ -5245,32 +5359,32 @@ def setup(
             _download(ORPHEUS_MODEL_URL, gguf)  # 2.4 GB
         if not snac.exists():
             _download(SNAC_MODEL_URL, snac)
-        console.print(f"[green]✓[/green] Orpheus voice model in {MODELS_DIR}")
+        console.print(f"[ok]✓[/ok] Orpheus voice model in {MODELS_DIR}")
         if not llama_server_bin().exists():
             _install_llama()
-        console.print(f"[green]✓[/green] llama.cpp server in {LLAMA_DIR}")
+        console.print(f"[ok]✓[/ok] llama.cpp server in {LLAMA_DIR}")
     if whisper:
         from vision.stt import Transcriber
 
         stt = Transcriber(cfg.listen)
         with console.status("[dim]loading Whisper (downloads on first run)…[/dim]"):
             stt.load()
-        console.print(f"[green]✓[/green] Whisper ready on {stt.device}")
+        console.print(f"[ok]✓[/ok] Whisper ready on {stt.device}")
         if stt.mlx_error:
-            console.print(f"[yellow]  the MLX build did not load ({stt.mlx_error}); faster-whisper instead[/yellow]")
+            console.print(f"  [warn]![/warn] the MLX build did not load ({stt.mlx_error}); faster-whisper instead")
 
         wake = Transcriber(dataclasses.replace(cfg.listen, whisper_model=cfg.wake.model, device="cpu"))
         with console.status("[dim]loading the wake-word model…[/dim]"):
             wake.load()
-        console.print(f"[green]✓[/green] wake word (“{cfg.wake.names[0].capitalize()}”) ready on {wake.device}")
+        console.print(f"[ok]✓[/ok] wake word (“{cfg.wake.names[0].capitalize()}”) ready on {wake.device}")
     if cfg.listen.only_me:
         from vision import voiceid
 
         with console.status("[dim]fetching the speaker model (26 MB)…[/dim]"):
             path = voiceid.model_path()
-        console.print(f"[green]✓[/green] speaker model ({voiceid.MODEL_REPO})" if path else
-                      f"[yellow]![/yellow] speaker model ({voiceid.MODEL_REPO}) could not be fetched; every voice is heard until it is")
-    console.print(f"[green]✓[/green] config: {CONFIG_PATH}")
+        console.print(f"[ok]✓[/ok] speaker model ({voiceid.MODEL_REPO})" if path else
+                      f"[warn]![/warn] speaker model ({voiceid.MODEL_REPO}) could not be fetched; every voice is heard until it is")
+    console.print(f"[ok]✓[/ok] config: {CONFIG_PATH}")
 
 
 @app.command()
@@ -5281,9 +5395,9 @@ def doctor(
     yes: bool = typer.Option(False, "--yes", "-y", help="With --fix: apply every fix without asking."),
 ):
     """Check AI provider CLIs (versions, logins, usage), local models, GPU, and audio devices (--fix mends what it can)."""
-    ok = "[green]✓[/green]"
-    bad = "[red]✗[/red]"
-    warn = "[yellow]![/yellow]"
+    ok = "[ok]✓[/ok]"
+    bad = "[err]✗[/err]"
+    warn = "[warn]![/warn]"
     cfg = load_config()
     fixed: list[str] = []
 
@@ -5361,7 +5475,7 @@ def doctor(
 
     def done() -> None:
         if fix:
-            console.print(f"[green]fixed:[/green] " + "; ".join(fixed) if fixed else "[dim]nothing to fix[/dim]")
+            console.print(f"[ok]fixed:[/ok] " + "; ".join(fixed) if fixed else "[dim]nothing to fix[/dim]")
         console.print(f"[dim]config: {CONFIG_PATH}[/dim]")
 
     # models, GPU and audio need the voice extra; a text-only install stops here, and that is fine
@@ -5446,7 +5560,7 @@ def doctor(
             stt.load(quiet=True)
         console.print(f"{ok} Whisper ready: {stt.device}")
         if stt.mlx_error:
-            console.print(f"[yellow]  the MLX build did not load ({stt.mlx_error}); faster-whisper instead[/yellow]")
+            console.print(f"  [warn]![/warn] the MLX build did not load ({stt.mlx_error}); faster-whisper instead")
     except Exception as e:
         console.print(f"{bad} Whisper failed: {e}")
 
@@ -5464,7 +5578,7 @@ def doctor(
                 console.print(f"{bad} default {label} none  → connect one" + (" (listen and talk need a microphone)" if key == "max_input_channels" else ""))
     except Exception as e:
         console.print(f"{bad} audio device query failed: {e}")
-    t = Table(title="Audio devices", header_style=ACCENT)
+    t = Table(title="Audio devices", header_style="table.header", border_style=LINE, title_style="heading", title_justify="left")
     t.add_column("#"), t.add_column("name"), t.add_column("in"), t.add_column("out")
     for i, d in enumerate(devs):
         if (d["max_input_channels"] or d["max_output_channels"]) and "JACK" not in sd.query_hostapis(d["hostapi"])["name"]:
@@ -5474,7 +5588,7 @@ def doctor(
 
     nodes = [(kind, desc) for kind in ("input", "output") for _, desc in pipewire_nodes(kind)]
     if nodes:
-        t = Table(title="PipeWire devices (use any part of the name as input_device / output_device)", header_style=ACCENT)
+        t = Table(title="PipeWire devices (use any part of the name as input_device / output_device)", header_style="table.header", border_style=LINE, title_style="heading", title_justify="left")
         t.add_column("kind"), t.add_column("name")
         for kind, desc in nodes:
             t.add_row(kind, desc)
@@ -5544,7 +5658,7 @@ def config_get(key: str = typer.Argument(..., help="The setting as section.key, 
     try:
         value, set_in_file = get_config_value(key)
     except KeyError:
-        console.print(f"[red]no setting called {key}[/red] (`vision config` shows them all)")
+        console.print(f"[err]no setting called {key}[/err] (`vision config` shows them all)")
         raise typer.Exit(1)
     shown = json.dumps(value) if isinstance(value, (list, dict, bool)) else str(value)
     console.print(shown if set_in_file else f"[dim]{shown}  (default; not in {CONFIG_PATH.name})[/dim]", highlight=False)
@@ -5559,10 +5673,10 @@ def config_set(key: str = typer.Argument(..., help="The setting as section.key, 
     try:
         literal = set_config_value(key, value)
     except ValueError as e:
-        console.print(f"[red]{e}[/red]")
+        console.print(f"[err]✗[/err] {e}")
         raise typer.Exit(1)
     section, _, name = key.rpartition(".")
-    console.print(f"[green]✓[/green] {escape(f'[{section}]')} {name} = {escape(literal)}  [dim]{CONFIG_PATH}[/dim]", highlight=False)
+    console.print(f"[ok]✓[/ok] {escape(f'[{section}]')} {name} = {escape(literal)}  [dim]{CONFIG_PATH}[/dim]", highlight=False)
 
 
 def main():

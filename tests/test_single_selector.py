@@ -22,7 +22,7 @@ class SingleSelectorTests(unittest.TestCase):
         self.assertEqual(_picker_height(tabs), 5)
         self.assertIn("Choose provider", rendered)
         self.assertIn("❯ 2 Claude", rendered)
-        self.assertIn("(current)", rendered)
+        self.assertIn("✓ current", rendered)
         self.assertNotIn("provider ·", rendered)
         self.assertNotIn("◉", rendered)
         self.assertNotIn("○", rendered)

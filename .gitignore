@@ -14,3 +14,6 @@ build/
 # Finder
 .DS_Store
 .wrangler/
+
+# The terminal chat's screenshots (scripts/cli_shots.py).
+scripts/cli-shots/out/

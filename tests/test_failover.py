@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from vision import failover
 from vision.config import Config
+from vision.theme import WARN
 
 
 def _cfg(setting="ask", warn=15):
@@ -145,7 +146,7 @@ class CornerTests(unittest.TestCase):
         self.assertEqual(_corner_fragments(cfg, self._brain(cfg), q), "Sonnet 5 (high) · 38% left")
         low = {"left": 9.0, "window": "weekly window", "resets_at": None}
         self.assertEqual(_corner_fragments(cfg, self._brain(cfg), low),
-                         [("class:frame.corner", "Sonnet 5 (high) · "), ("class:frame.corner fg:ansiyellow", "9% left")])
+                         [("class:frame.corner", "Sonnet 5 (high) · "), (f"class:frame.corner fg:{WARN}", "9% left")])
 
     def test_the_frame_draws_fragments_too(self):
         from prompt_toolkit.layout import to_container
@@ -153,7 +154,7 @@ class CornerTests(unittest.TestCase):
 
         from vision.ui import CornerFrame
 
-        frags = [("class:frame.corner", "Sonnet 5 · "), ("class:frame.corner fg:ansiyellow", "9% left")]
+        frags = [("class:frame.corner", "Sonnet 5 · "), (f"class:frame.corner fg:{WARN}", "9% left")]
         for text in (frags, "Sonnet 5 (high)", "", []):
             frame = CornerFrame(TextArea(), lambda text=text: text)
             self.assertIsNotNone(to_container(frame))

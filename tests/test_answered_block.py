@@ -29,32 +29,32 @@ class AnsweredBlockTests(unittest.TestCase):
         self.assertEqual(
             out,
             [
-                "● You answered Vision's questions:",
-                "  ⎿  · Which library? → date-fns",
-                "     · Which features? → Auth, Logging",
+                "  ● You answered Vision's questions:",  # in the gutter's indent, like the tool rows
+                "    ⎿  · Which library? → date-fns",
+                "       · Which features? → Auth, Logging",
             ],
         )
 
     def test_one_question_is_singular(self):
         out = render(answered_grid(QS[:1], {"Which library?": "dayjs"}))
-        self.assertEqual(out, ["● You answered Vision's question:", "  ⎿  · Which library? → dayjs"])
+        self.assertEqual(out, ["  ● You answered Vision's question:", "    ⎿  · Which library? → dayjs"])
 
     def test_dismissed_form_lists_the_options(self):
         out = render(answered_grid(QS, None))
         self.assertEqual(
             out,
             [
-                "● You declined to answer Vision's questions",
-                "  ⎿  · Which library? (date-fns / dayjs)",
-                "     · Which features? (Auth / Logging)",
+                "  ● You declined to answer Vision's questions",
+                "    ⎿  · Which library? (date-fns / dayjs)",
+                "       · Which features? (Auth / Logging)",
             ],
         )
 
     def test_long_lines_wrap_under_the_hook(self):
         q = "Which library should we use for date formatting in the new reporting module?"
         lines = render(answered_grid([{"question": q, "options": []}], {q: "date-fns"}), width=50)
-        self.assertTrue(lines[1].startswith("  ⎿  · Which library"))
-        self.assertTrue(lines[2].startswith("     ") and not lines[2].startswith("      "))
+        self.assertTrue(lines[1].startswith("    ⎿  · Which library"))
+        self.assertTrue(lines[2].startswith("       ") and not lines[2].startswith("        "))
 
 
 def _chat_screen(test: unittest.TestCase) -> ChatScreen:
@@ -96,12 +96,12 @@ class SplitReplyTests(unittest.TestCase):
         screen = self._screen()
         call = ToolCall("t1", "Bash", "git status", done=True, output="clean")
         entry = screen.add_past_reply("Checking. All clean.", [(10, call)])
-        self.assertIn("Ran 1 command", "".join(fragment[1] for row in entry.lines(80) for fragment in row))
+        self.assertIn("Ran a command", "".join(fragment[1] for row in entry.lines(80) for fragment in row))
         entry.toggle_fold()
         rows = entry.lines(80)
         rendered = "".join(fragment[1] for row in rows for fragment in row)
-        self.assertLess(rendered.index("Checking."), rendered.index("Bash(git status)"))
-        self.assertLess(rendered.index("Bash(git status)"), rendered.index("All clean."))
+        self.assertLess(rendered.index("Checking."), rendered.index("Bash git status"))
+        self.assertLess(rendered.index("Bash git status"), rendered.index("All clean."))
         entry.expanded.add("t1")
         entry.invalidate()
         self.assertIn("clean", "".join(fragment[1] for row in entry.lines(80) for fragment in row))

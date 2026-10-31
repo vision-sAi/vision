@@ -29,12 +29,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from vision import clis, config, providers
+from vision import clis, config, providers, theme
 from vision.config import load_config, save_provider_table
 
 SERVER, HOSTED, AGENT = "_server", "_hosted", "_agent"
 CUSTOM = "_custom"
-from vision.theme import ACCENT
+from vision.theme import ACCENT_HI, CARD_EDGE, heading, ok, warn
+
 MANY_MODELS = 12  # past this many, ask which ones /model should show
 
 
@@ -196,13 +197,13 @@ class Wizard:
         providers.forget_ready()
 
     def _ok(self, text: str) -> None:
-        self.io.say(f"  [green]✓[/green] {text}")
+        self.io.say(ok(text))
 
     def _warn(self, text: str) -> None:
-        self.io.say(f"  [yellow]![/yellow] {text}")
+        self.io.say(warn(text))
 
     def _heading(self, text: str) -> None:
-        self.io.say(f"\n[bold {ACCENT}]◆[/] [bold]{text}[/bold]")
+        self.io.say(heading(text))
 
     def _taken(self) -> set[str]:
         """Base URLs some provider already points at, so a found server isn't offered twice."""
@@ -301,7 +302,7 @@ class Wizard:
         from rich.text import Text
 
         body = Text()
-        body.append("◆ Vision\n", style=f"bold {ACCENT}")
+        body.append("◆ Vision\n", style=f"bold {ACCENT_HI}")
         if self.first_run:
             body.append("Welcome. Tick everything you've got and Vision sets each one up.\n")
             body.append("A subscription you already pay for works best; a free local model works too.\n", style="dim")
@@ -309,7 +310,7 @@ class Wizard:
         else:
             body.append("Your providers.\n")
             body.append("Tick to add one, untick to switch it off. Everything ticked shows in /model.", style="dim")
-        self.io.say(Panel(body, box=ROUNDED, border_style=ACCENT, padding=(0, 2), expand=False))
+        self.io.say(Panel(body, box=ROUNDED, border_style=CARD_EDGE, padding=(0, 2), expand=False))
         self.io.say("")
 
     def run(self, intro: bool = True) -> list[str]:
@@ -326,7 +327,7 @@ class Wizard:
             return self.finish(changed=False)
         if not picked:
             if any(n in ticked for n in self._on()):
-                io.say("  [yellow]![/yellow] Nothing ticked, so nothing changed: Vision needs at least one provider.")
+                io.say(warn("Nothing ticked, so nothing changed: Vision needs at least one provider."))
             return self.finish(changed=False)
         # Unticked: off. Shown only for what started ticked; the rest (never set up here, or a [local]
         # with no server) just stop offering a "set this up" row in /model.
@@ -562,7 +563,7 @@ class Wizard:
         self._reload()
         ready = [p.name for p in providers.enabled(self.cfg) if self._works(p.name)]
         if not ready:
-            io.say("[yellow]Nothing's ready yet.[/yellow] `vision providers` brings this back; `vision doctor` shows what's installed.")
+            io.say("[warn]Nothing's ready yet.[/warn] `vision providers` brings this back; `vision doctor` shows what's installed.")
             return ready
         from vision import models
         from vision.models import coerce_effort, find, model_label, provider_default
@@ -610,19 +611,19 @@ class Wizard:
         names = Text()
         for i, n in enumerate(ready):
             names.append("   " if i else "")
-            names.append("✓ ", style="green")
+            names.append("✓ ", style="ok")
             names.append(providers.REGISTRY[n].label)
         grid = Table.grid(padding=(0, 2))
         grid.add_column(style="bold", no_wrap=True)
         grid.add_column(style="dim")
         for cmd, what in (("/model", "switch model in a chat"), ("vision providers", "add a provider or switch one off")):
             grid.add_row(cmd, what)
-        head = Text.assemble(("All set. ", "bold"), "Default model: ", (model, f"bold {ACCENT}"))
+        head = Text.assemble(("All set. ", "bold"), "Default model: ", (model, f"bold {ACCENT_HI}"))
         foot = Text(f"Saved in {str(config.CONFIG_PATH).replace(str(Path.home()), '~', 1)}", style="dim")
         body = Table.grid()
         for part in (head, names, Text(""), grid, Text(""), foot):
             body.add_row(part)
-        return Panel(body, box=ROUNDED, border_style=ACCENT, padding=(0, 2), expand=False)
+        return Panel(body, box=ROUNDED, border_style=CARD_EDGE, padding=(0, 2), expand=False)
 
 
 def voice_offered() -> bool:
@@ -645,24 +646,24 @@ def voice_step(io, *, asked: bool = False, heading: bool = True) -> bool:
     have, hw = install.voice_backend(), install.voice_hardware()
     if have and (have != "cpu" or hw is None):
         if asked:
-            io.say("  [green]✓[/green] Voice is already set up. /talk in a chat starts a voice conversation; /speak reads replies aloud. "
-                   "[dim]`vision voice check` tests the speakers and the microphone.[/dim]")
+            io.say(ok("Voice is already set up. /talk in a chat starts a voice conversation; /speak reads replies aloud. "
+                      "[dim]`vision voice check` tests the speakers and the microphone.[/dim]"))
         return False
     if hw is None:
         if asked:
-            io.say("  [yellow]![/yellow] Voice needs an Apple Silicon Mac or an NVIDIA graphics card to keep up with speech, "
-                   "and this machine has neither, so Vision is text only here.")
+            io.say(warn("Voice needs an Apple Silicon Mac or an NVIDIA graphics card to keep up with speech, "
+                        "and this machine has neither, so Vision is text only here."))
         return False
     backend, what = hw
     if heading:
-        io.say(f"\n[bold {ACCENT}]◆[/] [bold]Voice[/bold] [dim](optional)[/dim]")
+        io.say(theme.heading("Voice") + " [dim](optional)[/dim]")  # theme's: `heading` here is the flag
     io.say(f"  Talk to Vision out loud and hear it answer.\n  [dim]Speech runs on this machine: {what}.[/dim]")
     gb = re.search(r"· (\d+) GB", what)
     if gb and int(gb.group(1)) < install.VOICE_MIN_VRAM_GB:
-        io.say(f"  [yellow]![/yellow] That card has {gb.group(1)} GB of memory and the voice wants {install.VOICE_MIN_VRAM_GB}, so it may stutter.")
+        io.say(warn(f"That card has {gb.group(1)} GB of memory and the voice wants {install.VOICE_MIN_VRAM_GB}, so it may stutter."))
     free = sh.disk_usage(Path.home()).free / 1e9
     if free < 20:
-        io.say(f"  [yellow]![/yellow] Only {free:.0f} GB of disk is free; the voice needs most of that.")
+        io.say(warn(f"Only {free:.0f} GB of disk is free; the voice needs most of that."))
     rows = [("no", "Not now", "text only; `vision voice setup` adds it later"),
             ("yes", "Set up voice", f"downloads {install.VOICE_DOWNLOAD[backend]}")]
     if io.pick("Want voice?", rows) != "yes":
@@ -674,9 +675,9 @@ def voice_step(io, *, asked: bool = False, heading: bool = True) -> bool:
         return False
     io.say("  [dim]Downloading. This takes a while; Ctrl-C stops it and `vision voice setup` picks it back up.[/dim]")
     if io.run(cmd) != 0:
-        io.say("  [yellow]![/yellow] The voice didn't finish installing. `vision voice setup` tries again.")
+        io.say(warn("The voice didn't finish installing. `vision voice setup` tries again."))
         return False
-    io.say("  [green]✓[/green] Voice is installed. Now a quick check that you can hear it and it can hear you.")
+    io.say(ok("Voice is installed. Now a quick check that you can hear it and it can hear you."))
     # In a process of its own: this one started before the voice's packages were there.
     io.run([sys.executable, "-P", "-m", "vision", "voice", "check"])
     return True

@@ -72,7 +72,7 @@ class FirstRunTests(WizardCase):
             self.assertIs(self.first_run(io), True)
         self.assertEqual(io.listed[1], {"_server:ollama"})  # found running: ticked for a first run
         self.assertIn("Tick everything you've got", io.text())
-        self.assertEqual(io.text().count("◆ Vision"), 1)  # one welcome card, not the wizard's as well
+        self.assertEqual(io.text().count("Welcome."), 1)  # one welcome card, not the wizard's as well
         self.assertEqual(self.saved, [("ollama/qwen3", "off")])
         self.assertLess(io.text().index("Ollama added"), io.text().index("◆ You ·"))
 

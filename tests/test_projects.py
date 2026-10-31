@@ -507,6 +507,16 @@ class CliTest(unittest.TestCase):
         self.assertEqual((calls[0][0], calls[0][2]), ("/projects/ab", "DELETE"))
         self.assertIn("archived Fix it", result.output)
 
+    def test_list_shows_each_scout_and_what_it_is_up_to(self):
+        scout = {"id": "cd34", "title": "Ship it", "folder": "/s", "status": "active", "updated": 0, "leash": "on_call",
+                 "scout": {"name": "Atlas", "hue": 210, "trait": "antenna"}, "mood": "needs_you", "threads": {},
+                 "approvals": [{"command": "git push"}], "checkin": {"schedule": None}}
+        plain = {"id": "ab12", "title": "Fix it", "folder": "/w", "status": "active", "updated": 0, "mood": "worried"}
+        result, _ = self._run("list", answers=[[scout, plain]])
+        self.assertEqual(result.exit_code, 0, result.output)
+        for words in ("Atlas", "needs you: git", "on call", "Ship it", "Fix it", "something failed", "ab12"):
+            self.assertIn(words, result.output)
+
 
 if __name__ == "__main__":
     unittest.main()

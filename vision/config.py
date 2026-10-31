@@ -383,10 +383,11 @@ model = "tiny.en"
 follow_up_s = 8
 
 [buddy]
-# Pip, the pocket robot in the bottom-left input gutter. Set enabled = false to hide him.
-name = "Pip"
+# Vision's buddy, the little creature with a sprout in the bottom-left input gutter (the apps draw the
+# same one). Set enabled = false to hide it.
+name = "Vision"
 enabled = true
-slide_in = true         # he slides in from the left when a chat opens; false = he is just there
+slide_in = true         # it slides in from the left when a chat opens; false = it is just there
 
 [chat]
 # A desktop notification (notify-send on Linux, Notification Center on a Mac) when a reply that took
@@ -663,14 +664,14 @@ class WakeConfig:
 
 @dataclass
 class BuddyConfig:
-    name: str = "Pip"
+    name: str = "Vision"
     enabled: bool = True
     slide_in: bool = True
 
 
 @dataclass
 class ChatConfig:
-    """The terminal chat itself (the voice, Pip and the phone have sections of their own)."""
+    """The terminal chat itself (the voice, the buddy and the phone have sections of their own)."""
 
     notify_after_s: float = 30  # a desktop notification when a reply this long finishes unwatched; 0 = never
 

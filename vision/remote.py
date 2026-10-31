@@ -567,4 +567,4 @@ class RemoteBrain:
     def usage_renderable(self, full: bool = False):
         from rich.text import Text
 
-        return Text("Usage isn't tracked for a phone chat here; try /usage <provider>.", style="yellow")
+        return Text("Usage isn't tracked for a phone chat here; try /usage <provider>.", style="warn")

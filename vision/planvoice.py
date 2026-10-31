@@ -65,7 +65,7 @@ def listen_for_answer(question: dict, closed: threading.Event, ss, new_speaker: 
         try:
             audio = mic.record_utterance(cancel=closed, on_speech_start=lambda: set_hearing("hearing you…"))
         except Exception as e:  # noqa: BLE001  a dead mic: the form still takes keys and the phone
-            note(f"[yellow]couldn't listen for the plan answer: {e}[/yellow]")
+            note(f"[warn]couldn't listen for the plan answer: {e}[/warn]")
             return
         finally:
             set_hearing("")

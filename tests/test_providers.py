@@ -1480,8 +1480,8 @@ class SubagentTests(unittest.TestCase):
         out = console.file.getvalue()
         lines = [ln.rstrip() for ln in out.splitlines()]
         # a running agent lists its latest tool calls over its status; a done one is a single row
-        self.assertEqual(lines[:5], ["⠋ Explore(Map the tests)", "  ⎿  Bash(ls tests)", "     Read(tests/t0.py)", "     running",
-                                     "⏺ Plan(Design the change) · 1 tool · 1.5s"])
+        self.assertEqual(lines[:5], ["⠋ Explore Map the tests", "  ⎿  Bash ls tests", "     Read tests/t0.py", "     running",
+                                     "✓ Plan Design the change · 1 tool · 1.5s"])
         import time
         timed = AgentRun("t", "Explore", "Map the tests", model="opus", effort="high", started=time.monotonic() - 12.4)
         console = Console(width=60, force_terminal=False, file=io.StringIO())
@@ -1491,8 +1491,8 @@ class SubagentTests(unittest.TestCase):
         failed = AgentRun("f", "Explore", "Nope", done=True, failed=True, tool_uses=2, duration_ms=800)
         console = Console(width=80, force_terminal=False, file=io.StringIO())
         console.print(agent_activity([native, failed]))
-        self.assertIn(f"⏺ general-purpose(Find largest folder) · {model_label('opus')} · 5 tools · 19.4s\n", console.file.getvalue())
-        self.assertIn("⏺ Explore(Nope)\n  ⎿  failed · 2 tools · 0.8s", console.file.getvalue())
+        self.assertIn(f"✓ general-purpose Find largest folder · {model_label('opus')} · 5 tools · 19.4s\n", console.file.getvalue())
+        self.assertIn("✗ Explore Nope\n  ⎿  failed · 2 tools · 0.8s", console.file.getvalue())
         self.assertNotIn("a.py", out)  # a done agent's calls wait for a click (or ctrl-o)
 
     def test_agent_rows_show_the_latest_calls_and_expand_to_all(self):
@@ -1508,12 +1508,12 @@ class SubagentTests(unittest.TestCase):
 
         steps = [("Read", f"f{i}.py") for i in range(6)]
         busy = AgentRun("x", "Explore", "Read it all", steps=steps)
-        self.assertEqual(draw([busy], "⠋"), ["⠋ Explore(Read it all)", "  ⎿  +3 more tool uses", "     Read(f3.py)",
-                                              "     Read(f4.py)", "     Read(f5.py)", "     running"])
+        self.assertEqual(draw([busy], "⠋"), ["⠋ Explore Read it all", "  ⎿  +3 more tool uses", "     Read f3.py",
+                                              "     Read f4.py", "     Read f5.py", "     running"])
         self.assertEqual(len(draw([busy], "⠋", expanded={"x"})), 1 + 6 + 1)  # clicked: every call
         done = AgentRun("y", "Plan", "Design", steps=steps, done=True, tool_uses=6, duration_ms=1000)
-        self.assertEqual(draw([done]), ["⏺ Plan(Design) · 6 tools · 1.0s"])
-        self.assertIn("  ⎿  Read(f0.py)", draw([done], full=True))  # the reply unfolded with ctrl-o
+        self.assertEqual(draw([done]), ["✓ Plan Design · 6 tools · 1.0s"])
+        self.assertIn("  ⎿  Read f0.py", draw([done], full=True))  # the reply unfolded with ctrl-o
 
 
 class _LiveProcess:
@@ -1949,10 +1949,10 @@ class ToolRowTests(unittest.TestCase):
         console = Console(width=70, force_terminal=False, file=io.StringIO())
         console.print(tool_activity([running, done, failed, silent], "⠋"))
         out = console.file.getvalue()
-        self.assertIn("⠋ Grep(load_config  in ~/code/project)", out)
-        self.assertIn("⏺ Bash(git status --short)", out)
+        self.assertIn("⠋ Grep load_config  in ~/code/project", out)
+        self.assertIn("✓ Bash git status --short", out)
         self.assertNotIn("file0.py", out)  # none of the result until a click
-        self.assertIn("⏺ Read(~/nope)", out)
+        self.assertIn("✗ Read ~/nope", out)
         self.assertNotIn("File does not exist.", out)  # even a one-line result stays behind the click
         self.assertNotIn("⎿", out)  # one row per call, nothing under it
         self.assertEqual(len(out.strip().splitlines()), 4)
@@ -1984,10 +1984,11 @@ class ToolRowTests(unittest.TestCase):
 
         rows = e.lines(80)
         text = plain(rows)
-        self.assertTrue(any("Bash(ls)" in t for t in text))
+        self.assertTrue(any("Bash ls" in t for t in text))
         self.assertFalse(any("line0" in t for t in text))  # nothing of the result until a click
-        # every fragment of the tool rows carries the handler; the reply text's do not
-        handlers = list({f[2] for r in rows if "Bash(ls)" in "".join(f[1] for f in r) for f in r if len(f) == 3})
+        # every fragment of the tool rows carries the handler (the gutter's pad too); the reply text's do not
+        handlers = list({f[2] for r in rows if "Bash ls" in "".join(f[1] for f in r) for f in r if len(f) == 3})
+        self.assertTrue(all(len(f) == 3 for r in rows if "Bash ls" in "".join(f[1] for f in r) for f in r))
         self.assertEqual(len(handlers), 1)
         self.assertTrue(all(len(f) == 2 for r in rows if any("done." in f[1] for f in r) for f in r))
         click = lambda kind: MouseEvent(position=Point(0, 0), event_type=kind, button=MouseButton.LEFT, modifiers=frozenset())
@@ -2006,6 +2007,7 @@ class ToolRowTests(unittest.TestCase):
 
     def test_tool_summary_counts_calls_by_kind(self):
         from vision.brain import ToolCall
+        from vision.brain import AgentRun
         from vision.ui import tool_summary
 
         calls = [
@@ -2014,11 +2016,30 @@ class ToolRowTests(unittest.TestCase):
             ToolCall("7", "Read", "c.py", done=True, is_error=True), ToolCall("8", "WebSearch", "q", done=True),
             ToolCall("9", "Frobnicate", "", done=True), ToolCall("10", "Write", "d.py", done=True),
         ]
-        self.assertEqual(
+        self.assertEqual(  # the desktop's words and order (render.ts stepsSummary), whatever order the calls came in
             tool_summary(calls),
-            "Read 3 files, ran 1 command, searched 2 patterns, edited 2 files, searched the web 1 time, called Frobnicate 1 time, 1 failed",
+            "Read 3 files, searched twice, edited 2 files, ran a command, looked at a page, used a tool",
         )
+        agent = AgentRun("a", "Explore", "look", done=True)
+        self.assertEqual(tool_summary([agent, ToolCall("1", "Read", "a.py"), ToolCall("2", "Grep", "x")]), "Read a file, searched once, sent an agent")
+        self.assertEqual(tool_summary([ToolCall(str(i), "LS", "") for i in range(3)]), "Searched 3 times")
         self.assertEqual(tool_summary([]), "")
+
+    def test_a_fold_counts_the_lines_its_edits_changed(self):
+        from rich.console import Console
+
+        from vision.brain import ToolCall
+        from vision.ui import diff_counts, tool_fold
+
+        edit = ToolCall("e", "Edit", "a.py", done=True, diff=[{"old": 1, "new": 1, "lines": [" a", "-b", "+B", "+C"]}])
+        write = ToolCall("w", "Write", "n.py", done=True, diff=[{"old": 0, "new": 1, "lines": ["+x"]}])
+        self.assertEqual(diff_counts([edit, write, ToolCall("b", "Bash", "ls", done=True)]), (3, 1))
+        console = Console(width=80, force_terminal=False, file=io.StringIO())
+        console.print(tool_fold([edit, write, ToolCall("b", "Bash", "ls", done=True)]))
+        self.assertEqual(console.file.getvalue().rstrip(), "● Edited 2 files, ran a command +3 −1  ›")
+        console = Console(width=80, force_terminal=False, file=io.StringIO())
+        console.print(tool_fold([ToolCall("r", "Read", "a.py", done=True, is_error=True)]))
+        self.assertEqual(console.file.getvalue().rstrip(), "● Read a file, 1 failed  ›")  # no edits: no counts
 
     def test_a_live_run_of_tool_calls_is_one_row_that_becomes_its_total(self):
         """While a run of calls is going it is one row showing the latest call, not a row per call
@@ -2037,21 +2058,21 @@ class ToolRowTests(unittest.TestCase):
 
         e.place(ToolCall("a", "Read", "~/a.py"))
         text = plain()
-        self.assertTrue(any(t.endswith("Read(~/a.py)") for t in text))
+        self.assertTrue(any(t.endswith("Read ~/a.py") for t in text))
         e.tools["a"].done = True
         e.place(ToolCall("b", "Bash", "ls"))
         e.place(ToolCall("c", "Read", "~/b.py"))
         text = plain()
-        self.assertTrue(any(t.endswith("Read(~/b.py)") for t in text))  # no count until the total
-        self.assertFalse(any("Read(~/a.py)" in t or "Bash(ls)" in t for t in text))
+        self.assertTrue(any(t.endswith("Read ~/b.py") for t in text))  # no count until the total
+        self.assertFalse(any("Read ~/a.py" in t or "Bash ls" in t for t in text))
         e.tools["b"].done = e.tools["c"].done = True
         e.buf += "\n\nFound it."
         text = plain()
-        self.assertIn("⏺ Read 2 files, ran 1 command · ctrl-o to expand", text)
-        self.assertFalse(any("Read(~/b.py)" in t for t in text))
+        self.assertIn("  ● Read 2 files, ran a command  ›", text)
+        self.assertFalse(any("Read ~/b.py" in t for t in text))
         e.toggle_fold()  # ctrl-o works mid-reply: every call back on its own row
         text = plain()
-        self.assertTrue(all(any(c in t for t in text) for c in ("Read(~/a.py)", "Bash(ls)", "Read(~/b.py)")))
+        self.assertTrue(all(any(c in t for t in text) for c in ("Read ~/a.py", "Bash ls", "Read ~/b.py")))
 
     def test_input_diff_matches_lines_not_characters_so_a_big_edit_does_not_stall(self):
         """An Edit's preview diff ran difflib.ndiff on the brain's stream reader; pairing changed lines
@@ -2068,9 +2089,10 @@ class ToolRowTests(unittest.TestCase):
         self.assertEqual(len(hunks[0]["lines"]), DIFF_LINES)
         self.assertTrue(hunks[0]["lines"][0].startswith("-") and hunks[0]["lines"][-1].startswith("+"))
 
-    def test_an_edit_shows_its_diff_between_the_folded_calls(self):
-        """An Edit is a block of its own, as in Claude Code: `Update(path)`, the count of additions
-        and removals, then the numbered lines; the calls before and after it fold on either side."""
+    def test_a_folded_edit_is_counted_and_unfolds_to_its_diff(self):
+        """A run with an Edit in it folds like any other, the lines it changed counted on the row (`+2
+        −1`) rather than its diff shown; unfolded, the Edit is a block of its own as in Claude Code:
+        `Update path`, the count of additions and removals, then the numbered lines."""
         from vision.brain import ToolCall, edit_diff
         from vision.ui import _ReplyEntry
 
@@ -2083,20 +2105,25 @@ class ToolRowTests(unittest.TestCase):
         e.buf, e.shown, e.finished, e.done = "Fixed.", 1 << 30, True, True
         e.full(80)
         text = ["".join(f[1] for f in r).rstrip() for r in e.lines(80)]
-        self.assertEqual(text[1:9], [
-            "⏺ Read 1 file · ctrl-o to expand",
-            "⏺ Update(~/a.py)",
-            "  ⎿  Updated ~/a.py with 2 additions and 1 removal",
-            "       7   x = 1",
-            "       8 - y = 2",
-            "       8 + y = 3",
-            "       9 + z = 4",
-            "⏺ Ran 1 command · ctrl-o to expand",
+        self.assertEqual(text[1], "  ● Read a file, edited a file, ran a command +2 −1  ›")
+        self.assertFalse(any("y = 3" in t for t in text))
+        e.toggle_fold()
+        text = ["".join(f[1] for f in r).rstrip() for r in e.lines(80)]
+        self.assertEqual(text[1:10], [
+            "  ✓ Read ~/a.py",
+            "  ✓ Update ~/a.py",
+            "    ⎿  Updated ~/a.py with 2 additions and 1 removal",
+            "         7   x = 1",
+            "         8 - y = 2",
+            "         8 + y = 3",
+            "         9 + z = 4",
+            "  ✓ Bash pytest",
+            "    ctrl-o to fold",
         ])
 
     def test_done_reply_folds_its_tool_calls_to_one_row_until_unfolded(self):
         """As Claude Code: once the reply is done its calls fold
-        to `⏺ Read 2 files, ran 1 command · ctrl-o to expand`, and a click on that row
+        to `● Read 2 files, ran a command  ›`, and a click on that row
         (or ctrl-o, which calls toggle_fold) brings them back, with a way to fold again."""
         from prompt_toolkit.mouse_events import MouseEvent, MouseEventType, MouseButton
         from prompt_toolkit.layout.screen import Point
@@ -2118,29 +2145,30 @@ class ToolRowTests(unittest.TestCase):
         e.invalidate()
         rows = e.lines(80)
         text = plain(rows)
-        self.assertTrue(any("⏺ Read 2 files, ran 1 command · ctrl-o to expand" in t for t in text))
-        self.assertFalse(any("Bash(ls)" in t for t in text))
+        self.assertTrue(any("● Read 2 files, ran a command  ›" in t for t in text))
+        self.assertFalse(any("ctrl-o" in t for t in text))  # the key is in /help, not on every row
+        self.assertFalse(any("Bash ls" in t for t in text))
         self.assertFalse(any("a.py" in t and "⎿" in t for t in text))
         handler = next(f[2] for r in rows for f in r if len(f) == 3)
         handler(MouseEvent(position=Point(0, 0), event_type=MouseEventType.MOUSE_UP, button=MouseButton.LEFT, modifiers=frozenset()))
         text = plain(e.lines(80))
-        self.assertTrue(any("Read(~/a.py)" in t for t in text))
-        self.assertTrue(any("Bash(ls)" in t for t in text))
+        self.assertTrue(any("Read ~/a.py" in t for t in text))
+        self.assertTrue(any("Bash ls" in t for t in text))
         self.assertTrue(any("ctrl-o to fold" in t for t in text))
         self.assertFalse(any("Read 2 files" in t for t in text))
         e.toggle_fold()  # ctrl-o
         text = plain(e.lines(80))
-        self.assertTrue(any("Read 2 files, ran 1 command" in t for t in text))
-        self.assertFalse(any("Bash(ls)" in t for t in text))
+        self.assertTrue(any("Read 2 files, ran a command" in t for t in text))
+        self.assertFalse(any("Bash ls" in t for t in text))
         # a failed call: red dot, and the count says so
         e.tools["b"].is_error = True
         e.invalidate()
-        self.assertTrue(any("Read 2 files, ran 1 command, 1 failed" in t for t in plain(e.lines(80))))
+        self.assertTrue(any("Read 2 files, ran a command, 1 failed" in t for t in plain(e.lines(80))))
 
     def test_agent_and_tool_rows_sit_where_they_happened(self):
         """A model that says "sending an agent off" and then launches one must read that way: the
-        rows go in at the point in the text where they arrived, each later run of prose gets a
-        fresh `●`, and the typewriter reaches the rows only after the text before them is out."""
+        rows go in at the point in the text where they arrived, straight under the prose before them,
+        and the typewriter reaches the rows only after the text before them is out."""
         from vision.brain import AgentRun, ToolCall
         from vision.ui import _ReplyEntry
 
@@ -2157,41 +2185,39 @@ class ToolRowTests(unittest.TestCase):
 
         e.shown = 1 << 30  # prose follows each run: they have settled into their totals, mid-reply too
         self.assertEqual(plain(e.lines(80))[1:-1], [
-            "● Sent the agent off.",
+            "  Sent the agent off.",
+            "  ● Sent an agent  ›",
             "",
-            "⏺ Ran 1 agent · ctrl-o to expand",
+            "  Steam is the monster.",
+            "  ● Ran a command  ›",
             "",
-            "● Steam is the monster.",
-            "",
-            "⏺ Ran 1 command · ctrl-o to expand",
-            "",
-            "● Uninstall CS:GO.",
+            "  Uninstall CS:GO.",
         ])
         e.shown = 4  # the typewriter is still on the first sentence: nothing after it but the live line
         e.invalidate()
         text = plain(e.lines(80))
-        self.assertEqual(text[1], "● Sent")
-        self.assertRegex(text[2], r"^. working… \(0s · esc to stop\)$")
-        self.assertNotIn("⏺", "".join(text))
+        self.assertEqual(text[1], "  Sent")
+        self.assertRegex(text[2], r"^  . working… \(0s · esc to stop\)$")
+        self.assertNotIn("agent", "".join(text[2:]))
         e.shown = len("Sentthe agentoff.")  # the first piece is out (blanks are free): the agent's rows come into view, not the next prose
         e.invalidate()
-        self.assertEqual(plain(e.lines(80))[1:4], ["● Sent the agent off.", "", "⏺ Ran 1 agent · ctrl-o to expand"])
-        self.assertNotIn("● Steam", "".join(plain(e.lines(80))))
+        self.assertEqual(plain(e.lines(80))[1:3], ["  Sent the agent off.", "  ● Sent an agent  ›"])
+        self.assertNotIn("Steam", "".join(plain(e.lines(80))))
         # done: the agent and the tool call each fold in place, under their own prose, not at the top
         e.shown, e.finished, e.done = 1 << 30, True, True
         e.invalidate()
         text = plain(e.lines(80))
-        self.assertLess(text.index("● Sent the agent off."), text.index("⏺ Ran 1 agent · ctrl-o to expand"))
-        self.assertLess(text.index("⏺ Ran 1 agent · ctrl-o to expand"), text.index("● Steam is the monster."))
-        self.assertLess(text.index("● Steam is the monster."), text.index("⏺ Ran 1 command · ctrl-o to expand"))
-        self.assertLess(text.index("⏺ Ran 1 command · ctrl-o to expand"), text.index("● Uninstall CS:GO."))
-        self.assertNotIn("general-purpose(Find largest folder)", "".join(text))
+        self.assertLess(text.index("  Sent the agent off."), text.index("  ● Sent an agent  ›"))
+        self.assertLess(text.index("  ● Sent an agent  ›"), text.index("  Steam is the monster."))
+        self.assertLess(text.index("  Steam is the monster."), text.index("  ● Ran a command  ›"))
+        self.assertLess(text.index("  ● Ran a command  ›"), text.index("  Uninstall CS:GO."))
+        self.assertNotIn("Find largest folder", "".join(text))
         e.toggle_fold()  # ctrl-o: every row back, the way back under the last run only
         text = plain(e.lines(80))
-        self.assertTrue(any(t.startswith("⏺ general-purpose(Find largest folder) · ") for t in text))
-        self.assertIn("⏺ Bash(du -sh ~/.steam)", text)
+        self.assertTrue(any(t.startswith("  ✓ general-purpose Find largest folder · ") for t in text))
+        self.assertIn("  ✓ Bash du -sh ~/.steam", text)
         self.assertEqual(sum("ctrl-o to fold" in t for t in text), 1)
-        self.assertLess(text.index("⏺ Bash(du -sh ~/.steam)"), text.index("     ctrl-o to fold"))
+        self.assertLess(text.index("  ✓ Bash du -sh ~/.steam"), text.index("    ctrl-o to fold"))
         # a second report of the same run is a redraw, not a second row
         e.place(e.agents["a"])
         self.assertEqual(len(e.marks), 2)
@@ -2211,22 +2237,22 @@ class ToolRowTests(unittest.TestCase):
         e.place(ToolCall("t2", "ToolSearch", "select:Bar", done=True, output="ok"))
         e.status = "using Agent…"
         text = ["".join(f[1] for f in r).rstrip() for r in e.lines(80)]
-        self.assertEqual(sum("general-purpose(Task" in t for t in text), 5)
-        self.assertRegex(text[-1], r"^. waiting on 5 agents… \(")
+        self.assertEqual(sum("general-purpose Task" in t for t in text), 5)
+        self.assertRegex(text[-1], r"^  . waiting on 5 agents… \(")
         e.agents["a0"].done = True
         e.status = WORKING
         e.invalidate()
         text = ["".join(f[1] for f in r).rstrip() for r in e.lines(80)]
-        self.assertRegex([t for t in text if t][-1], r"^. waiting on 4 agents… \(")  # the done row is one line shorter
+        self.assertRegex([t for t in text if t][-1], r"^  . waiting on 4 agents… \(")  # the done row is one line shorter
         for run in e.agents.values():
             run.done = True
         e.agents["a3"].failed = True
         e.buf, e.shown, e.finished, e.done = "All five landed.", 1 << 30, True, True
         e.invalidate()
         text = ["".join(f[1] for f in r).rstrip() for r in e.lines(80)]
-        self.assertIn("⏺ Ran 5 agents, called ToolSearch 2 times, 1 failed · ctrl-o to expand", text)
-        self.assertNotIn("general-purpose(Task 0)", "".join(text))
-        self.assertLess(text.index("⏺ Ran 5 agents, called ToolSearch 2 times, 1 failed · ctrl-o to expand"), text.index("● All five landed."))
+        self.assertIn("  ● Sent 5 agents, used 2 tools, 1 failed  ›", text)
+        self.assertNotIn("general-purpose Task 0", "".join(text))
+        self.assertLess(text.index("  ● Sent 5 agents, used 2 tools, 1 failed  ›"), text.index("  All five landed."))
 
     def test_folding_a_tool_result_mid_reply_does_not_leave_blank_rows(self):
         """The never-shrink-mid-reply floor (a cushion against a one-row markdown reflow) must not
