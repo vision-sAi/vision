@@ -52,9 +52,8 @@ a pasted or dragged-in picture path attaches that picture too, shown as `[Image 
 Up/Down recall your messages in this conversation, Esc cancels a reply in progress). PgUp/PgDn, Shift-↑/↓ or the mouse wheel scroll
 the transcript, Alt-Home/Alt-End jump to the top/bottom, and a reply that is still streaming will not
 pull you back down while you are reading; scroll to the bottom, click the "↓ Jump to bottom" pill, press Ctrl-End or send a message to follow again.
-Mouse support is on, so hold Shift while dragging to select text in the terminal. Your messages appear as bands
-shaded violet to blue across the width (flat where the terminal has no 24-bit colour), and replies stream
-indented under them, with no mark. Fenced code sits on a darker fill between two hairlines, the top one
+Mouse support is on, so hold Shift while dragging to select text in the terminal. Your messages sit behind a violet
+bar down their left edge, in bold, and replies stream indented under them, with no mark. Fenced code sits on a darker fill between two hairlines, the top one
 naming the language. A run of tool calls folds, once the reply moves on, into one quiet row saying what it
 did, `● Read 2 files, searched once, edited a file +12 −3 ›`, with the lines the edits added and removed;
 a click on the row, or Ctrl-O for the last reply's, unfolds it into a row per call (`✓ Bash git status`) and

@@ -12,44 +12,25 @@ def _print(renderable, width: int = 60) -> str:
 
 
 class GutterTests(unittest.TestCase):
-    def test_user_turn_is_a_band_with_air_above_and_below(self):
+    def test_user_turn_runs_a_violet_bar_down_every_row(self):
+        from vision.theme import ACCENT
         from vision.ui import user_grid
 
-        out = _print(user_grid("one two three four five six seven eight nine ten eleven twelve"), width=40)
-        lines = out.splitlines()
-        self.assertEqual([len(line) for line in lines], [40] * len(lines))  # every row is the full width
-        self.assertEqual((lines[0].strip(), lines[-1].strip()), ("", ""))
-        self.assertTrue(lines[1].startswith("  one two"))
-        self.assertTrue(lines[2].startswith("  ") and not lines[2].startswith("   "))  # wrapped rows keep the indent
+        lines = _print(user_grid("one two three four five six seven eight nine ten eleven twelve"), width=40).splitlines()
+        self.assertGreater(len(lines), 1)
+        self.assertTrue(lines[0].startswith("▌ one two"))
+        self.assertTrue(all(line.startswith("▌ ") and not line.startswith("▌  ") for line in lines))  # wrapped rows keep the bar
+        console = Console(width=40, force_terminal=True, color_system="truecolor", file=io.StringIO())
+        segs = list(console.render(user_grid("hi"), console.options.update_width(40)))
+        self.assertTrue(all(s.style is None or s.style.bgcolor is None for s in segs))  # no fill behind it
+        bar = next(s for s in segs if s.text.startswith("▌"))
+        self.assertEqual(bar.style.color.get_truecolor().hex, ACCENT)
 
-    def test_the_band_shades_violet_to_blue_and_goes_flat_without_truecolor(self):
-        from unittest.mock import patch
-
-        from rich.console import Console
-
-        from vision.theme import BAND, BAND_FLAT
-        from vision.ui import user_grid
-
-        console = Console(width=30, force_terminal=True, color_system="truecolor", file=io.StringIO())
-
-        def shades():
-            segs = [s for s in console.render(user_grid("hi"), console.options.update_width(30)) if s.text != "\n"]
-            row = segs[: next(i for i, s in enumerate(segs) if sum(len(x.text) for x in segs[: i + 1]) >= 30) + 1]
-            self.assertEqual(sum(len(s.text) for s in row), 30)  # the band row fills the width
-            return [s.style.bgcolor.get_truecolor().hex for s in row]
-
-        with patch.dict("os.environ", {"COLORTERM": "truecolor"}):
-            cells = shades()
-        self.assertEqual((cells[0], cells[-1]), (BAND[0], BAND[1]))
-        self.assertGreater(len(set(cells)), 20)  # a shade a cell (neighbours that round alike share a run)
-        with patch.dict("os.environ", {"COLORTERM": ""}):
-            self.assertEqual(set(shades()), {BAND_FLAT})
-
-    def test_shell_command_keeps_its_pink_mark_on_the_band(self):
+    def test_shell_command_keeps_its_pink_mark(self):
         from vision.ui import shell_grid
 
         lines = _print(shell_grid("ls -la"), width=30).splitlines()
-        self.assertEqual(lines[1].rstrip(), "! ls -la")
+        self.assertEqual(lines[0].rstrip(), "! ls -la")
 
     def test_hearing_line_says_listening_until_the_first_word(self):
         from vision.ui import hearing_grid

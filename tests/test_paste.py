@@ -115,7 +115,7 @@ class PasteTests(unittest.TestCase):
         self.assertIn("file:///tmp/a b.png", rendered)
         self.assertNotIn("Attached image", rendered)
         plain = ui.Text.from_ansi(ui.render_ansi(ui.user_grid("what\n[Attached image: /a.png]\nand\n[Attached image: /b.png]\nok\nbye"), 80)).plain
-        self.assertEqual([r.strip() for r in plain.splitlines()], ["", "what [Image #2] and [Image #3] ok", "bye", ""])  # inline, as typed; the user's own newline stays
+        self.assertEqual([r.rstrip() for r in plain.splitlines()], ["▌ what [Image #2] and [Image #3] ok", "▌ bye"])  # inline, as typed; the user's own newline stays
 
     def test_text_is_typed_in_where_the_cursor_is(self):
         self.draft("say ")
