@@ -33,6 +33,12 @@ export interface SettingsHost {
   modelLabel(data: Json, model: string, effort: string): string;
   /** The default model or folder changed: an empty draft picks it up. */
   defaultsChanged(): void;
+  /** The composer's folder menu, anchored to `anchor`. */
+  folderMenu(anchor: HTMLElement, current: string, pick: (path: string, label: string) => void): void;
+  /** What to run on the computer when its Vision is older than it could be (the hello's `update`), else null. */
+  serverUpdate(): string | null;
+  /** `vision upgrade` on this computer; each line it prints goes to `line`. Resolves with its exit code. */
+  upgradeServer(line: (text: string) => void): Promise<number>;
   showPairing(): void;
   disconnect(): Promise<void>;
   /** The desktop app's own update: look for one, and install the one found (then relaunch). */

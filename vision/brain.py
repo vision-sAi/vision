@@ -1790,6 +1790,8 @@ class Brain:
         from vision.toolrules import YES_FOR_TURN, ask_question, declined_message, first_match, gate
 
         rule = first_match(getattr(self.cfg, "ask_tools", None), tool, tool_input, self.workdir)
+        if rule and first_match(getattr(self.cfg, "allow_tools", None), tool, tool_input, self.workdir):
+            return {"behavior": "allow", "updatedInput": tool_input}  # an [brain].allow_tools exception to that rule
         settled = gate(self, tool, tool_input, rule)  # a scout's approvals (projects.py)
         if settled is not None:
             ok, message = settled

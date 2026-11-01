@@ -12,7 +12,9 @@ The UI tests drive it over plain HTTP (the test runner can make requests; the ap
                 "transcribe": bool, "heard": "the words POST /transcribe answers",
                 "compact": bool (hello's "compact": a `compact` frame plays a compaction out, as the server shows one),
                 "widgets": {threads, usage, next} (what GET /widgets answers; None: a Vision from before it, 404),
-                "usage": [provider row…] (GET /usage), "scheduled": [task…] (GET /scheduled)}
+                "usage": [provider row…] (GET /usage), "scheduled": [task…] (GET /scheduled),
+                "permissions": {allow, ask, deny, builtin, scouts, claude} (GET/POST /permissions),
+                "vision_memory": {topic ("" = the core): {about, facts: [line…]}} (GET/POST /memory…)}
                                                                      reset: what the next hello and /health carry
   POST /_push  {frame}                                               send a frame to every connected app
   GET  /_frames                                                      every frame the app sent, oldest first
@@ -56,6 +58,7 @@ async def set_scene(request: Request) -> dict:
     # project id → its threads, oldest first; each filled out to the real server's shape
     scene["threads"] = {pid: [_thread(pid, t) for t in ts] for pid, ts in (body.get("threads") or {}).items()}
     scene["memory"] = body.get("memory") or {}  # project id → its memory lines ("- 2026-10-11: fact")
+    scene["vision_memory"] = body.get("vision_memory") or {}  # Vision's own memory: topic ("" = core) → {about, facts}
     scene["library"] = body.get("library") or {}  # project id → its Library items
     scene["activity"] = body.get("activity") or {}  # project id → its activity events, newest first
     scene["thread_history"] = body.get("thread_history") or {}  # thread id → its conversation [{role, text}]
@@ -70,6 +73,7 @@ async def set_scene(request: Request) -> dict:
     scene["widgets"] = body.get("widgets")  # what GET /widgets answers; None: a Vision from before the widgets
     scene["usage"] = body.get("usage") or []  # GET /usage's provider rows
     scene["scheduled"] = body.get("scheduled") or []  # GET /scheduled's tasks
+    new_chat.update({"model": "opus", "effort": "high", "workdir": "", "mode": "auto"})
     frames.clear()
     return {"ok": True}
 
@@ -206,7 +210,30 @@ MODELS = {"tabs": [{"tab": "Claude", "models": [{"id": "opus", "label": "Opus 5.
 async def models(chat: str = "", model: str = "", effort: str = "") -> dict:
     """The model picker's list (the desktop app asks it; the phone's UI tests don't)."""
     current = model or next((c.get("model_id") for c in scene["chats"] if c.get("chat") == chat), None) or "opus"
-    return {**MODELS, "current": current, "effort": effort or "high"}
+    return {**MODELS, "current": current, "effort": effort or "high", **({} if chat else _new_chat())}
+
+
+new_chat = {"model": "opus", "effort": "high", "workdir": "", "mode": "auto"}  # what POST /defaults saved
+
+
+def _new_chat() -> dict:
+    """Where a new chat starts and in which mode, as the real server's defaults_payload adds them."""
+    folder = new_chat["workdir"] or "/tmp"
+    return {"workdir": folder, "folder": folder, "mode": new_chat["mode"]}
+
+
+@app.get("/defaults")
+async def get_defaults() -> dict:
+    return {**MODELS, "current": new_chat["model"], "effort": new_chat["effort"], **_new_chat()}
+
+
+@app.post("/defaults")
+async def set_defaults(request: Request) -> dict:
+    """{model?, effort?, workdir?, mode?}: each left alone when missing, as in vision/server.py."""
+    body = await request.json()
+    new_chat.update({k: body[k] for k in ("model", "effort", "workdir", "mode") if k in body})
+    frames.append({"type": "_defaults", **body})
+    return await get_defaults()
 
 
 @app.get("/voice/rate")
@@ -217,6 +244,28 @@ async def voice_rate() -> JSONResponse:
 @app.get("/voice")
 async def voice() -> JSONResponse:
     return JSONResponse(scene["voices"]) if scene.get("voices") else JSONResponse({"detail": "not in the fake"}, status_code=404)
+
+
+@app.get("/permissions")
+async def permissions() -> JSONResponse:
+    return JSONResponse(scene["permissions"]) if scene.get("permissions") else JSONResponse({"detail": "not in the fake"}, status_code=404)
+
+
+@app.post("/permissions")
+async def permissions_save(request: Request) -> JSONResponse:
+    """The lists given replace the scene's, and scouts' defaults are set (or "default" taken off), unchecked."""
+    if not scene.get("permissions"):
+        return JSONResponse({"detail": "not in the fake"}, status_code=404)
+    body = await request.json()
+    held = scene["permissions"]
+    for kind in ("allow", "ask", "deny"):
+        if isinstance(body.get(kind), list):
+            held[kind] = list(body[kind])
+    for row in held.get("scouts") or []:
+        if row.get("action") in (body.get("scouts") or {}):
+            choice = body["scouts"][row["action"]]
+            row["rule"] = "" if choice == "default" else choice
+    return JSONResponse(held)
 
 
 def _silence(seconds: float) -> bytes:
@@ -614,6 +663,52 @@ async def memory_forget(pid: str, number: int) -> JSONResponse:
     gone = facts.pop(number - 1)
     frames.append({"type": "_forget", "project": pid, "fact": gone})
     return JSONResponse({"forgot": gone, "facts": facts})
+
+
+def _fact(line: str, topic: str | None = None) -> dict:
+    """A memory line as /memory lists it: {line, date, text} (and its topic, for search hits)."""
+    date, _, text = line[2:].partition(": ")
+    return {"line": line, "date": date, "text": text, **({} if topic is None else {"topic": topic})}
+
+
+def _memory_file(topic: str) -> dict:
+    return scene.setdefault("vision_memory", {}).setdefault(topic, {"about": topic.replace("-", " "), "facts": []})
+
+
+@app.get("/memory")
+async def vision_memory(topic: str = "", q: str = "") -> dict:
+    files = scene.setdefault("vision_memory", {})
+    if q.strip():
+        words = q.lower().split()
+        return {"facts": [_fact(ln, name) for name, f in files.items() for ln in f["facts"]
+                          if all(w in ln.lower() for w in words)], "topics": []}
+    topics = [] if topic else [{"name": n, "about": f["about"], "count": len(f["facts"]), "updated": 1760000000.0}
+                               for n, f in sorted(files.items()) if n]
+    return {"facts": [_fact(ln) for ln in _memory_file(topic)["facts"]], "topics": topics, "updated": 1760000000.0}
+
+
+@app.post("/memory")
+async def vision_remember(request: Request) -> dict:
+    body = await request.json()
+    frames.append({"type": "_vision_remember", **body})
+    facts = _memory_file(body.get("topic") or "")["facts"]
+    facts.append(f"- 2026-10-11: {body.get('fact', '')}")
+    return _fact(facts[-1])
+
+
+@app.post("/memory/{action}")  # forget {line, topic?}, edit {line, text, topic?}
+async def vision_forget(action: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    frames.append({"type": f"_vision_{action}", **body})
+    facts = _memory_file(body.get("topic") or "")["facts"]
+    if body.get("line") not in facts or action not in ("forget", "edit"):
+        return JSONResponse({"detail": "no such fact"}, status_code=404)
+    at = facts.index(body["line"])
+    if action == "forget":
+        facts.pop(at)
+        return JSONResponse({"ok": True})
+    facts[at] = f"- {_fact(facts[at])['date']}: {body.get('text', '')}"
+    return JSONResponse(_fact(facts[at]))
 
 
 @app.post("/projects/{pid}/{action}")  # after every other POST under a project: it takes any last segment

@@ -12,6 +12,7 @@ import * as scouts from "./scouts";
 import * as schedules from "./schedules";
 import * as usage from "./usage";
 import * as settings from "./settings";
+import * as notifications from "./settings/notifications";
 import * as mic from "./mic";
 import { buddy } from "./buddy";
 import { IconName, icon, placeIcons } from "./icons";
@@ -257,14 +258,14 @@ function handle(ev: Json) {
       scouts.onApproval(ev.project, ev.approval ?? {});
       if (ev.approval?.state === "pending" && !document.hasFocus()) {
         const p = scouts.project(ev.project);
-        if (p) notify(`${scouts.nameOf(p)} asks to run`, String(ev.approval.command ?? "").slice(0, 160));
+        if (p) notify(`${scouts.nameOf(p)} asks to run`, String(ev.approval.command ?? "").slice(0, 160), "approvals");
       }
       return;
     case "checkin":
       scouts.onCheckin(ev);
       if (ev.state === "done" && !document.hasFocus()) {
         const p = scouts.project(ev.project);
-        if (p) notify(`${scouts.nameOf(p)} sent a status report`, ev.needs_you ? `${ev.needs_you} need${ev.needs_you === 1 ? "s" : ""} you` : String(ev.summary ?? "").split("\n")[0].slice(0, 160));
+        if (p) notify(`${scouts.nameOf(p)} sent a status report`, ev.needs_you ? `${ev.needs_you} need${ev.needs_you === 1 ? "s" : ""} you` : String(ev.summary ?? "").split("\n")[0].slice(0, 160), "reports");
       }
       return;
     case "thread":
@@ -350,7 +351,7 @@ function handle(ev: Json) {
     }
     case "question":
       questions.set(chat, ev.questions ?? []);
-      if (!document.hasFocus()) notify(chats.get(chat)?.title || "Vision", `Asks: ${(ev.questions?.[0]?.question ?? "").split("\n")[0]}`);
+      if (!document.hasFocus()) notify(chats.get(chat)?.title || "Vision", `Asks: ${(ev.questions?.[0]?.question ?? "").split("\n")[0]}`, "asks");
       if (chat === active) drawQuestion();
       return;
     case "answered":
@@ -372,7 +373,7 @@ function handle(ev: Json) {
       questions.delete(chat);
       if (!document.hasFocus() && !ev.busy && !ev.compacted) {
         const said = String(ev.text ?? "").replace(/[#*`>_\[\]]/g, "").split("\n").find((l) => l.trim()) ?? "";
-        notify(c?.title || "Vision", ev.error ? `Stopped: ${ev.error}` : said.slice(0, 160) || "Replied");
+        notify(c?.title || "Vision", ev.error ? `Stopped: ${ev.error}` : said.slice(0, 160) || "Replied", "replies");
       }
       if (!ev.busy) loadHistory(chat);  // the server's transcript is the one to keep (it times each part)
       drawSidebar();
@@ -459,6 +460,7 @@ async function startDraft() {
     if (draft && !draft.workdir) { draft.workdir = folders.path; draft.folder = folders.label; }
     const defaults = await http("GET", "models");
     if (draft) { draft.model = defaults.current; draft.effort = defaults.effort; draft.modelLabel = modelLabel(defaults, defaults.current, defaults.effort); }
+    if (draft && defaults.mode) draft.mode = defaults.mode;  // Settings > New chats (an older server: auto)
     drawDock();
     drawWelcome();
   } catch { /* the chips stay blank until the server answers */ }
@@ -501,7 +503,7 @@ function opened(chat: string) {
   const first = pendingSend;
   pendingSend = null;
   if (first) {
-    if (first.mode !== "auto") send({ type: "mode", chat, mode: first.mode });
+    if (first.mode !== (chats.get(chat)?.mode ?? "auto")) send({ type: "mode", chat, mode: first.mode });
     transcripts.get(chat)!.push({ ...blank("user", first.text), images: first.images });
     send({ type: "message", chat, text: first.text, images: first.images.length ? first.images : undefined });
   }
@@ -864,13 +866,17 @@ function drawScout() {
   if (!typing) scouts.drawRail(rail, p);
 }
 
-let notifying: boolean | null = null; // allowed to notify (asked once)
+let asked = false; // the system was asked for permission once (Settings › Notifications can ask again)
 
-async function notify(title: string, body: string) {
-  if (notifying === null) {
-    try { notifying = (await isPermissionGranted()) || (await requestPermission()) === "granted"; } catch { notifying = false; }
-  }
-  if (notifying) sendNotification({ title, body });
+/** A notification, unless Settings › Notifications mutes its kind or it's quiet hours. */
+async function notify(title: string, body: string, kind: notifications.Kind) {
+  if (!notifications.allowed(kind)) return;
+  let granted = false;
+  try {
+    granted = await isPermissionGranted();
+    if (!granted && !asked) { asked = true; granted = (await requestPermission()) === "granted"; }
+  } catch { granted = false; }
+  if (granted) sendNotification({ title, body, ...notifications.sound() });
 }
 
 function drawBadge() {
@@ -1643,7 +1649,14 @@ settings.setHost({
   voiceOn: () => voiceOn,
   setVoiceOn: (on) => { voiceOn = on; mic.server(voiceOn); },
   hasTray: () => hasTray,
-  defaultsChanged: () => { if (draft && !draft.model) startDraft(); },
+  defaultsChanged: () => { if (draft && !$<HTMLTextAreaElement>("input").value.trim()) { draft.workdir = ""; startDraft(); } },
+  folderMenu: (anchor, current, pick) => folderMenu(anchor, current, pick),
+  serverUpdate: () => updateHow ?? (serverProtocol === null || serverProtocol < PROTOCOL ? "vision upgrade" : null),
+  upgradeServer: async (line) => {
+    const code = await step("upgrade", line).catch((e) => { line(String(e)); return -1; });
+    if (code === 0) { updateHow = null; drawNotice(); }
+    return code;
+  },
   disconnect: async () => {
     await invoke("forget");
     chats.clear(); transcripts.clear(); questions.clear(); projects = []; active = null; draft = null; paired = null;

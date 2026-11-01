@@ -110,6 +110,12 @@ denied_tools = ["Bash(sudo:*)", "Bash(rm -rf /:*)", "Bash(rm -rf ~:*)", "Bash(mk
 # Enforced for Claude (its own ask rules) and the servers Vision runs tools for ([local] and
 # [providers.*]); Codex, Grok and ACP agents are asked to check with you first but nothing stops them.
 ask_tools = []
+# Exceptions to ask_tools: a call one of these covers runs without asking even though an ask rule caught it
+# (denied_tools still wins). Same syntax, enforced where ask_tools is, in chats that aren't a scout's.
+allow_tools = []
+# What scouts may do on their own when a scout hasn't set its own rule, per action (land, publish, send,
+# destructive): "does", "asks" or "never", e.g. { publish = "asks" }. Left out, it follows the scout's leash.
+scout_rules = {}
 # Directory Vision works in. Empty = the directory you launch `vision` from.
 workdir = ""
 # A file of instructions for the folder Vision works in: this name is looked for in the working directory
@@ -409,6 +415,11 @@ port = 8765
 public_url = ""
 # After a reply, guess your next message (one small Haiku call) and offer it in the phone's empty composer.
 suggestions = true
+# The folder a chat started from the phone or the desktop app begins in (their Settings > New chats sets it).
+# Empty = [brain] workdir, else the folder `vision serve` was started in. The terminal keeps to [brain].
+new_chat_folder = ""
+# The mode such a chat starts in: "auto" or "plan". Empty = [brain] mode.
+new_chat_mode = ""
 
 [weather]
 # Live weather. When a spoken request is about the weather, Vision fetches the report while the voice
@@ -537,6 +548,10 @@ class BrainConfig:
     # Patterns (denied_tools syntax, or a bare tool / path glob) that ask before running in auto mode;
     # see ask_tools in DEFAULT_CONFIG. Empty = nothing asks.
     ask_tools: list[str] = field(default_factory=list)
+    # Exceptions to ask_tools that run without asking (denied_tools still wins); not in a scout's chats.
+    allow_tools: list[str] = field(default_factory=list)
+    # Scouts' rule per action (projects.ACTIONS: does | asks | never) over the leash's default; a scout's own wins.
+    scout_rules: dict = field(default_factory=dict)
     workdir: str = ""
     # The per-folder instructions file looked for from the working directory upwards; "" = none.
     folder_instructions: str = ".vision.md"
@@ -682,6 +697,9 @@ class RemoteConfig:
     port: int = 8765
     public_url: str = ""
     suggestions: bool = True
+    # Where a chat opened from the phone or desktop starts, and in which mode; "" = [brain] workdir / mode.
+    new_chat_folder: str = ""
+    new_chat_mode: str = ""
 
 
 @dataclass
@@ -776,6 +794,9 @@ def load_config() -> Config:
     cfg.brain.mode = str(cfg.brain.mode).strip().lower()
     if cfg.brain.mode not in MODES:
         cfg.brain.mode = "auto"
+    cfg.remote.new_chat_mode = str(cfg.remote.new_chat_mode or "").strip().lower()
+    if cfg.remote.new_chat_mode not in MODES:
+        cfg.remote.new_chat_mode = ""
     if cfg.brain.plan_approval not in ("session", "turn"):
         cfg.brain.plan_approval = "session"
     from vision.failover import order as _failover_order
@@ -851,6 +872,9 @@ def load_config() -> Config:
         cfg.voice.voice = "jarvis"  # an Orpheus-era preset left in the config; jarvis is the qwen3 default
     # Existing configs that still deny only claude/codex pick up the grok shim-matching rule.
     cfg.brain.ask_tools = [str(r).strip() for r in (cfg.brain.ask_tools or []) if str(r).strip()]
+    cfg.brain.allow_tools = [str(r).strip() for r in (cfg.brain.allow_tools or []) if str(r).strip()]
+    if not isinstance(cfg.brain.scout_rules, dict):
+        cfg.brain.scout_rules = {}
     if "Bash(grok:*)" not in cfg.brain.denied_tools and "Bash(codex:*)" in cfg.brain.denied_tools:
         cfg.brain.denied_tools = list(cfg.brain.denied_tools) + ["Bash(grok:*)"]
     # The drivers receive BrainConfig for historical compatibility; attach the provider-specific

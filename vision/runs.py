@@ -671,7 +671,7 @@ class ProjectThreads:
             cfg = dataclasses.replace(base, mode="auto")  # nobody is there to approve a plan; approval rules still hold
             if self.rules is not None:
                 ask, deny = self.rules()
-                cfg = dataclasses.replace(cfg, ask_tools=list(ask), denied_tools=list(deny))
+                cfg = dataclasses.replace(cfg, ask_tools=list(ask), denied_tools=list(deny), allow_tools=[])  # a scout's rules have no exceptions
             worker = make_worker(cfg, thread["workdir"], model, effort, denied, note=self._note(thread))
             tid = thread["id"]
             worker.allowed_once = self._allowed_list(tid)

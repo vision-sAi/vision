@@ -748,6 +748,17 @@ class MultiChatTests(unittest.TestCase):
                 plain = self._drain(ws, lambda ev, _: ev["type"] == "chat" and ev.get("opened"))[-1]
                 self.assertEqual(plain["workdir"], "/tmp")
 
+                hub.cfg.remote.new_chat_folder, hub.cfg.remote.new_chat_mode = project, "plan"  # Settings > New chats
+                ws.send_json({"type": "new"})
+                saved = self._drain(ws, lambda ev, _: ev["type"] == "chat" and ev.get("opened"))[-1]
+                self.assertEqual((saved["workdir"], saved["mode"]), (project, "plan"))
+                ws.send_json({"type": "new", "workdir": "/tmp"})  # a folder picked for the chat wins
+                self.assertEqual(self._drain(ws, lambda ev, _: ev["type"] == "chat" and ev.get("opened"))[-1]["workdir"], "/tmp")
+                hub.cfg.remote.new_chat_folder = os.path.join(project, "gone")
+                ws.send_json({"type": "new"})  # the saved one is gone: the server's own, not an error
+                self.assertEqual(self._drain(ws, lambda ev, _: ev["type"] == "chat" and ev.get("opened"))[-1]["workdir"], os.getcwd())
+                hub.cfg.remote.new_chat_folder, hub.cfg.remote.new_chat_mode = "", ""
+
                 before = set(hub.chats)
                 ws.send_json({"type": "new", "workdir": os.path.join(project, "gone")})
                 refused = self._drain(ws, lambda ev, _: ev["type"] == "error")[-1]
@@ -1015,6 +1026,41 @@ class DefaultsEndpointTests(unittest.TestCase):
                 self.assertEqual((chat.brain.cfg.model, chat.brain.cfg.effort), ("sonnet", "low"))
                 self.assertEqual(tc.post("/defaults", json={"model": "nope"}, headers=auth).status_code, 400)
                 self.assertEqual(tc.get("/defaults").status_code, 401)
+
+    def test_saves_the_folder_and_mode_new_chats_start_in(self):
+        from pathlib import Path
+        from fastapi.testclient import TestClient
+        from vision import config
+        from vision.config import Config
+
+        cfg = Config()
+        cfg.brain.model, cfg.brain.effort = "opus", "high"
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as work:
+            work = os.path.realpath(work)
+            path = Path(d) / "config.toml"
+            path.write_text('[brain]\nmodel = "opus"\nmode = "auto"\n\n[remote]\n# mine\nport = 8765\n')
+            with patch.object(config, "CONFIG_DIR", Path(d)), patch.object(config, "CONFIG_PATH", path):
+                hub = server.Hub(cfg, _StubBrain(cfg.brain), "tok", log=lambda *_: None, follow_defaults=False, open_initial=False)
+                tc = TestClient(server.create_app(hub))
+                auth = {"Authorization": "Bearer tok"}
+                first = tc.get("/defaults", headers=auth).json()
+                self.assertEqual((first["workdir"], first["mode"]), (os.getcwd(), "auto"))  # nothing saved: the server's own
+
+                saved = tc.post("/defaults", json={"workdir": work, "mode": "plan"}, headers=auth).json()
+                self.assertEqual((saved["workdir"], saved["folder"], saved["mode"], saved["current"]),
+                                 (work, server.tilde(work), "plan", "opus"))  # the model is left alone
+                self.assertEqual(config.load_config().remote.new_chat_folder, work)
+                self.assertEqual(config.load_config().remote.new_chat_mode, "plan")
+                self.assertIn("# mine", path.read_text())
+                self.assertIn('mode = "auto"', path.read_text())  # [brain] (the terminal's) is untouched
+                self.assertEqual(tc.get("/folders", headers=auth).json()["path"], work)  # the picker starts there too
+                self.assertEqual(tc.get("/models", headers=auth).json()["mode"], "plan")  # as the desktop's draft reads it
+
+                self.assertEqual(tc.post("/defaults", json={"workdir": "", "mode": "yolo"}, headers=auth).status_code, 400)
+                self.assertEqual(config.load_config().remote.new_chat_folder, work)  # a refusal saves nothing
+                self.assertEqual(tc.post("/defaults", json={"workdir": os.path.join(work, "nope")}, headers=auth).status_code, 400)
+                reset = tc.post("/defaults", json={"workdir": ""}, headers=auth).json()
+                self.assertEqual((reset["workdir"], reset["mode"]), (os.getcwd(), "plan"))
 
     def test_saves_the_voice_rate_clamped_and_uses_it(self):
         from pathlib import Path
