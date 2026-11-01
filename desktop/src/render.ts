@@ -38,6 +38,8 @@ export interface MsgActions {
   retry?: (m: Msg) => void;
   readAloud?: (m: Msg) => void;
   stopShell?: () => void;
+  editable?: (m: Msg) => boolean;          // a sent message that can be edited and sent again…
+  resend?: (m: Msg, text: string) => void; // …as a new chat branched from it
 }
 
 export const el = (tag: string, cls = "", text = "") => {
@@ -435,6 +437,39 @@ function replyBody(m: Msg): HTMLElement[] {
   return out;
 }
 
+/** A sent message opened for editing where it stands: Return sends it (as a new chat: main.ts), Escape puts it back. */
+function editInPlace(box: HTMLElement, m: Msg, resend: (m: Msg, text: string) => void) {
+  if (box.querySelector(".edit-box")) return;
+  const shown = [...box.children] as HTMLElement[];
+  for (const n of shown) n.hidden = true;
+  const form = el("div", "edit-box");
+  const input = el("textarea", "edit-input") as HTMLTextAreaElement;
+  input.value = m.text;
+  input.rows = 1;
+  const fit = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 280)}px`; };
+  const close = () => { form.remove(); for (const n of shown) n.hidden = false; };
+  const go = () => {
+    const text = input.value.trim();
+    if (!text) return;
+    close();
+    resend(m, text);
+  };
+  input.addEventListener("input", fit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); }  // prevented: Escape also stops a reply
+  });
+  const foot = el("div", "edit-foot");
+  const cancel = el("button", "link", "Cancel");
+  cancel.onclick = close;
+  const send = el("button", "primary", "Send");
+  send.onclick = go;
+  foot.append(el("span", "dim small", "Sends as a new chat. This one stays as it is."), cancel, send);
+  form.append(input, foot);
+  box.append(form);
+  requestAnimationFrame(() => { fit(); input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
+}
+
 export function drawMsg(m: Msg, actions: MsgActions = {}): HTMLElement {
   const box = el("div", `msg ${m.role}` + (m.streaming ? " streaming" : ""));
   if (m.role === "user") {
@@ -451,6 +486,16 @@ export function drawMsg(m: Msg, actions: MsgActions = {}): HTMLElement {
       box.append(files);
     }
     if (m.text) box.append(el("div", "bubble", m.text));
+    if (m.text && actions.resend && actions.editable?.(m)) {
+      const bar = el("div", "actions");
+      bar.append(copyButton(() => m.text));
+      const b = el("button", "act edit");
+      b.title = "Edit and send as a new chat";
+      b.append(icon("Pencil", 14));
+      b.onclick = () => editInPlace(box, m, actions.resend!);
+      bar.append(b);
+      box.append(bar);
+    }
     return box;
   }
   if (m.role === "shell") {

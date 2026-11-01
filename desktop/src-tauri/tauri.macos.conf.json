@@ -16,5 +16,10 @@
         "dragDropEnabled": false
       }
     ]
+  },
+  "bundle": {
+    "macOS": {
+      "entitlements": "./Entitlements.plist"
+    }
   }
 }

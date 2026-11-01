@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="stylesheet" href="/src/mic.css" />
     <title>Vision</title>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
@@ -20,6 +21,7 @@
         <div class="side-actions">
           <button class="side-row" data-action="new_chat"><span data-icon="SquarePen"></span>New chat</button>
           <button class="side-row" data-action="agents"><span data-icon="Activity"></span>All activity<span id="agents-badge" class="pill" hidden></span></button>
+          <button class="side-row" data-action="scheduled"><span data-icon="Clock"></span>Coming up</button>
           <label class="search">
             <span data-icon="Search"></span>
             <input id="search" placeholder="Search chats" autocomplete="off" spellcheck="false" />
@@ -46,7 +48,7 @@
             <button class="icon-btn when-collapsed" data-action="toggle_sidebar" data-icon="PanelLeft" title="Show sidebar"></button>
             <button class="icon-btn when-collapsed" data-action="new_chat" data-icon="SquarePen" title="New chat"></button>
             <div class="title-wrap" data-tauri-drag-region>
-              <h1 id="chat-title" data-tauri-drag-region></h1>
+              <h1 id="chat-title"></h1>
               <span id="chat-folder" class="dim small" data-tauri-drag-region></span>
             </div>
             <div id="scout-head" class="scout-head" hidden></div>
@@ -57,6 +59,7 @@
         <div id="notice" class="notice" hidden></div>
         <section id="transcript" class="transcript"></section>
         <section id="agents" class="agents" hidden></section>
+        <section id="scheduled" class="scheduled" hidden></section>
 
         <section id="welcome" class="welcome" hidden>
           <h2 id="greeting"></h2>
@@ -77,6 +80,9 @@
                   <span id="mode-icon" data-icon="Zap"></span><span id="mode-text">Auto</span>
                 </button>
                 <button type="button" id="attach" class="tool-btn" title="Attach files" data-icon="Paperclip"></button>
+                <button type="button" id="mic" class="tool-btn mic" hidden aria-pressed="false">
+                  <span class="mic-icon"></span><span class="mic-dot"></span><span class="mic-level"></span><span class="mic-label"></span>
+                </button>
                 <button type="button" id="folder" class="chip-btn" title="The folder this chat works in">
                   <span data-icon="Folder"></span><span id="folder-text"></span>
                 </button>

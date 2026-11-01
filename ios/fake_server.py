@@ -9,7 +9,10 @@ The UI tests drive it over plain HTTP (the test runner can make requests; the ap
                 "library": {project: [item…]}, "thread_history": {thread: [{role, text}…]},
                 "activity": {project: [event…]} (a project may carry scout, mood, leash, rules, approvals, checkin),
                 "protocol": n or null, "update": "what to run", "shell": bool, "voice_on": bool, "read_aloud": bool,
-                "widgets": {threads, usage, next} (what GET /widgets answers; None: a Vision from before it, 404)}
+                "transcribe": bool, "heard": "the words POST /transcribe answers",
+                "compact": bool (hello's "compact": a `compact` frame plays a compaction out, as the server shows one),
+                "widgets": {threads, usage, next} (what GET /widgets answers; None: a Vision from before it, 404),
+                "usage": [provider row…] (GET /usage), "scheduled": [task…] (GET /scheduled)}
                                                                      reset: what the next hello and /health carry
   POST /_push  {frame}                                               send a frame to every connected app
   GET  /_frames                                                      every frame the app sent, oldest first
@@ -61,7 +64,12 @@ async def set_scene(request: Request) -> dict:
     scene["shell"] = body.get("shell", False)  # hello's "shell": the computer runs shell-mode commands
     scene["voice_on"] = body.get("voice_on")  # hello's "voice_on" (None: a Vision from before the voice switch)
     scene["read_aloud"] = body.get("read_aloud", False)  # hello's "read_aloud": /speak/pieces is there
+    scene["transcribe"] = body.get("transcribe")  # hello's "transcribe" (None: a Vision from before it)
+    scene["heard"] = body.get("heard", "")  # the words POST /transcribe answers
+    scene["compact"] = body.get("compact", False)  # hello's "compact": the computer takes `compact` frames
     scene["widgets"] = body.get("widgets")  # what GET /widgets answers; None: a Vision from before the widgets
+    scene["usage"] = body.get("usage") or []  # GET /usage's provider rows
+    scene["scheduled"] = body.get("scheduled") or []  # GET /scheduled's tasks
     frames.clear()
     return {"ok": True}
 
@@ -95,6 +103,27 @@ async def _send_all(frame: dict) -> None:
             await ws.send_json(frame)
         except Exception:  # noqa: BLE001
             sockets.discard(ws)
+
+
+async def _compact(chat_id: str) -> None:
+    """A `compact` frame: what vision/server.py Chat.compact sends, from start to done, with the note it leaves in
+    the history and the context emptied."""
+    chat = next((c for c in scene["chats"] if c.get("chat") == chat_id), None)
+    if chat is None:
+        return
+    before = (chat.get("context") or {}).get("tokens", 0)
+    await _send_all({**chat, "busy": True})
+    await _send_all({"type": "start", "chat": chat_id, "text": "", "note": "Compacting the conversation"})
+    await _send_all({"type": "status", "chat": chat_id, "tool": "", "label": "Summarising the conversation…"})
+    await asyncio.sleep(0.5)
+    scene["history"].setdefault(chat_id, []).append(
+        {"role": "note", "text": f"Compacted the conversation ({before // 1000}k tokens) into a summary; Vision carries on from it in a fresh session.",
+         "compacted": True, "summary": "", "duration_ms": 500})
+    if chat.get("context"):
+        chat["context"] = {**chat["context"], "tokens": 3900}
+    await _send_all({"type": "done", "chat": chat_id, "text": "", "error": "", "busy": False, "compacted": True,
+                     "session_id": None, "duration_ms": 500})
+    await _send_all({**chat, "busy": False})
 
 
 async def _changed(thread: dict) -> None:
@@ -245,6 +274,22 @@ async def speak(request: Request) -> Response:
     return Response(_silence(3), media_type="audio/wav")
 
 
+@app.post("/transcribe")
+async def transcribe(request: Request) -> JSONResponse:
+    """The scene's `heard`, recorded as `_transcribe` with the recording's size; the real server's 503 with the
+    voice off or no Whisper installed."""
+    upload = (await request.form()).get("file")
+    data = await upload.read() if upload is not None and not isinstance(upload, str) else b""
+    frames.append({"type": "_transcribe", "bytes": len(data), "wav": data[:4] == b"RIFF"})
+    if not data:
+        return JSONResponse({"detail": "empty audio"}, status_code=400)
+    if scene.get("voice_on") is False:
+        return JSONResponse({"detail": "The voice is off on the computer."}, status_code=503)
+    if scene.get("transcribe") is False:
+        return JSONResponse({"detail": "Speech recognition isn't installed on the computer."}, status_code=503)
+    return JSONResponse({"text": scene.get("heard", "")})
+
+
 @app.post("/voice")
 async def set_voice(request: Request) -> JSONResponse:
     if not scene.get("voices"):
@@ -256,6 +301,75 @@ async def set_voice(request: Request) -> JSONResponse:
 @app.get("/uploads/{name}")
 async def upload(name: str) -> Response:
     return Response(_jpeg(), media_type="image/jpeg")
+
+
+@app.get("/usage")
+async def usage(provider: str = "all", chat: str = "") -> dict:
+    """The scene's `usage` rows (vision/usage.py usage_data's shape), recorded as `_usage`."""
+    import time
+
+    frames.append({"type": "_usage", "provider": provider, "chat": chat})
+    rows = scene.get("usage") or []
+    return {"providers": rows if provider == "all" else [r for r in rows if r.get("provider") == provider], "at": time.time()}
+
+
+@app.post("/usage/reset")
+async def usage_reset(request: Request) -> dict:
+    """Spends nothing: recorded as `_usage_reset`, it answers as a reset that worked, with the provider's row as it was."""
+    body = await request.json()
+    frames.append({"type": "_usage_reset", **body})
+    row = next((r for r in scene.get("usage") or [] if r.get("provider") == body.get("provider")), {})
+    return {"ok": True, "outcome": "reset", "message": "Reset used.", "provider": row}
+
+
+def _scheduled() -> list[dict]:
+    return scene.setdefault("scheduled", [])
+
+
+@app.get("/scheduled")
+async def scheduled_list() -> list[dict]:
+    return _scheduled()
+
+
+@app.post("/scheduled")
+async def scheduled_save(request: Request) -> dict:
+    """Add a task or change one (`id` set), roughly as vision/scheduled.py's clean() fills one out; sends `scheduled`."""
+    import secrets
+    import time
+
+    body = await request.json()
+    frames.append({"type": "_scheduled_save", **body})
+    old = next((t for t in _scheduled() if t["id"] == body.get("id")), None)
+    task = {"title": str(body.get("prompt") or "")[:60], "kind": "task", "chat": "", "repeat": "once", "time": "09:00",
+            "enabled": True, "last_run": 0.0, "last_chat": "", **(old or {}), **body}
+    task.setdefault("id", secrets.token_hex(4))
+    task["next_run"] = time.time() + 3600 if task["enabled"] else None
+    if old is None:
+        _scheduled().append(task)
+    else:
+        _scheduled()[_scheduled().index(old)] = task
+    await _send_all({"type": "scheduled"})
+    return task
+
+
+@app.delete("/scheduled/{tid}")
+async def scheduled_delete(tid: str) -> JSONResponse:
+    before = len(_scheduled())
+    scene["scheduled"] = [t for t in _scheduled() if t["id"] != tid]
+    if len(scene["scheduled"]) == before:
+        return JSONResponse({"detail": "no such task"}, status_code=404)
+    frames.append({"type": "_scheduled_delete", "id": tid})
+    await _send_all({"type": "scheduled"})
+    return JSONResponse({"ok": True})
+
+
+@app.post("/scheduled/{tid}/run")
+async def scheduled_run(tid: str) -> JSONResponse:
+    """Recorded as `_scheduled_run`; opens no chat."""
+    if not any(t["id"] == tid for t in _scheduled()):
+        return JSONResponse({"detail": "no such task"}, status_code=404)
+    frames.append({"type": "_scheduled_run", "id": tid})
+    return JSONResponse({})
 
 
 @app.get("/projects")
@@ -525,6 +639,37 @@ async def anything_else(path: str) -> JSONResponse:
     return JSONResponse({"detail": "not in the fake"}, status_code=404)
 
 
+async def _rename(msg: dict) -> None:
+    """As vision/server.py: the chat's new title, on every app."""
+    title = " ".join(str(msg.get("title") or "").split())
+    chat = next((c for c in scene["chats"] if c["chat"] == msg.get("chat")), None)
+    if chat is not None and title:
+        chat["title"] = title
+        await _send_all(chat)
+
+
+async def _branch(websocket: WebSocket, msg: dict) -> None:
+    """As vision/server.py: a new chat holding the rows before `at`, which runs the edited message (a canned reply)."""
+    chat = next((c for c in scene["chats"] if c["chat"] == msg.get("chat")), None)
+    rows = scene["history"].get(msg.get("chat"), [])
+    at = msg.get("at")
+    if chat is None or not isinstance(at, int) or not 0 <= at < len(rows) or rows[at].get("role") != "user":
+        await websocket.send_json({"type": "error", "text": "That message is no longer in this chat. Open the chat again and retry."})
+        return
+    text = str(msg.get("text") or "").strip()
+    new = {**chat, "chat": f"{chat['chat']}-edit{len(scene['chats'])}", "title": f"{chat.get('title') or 'Chat'} (edit)",
+           "busy": False, "pinned": False}
+    scene["chats"].append(new)
+    scene["history"][new["chat"]] = list(rows[:at])
+    await websocket.send_json({**new, "opened": True})
+    await _send_all(new)
+    reply = "Here is the answer to the edited message."
+    await _send_all({"type": "start", "chat": new["chat"], "text": text})
+    await _send_all({"type": "delta", "chat": new["chat"], "text": reply})
+    scene["history"][new["chat"]] += [{"role": "user", "text": text}, {"role": "assistant", "text": reply, "duration_ms": 900}]
+    await _send_all({"type": "done", "chat": new["chat"], "text": reply, "error": "", "busy": False, "duration_ms": 900})
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket) -> None:
     await websocket.accept()
@@ -536,8 +681,12 @@ async def ws(websocket: WebSocket) -> None:
             hello["shell"] = True
         if scene.get("read_aloud"):
             hello["read_aloud"] = True
+        if scene.get("compact"):
+            hello["compact"] = True
         if scene.get("voice_on") is not None:
             hello["voice_on"] = scene["voice_on"]
+        if scene.get("transcribe") is not None:
+            hello["transcribe"] = scene["transcribe"]
         if scene.get("protocol", PROTOCOL) is not None:
             hello["protocol"] = scene.get("protocol", PROTOCOL)
         await websocket.send_json(hello)
@@ -545,6 +694,12 @@ async def ws(websocket: WebSocket) -> None:
             msg = await websocket.receive_json()
             if msg.get("type") != "ping":
                 frames.append(msg)
+            if msg.get("type") == "rename":
+                await _rename(msg)
+            elif msg.get("type") == "branch":
+                await _branch(websocket, msg)
+            elif msg.get("type") == "compact" and scene.get("compact"):
+                asyncio.ensure_future(_compact(str(msg.get("chat") or "")))
     except WebSocketDisconnect:
         pass
     finally:

@@ -21,6 +21,39 @@
   window.Notification = function (title, options) { window.__notified.push({ title, body: options?.body }); };
   window.Notification.permission = "granted";
 
+  // A microphone for the mic button's scenes (`mic: {denied?}`): headless Chrome has none, and its audio
+  // never runs without a real click. Plays a 48 kHz tone through the page's ScriptProcessor in real time.
+  window.__transcribed = [];
+  if (scene.mic) {
+    const RATE = 48000;
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => {
+      if (scene.mic.denied) throw new DOMException("Permission denied", "NotAllowedError");
+      return { getTracks: () => [{ stop() {} }] };
+    } } });
+    let t = 0;
+    window.AudioContext = class {
+      sampleRate = RATE;
+      destination = {};
+      resume() { return Promise.resolve(); }
+      close() { return Promise.resolve(); }
+      createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+      createScriptProcessor(size) {
+        const node = {
+          onaudioprocess: null,
+          connect() {
+            this.timer = setInterval(() => {
+              const d = new Float32Array(size);
+              for (let i = 0; i < size; i++, t++) d[i] = 0.3 * Math.sin(t / 8) * (0.5 + 0.5 * Math.sin(t / 9000));
+              node.onaudioprocess?.({ inputBuffer: { getChannelData: () => d } });
+            }, (size / RATE) * 1000);
+          },
+          disconnect() { clearInterval(this.timer); },
+        };
+        return node;
+      }
+    };
+  }
+
   function emit(event, payload) {
     for (const id of listeners.get(event) ?? []) callbacks.get(id)?.({ event, id, payload });
   }
@@ -81,6 +114,14 @@
       case "upload_path": return { name: args.path.split("/").pop(), path: `/home/me/.local/share/vision/uploads/x-${args.path.split("/").pop()}` };
       case "paste_files": return scene.clipboard ?? [];
       case "speak": return new ArrayBuffer(0);
+      case "transcribe": {
+        // The recording, as POST /transcribe gets it: `heard` comes back (null: it never does), or `transcribeError`.
+        const wav = new DataView(args.buffer, args.byteOffset, args.byteLength);
+        window.__transcribed.push({ bytes: args.byteLength, riff: String.fromCharCode(...args.slice(0, 4)),
+          channels: wav.getUint16(22, true), rate: wav.getUint32(24, true), bits: wav.getUint16(34, true) });
+        if (scene.transcribeError) throw scene.transcribeError;
+        return new Promise((resolve) => { if (scene.heard !== null) setTimeout(() => resolve(scene.heard ?? ""), 300); });
+      }
       case "plugin:opener|open_url": return null;
       case "plugin:app|version": return "0.1.0";
       case "install_kind": return scene.installKind ?? "app";
@@ -97,7 +138,7 @@
   /** The socket comes up and the server says hello. */
   function connectNow() {
     emit("connection", { state: "online", detail: "" });
-    emitFrame({ type: "hello", name: "studio", read_aloud: true, shell: true, voice_on: !!scene.voiceOn, version: "0.9.3", asleep: scene.asleep ?? [], update: scene.update ?? null, protocol: scene.protocol ?? 1, chats: scene.chats ?? [], projects: scene.projects ?? [] });
+    emitFrame({ type: "hello", name: "studio", read_aloud: true, shell: true, compact: scene.compact ?? true, voice_on: !!scene.voiceOn, transcribe: !!scene.transcribe, version: "0.9.3", asleep: scene.asleep ?? [], update: scene.update ?? null, protocol: scene.protocol ?? 1, chats: scene.chats ?? [], projects: scene.projects ?? [] });
   }
 
   /** Run the scene's steps in order (once: after connecting, or from the start on a first run). */

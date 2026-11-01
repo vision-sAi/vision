@@ -1,0 +1,24 @@
+/* The composer's mic button (mic.ts): an icon until it records, then a pill with a pulsing dot, how loud
+   the voice is and how long it has run; "Transcribing…" while the computer works out the words. */
+.composer .mic { display: inline-flex; align-items: center; justify-content: center; gap: 7px; width: auto; min-width: 30px; padding: 0 7px; }
+.composer .mic[hidden] { display: none; }
+.mic .mic-icon { display: grid; place-items: center; }
+.mic .mic-dot, .mic .mic-level, .mic .mic-label:empty { display: none; }
+.mic-label { font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 1; }
+.composer .mic.off { opacity: 0.4; cursor: default; }
+.composer .mic.off:hover { background: none; color: var(--dim); }
+
+.composer .mic.recording { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); padding: 0 10px 0 9px; }
+.mic.recording .mic-icon { display: none; }
+.mic.recording .mic-dot { display: block; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 6px var(--danger); animation: pulse 1.2s ease-in-out infinite; }
+.mic.recording .mic-level {
+  display: block; position: relative; width: 30px; height: 4px; border-radius: 2px; overflow: hidden;
+  background: color-mix(in srgb, var(--danger) 25%, transparent);
+}
+.mic.recording .mic-level::after {
+  content: ""; position: absolute; inset: 0; border-radius: 2px; background: var(--danger);
+  transform-origin: left; transform: scaleX(var(--level, 0)); transition: transform 0.1s linear;
+}
+
+.composer .mic.transcribing { background: var(--hover); color: var(--text); padding: 0 10px 0 8px; cursor: progress; }
+.mic.transcribing .mic-icon { animation: pulse 1.2s ease-in-out infinite; }

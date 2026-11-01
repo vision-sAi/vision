@@ -146,9 +146,28 @@ A chat can be pinned to the top of the list: a long press and **Pin** on the pho
 row in the desktop app's sidebar (`pin {chat, pinned}`). The server keeps the pins in
 `~/.local/state/vision/pinned.json` and says `pinned` in each chat's summary, so every app shows the
 same; closing a chat drops its pin.
+To rename a chat in the desktop app, double-click its row in the sidebar or its title above the chat; Return
+keeps the name, Esc puts the old one back (`rename {chat, title}`, up to 120 characters). Every app shows the
+new name, it is kept with the chat's journal over a restart, and a title worked out from the first message
+never replaces it. A chat open in a terminal keeps the name until the terminal starts another conversation.
+To edit a message you sent, hover it in the desktop app and click the pencil: the text opens in place, and
+Return sends it as a **new chat** branched from that point, titled like the old one with "(edit)"; the chat it
+came from stays as it was. The new chat shows the earlier turns, and its model starts a fresh session with them
+handed over as text (as a switch to another provider's model does), so it works the same on every brain
+(`branch {chat, at, was, text, images?}`: `at` is the message's row in `GET /history?limit=200`, `was` its
+text, for when the app's copy of the history is behind).
 The desktop app's search box looks inside the open chats too, not only their titles: under the titles
 that match, **In messages** lists each chat where every word turned up in one message, with that line,
 and a click opens the chat there (`GET /search?q=`; scout chats count).
+Ctrl+F (⌘F; **Edit › Find in Chat**) searches the open chat instead: a bar at its top right marks every
+match, says which one of how many is showing, and Return, Shift+Return or the arrows step through them;
+Esc closes it. The marks follow a reply as it streams in.
+The ring by the model in the desktop composer is how full the chat's context is (amber from 70%, red from
+90%). Clicking it shows the token counts and **Compact**: the brain summarises the conversation, and the
+chat carries on from that summary and its latest exchanges in a fresh session of the same model, so the
+context empties (`compact {chat}`; hello `compact: true`). It works for every brain, runs like a reply
+(Stop cancels it and the chat keeps its session), leaves a "Compacted the conversation" note in the chat,
+and is refused while a reply is running. If the brain can't summarise, the latest exchanges alone carry on.
 Banked limit resets and Grok's allowance on the usage page come from undocumented endpoints that Vision
 calls with the logins Claude Code and Grok saved on disk; `read_cli_logins = false` under `[brain]` keeps
 Vision out of those files.
@@ -667,6 +686,13 @@ With `[voice] enabled = false`, or if the computer's voice fails part way throug
 in its own voice: the best one installed for its language (the enhanced and premium ones are downloaded in
 Settings › Accessibility › Spoken Content).
 
+The desktop app's mic button, by the paperclip, dictates through the same Whisper: hold it (or Ctrl+Shift+Space,
+⌘⇧Space on a Mac) and talk, and when you let go the words land in the composer to read over before Return sends
+them. A click starts it and the next click stops it; Esc throws the recording away. The app records the
+microphone itself (macOS asks once) and sends a 16 kHz mono WAV to `POST /transcribe`. The button shows only
+when the computer has a voice extra installed (hello `transcribe`) and is greyed while the voice is off, when
+`/transcribe` answers 503.
+
 The app has Home Screen and Lock Screen widgets. **Projects** shows how many project threads are working, need
 you or are ready, and (medium size) the first few by name, each a tap away from its project; on the Lock Screen
 it is a strip or the line over the clock ("1 needs you · 2 working"). **Usage** shows each subscription's session
@@ -679,6 +705,15 @@ opens the app with the keyboard up. The
 widgets ask the computer themselves (`GET /widgets`, one small answer, usage read again at most every five
 minutes) about every quarter of an hour and whenever the app has been used, through the pairing the app shares
 with them in its keychain group; when the computer can't be reached they keep the last answer, marked "as of".
+
+The desktop app has the same two pages. **Usage** (View › Usage, Settings › Usage, or a click on the composer's
+context ring) is a sheet with a bar per subscription window and when it resets beneath, amber from 75% and red
+from 90%, plus any banked resets with a Use button that asks once more first; it reads `GET /usage` again each time
+it opens. **Coming up** (in the sidebar, or View › Coming Up) lists the reminders and scheduled prompts set from
+chats, each with how it repeats and when it next runs, a switch to pause it, Run now and Cancel, and follows
+`scheduled` frames as they change. Its short form adds one: a reminder (the words come back as a notification) or
+a prompt sent into a chat you pick, once on a day this week, every day, on weekdays or every week. A scout's
+check-ins stay on the scout's page.
 
 After a typed reply, as in Claude Code's terminal, `vision serve` guesses the message you would send next
 (`vision/suggest.py`: one small call with the last few turns, whatever brain the chat is on: Claude's Haiku

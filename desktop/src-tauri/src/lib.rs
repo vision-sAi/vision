@@ -19,6 +19,8 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::Message;
 
+mod mic;
+
 /// A Vision to talk to: the address the pairing code names and its key.
 #[derive(Clone, Serialize, Deserialize)]
 struct Pairing {
@@ -497,15 +499,18 @@ fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let settings = item("settings", "Settings…", "CmdOrCtrl+,")?;
     let connect = MenuItemBuilder::with_id("connect", "Connect to Another Computer…").build(app)?;
     let search = item("search", "Search Chats", "CmdOrCtrl+K")?;
+    let find = item("find", "Find in Chat", "CmdOrCtrl+F")?;
     let sidebar = item("toggle_sidebar", "Toggle Sidebar", "CmdOrCtrl+B")?;
     let board = item("agents", "All Activity", "CmdOrCtrl+Shift+A")?;
+    let coming = item("scheduled", "Coming Up", "CmdOrCtrl+Shift+L")?;
+    let usage = item("usage", "Usage", "CmdOrCtrl+Shift+U")?;
     let model = item("model", "Change Model…", "CmdOrCtrl+Shift+M")?;
     let stop = item("stop", "Stop Reply", "CmdOrCtrl+.")?;
     let terminal = item("open_terminal", "Open in Terminal", "CmdOrCtrl+Shift+T")?;
 
     let mut file = SubmenuBuilder::new(app, "File").item(&new_chat).item(&new_scout).separator().item(&connect);
-    let edit = SubmenuBuilder::new(app, "Edit").undo().redo().separator().cut().copy().paste().select_all().build()?;
-    let view = SubmenuBuilder::new(app, "View").item(&board).item(&sidebar).item(&search).separator().fullscreen().build()?;
+    let edit = SubmenuBuilder::new(app, "Edit").undo().redo().separator().cut().copy().paste().select_all().separator().item(&find).build()?;
+    let view = SubmenuBuilder::new(app, "View").item(&board).item(&coming).item(&usage).separator().item(&sidebar).item(&search).separator().fullscreen().build()?;
     let chat = SubmenuBuilder::new(app, "Chat").item(&model).item(&stop).separator().item(&terminal).build()?;
     let window = SubmenuBuilder::new(app, "Window").minimize().maximize().separator().close_window().build()?;
 
@@ -791,6 +796,7 @@ pub fn run() {
                 }
             }
         })
+        .on_permission_request(|_, kind| mic::permission(kind))
         .menu(menu)
         .on_menu_event(|app, event| {
             let _ = app.emit("menu", event.id().as_ref());
@@ -804,7 +810,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![saved, resume, local_vision, pair, forget, send, http, appearance, upload, upload_path, paste_files, speak, fetch_bytes, set_tray_status, set_keep_in_tray, vision_here, provider_status, setup_run, install_kind])
+        .invoke_handler(tauri::generate_handler![saved, resume, local_vision, pair, forget, send, http, appearance, upload, upload_path, paste_files, speak, fetch_bytes, set_tray_status, set_keep_in_tray, vision_here, provider_status, setup_run, install_kind, mic::transcribe])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

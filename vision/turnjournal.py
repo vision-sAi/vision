@@ -239,10 +239,13 @@ def recover(records: list[dict], requeue: bool = False) -> dict:
     model = meta.get("model")
     effort = meta.get("effort")
     mode = ""  # auto or plan, once the phone has set it ("" = the configured one)
+    title = meta.get("title") or ""
+    handoff = ""  # compacted since the last turn: the summary the next fresh session starts from
     updated = meta.get("at") or time.time()
     for record in records[1:]:
         kind = record.get("event")
-        updated = record.get("at") or updated
+        if kind != "title":  # a rename doesn't move the chat up the list
+            updated = record.get("at") or updated
         if kind == "base":
             history = list(record.get("history") or [])
             has_base = True
@@ -280,6 +283,7 @@ def recover(records: list[dict], requeue: bool = False) -> dict:
                 active[kind + "s"][frame["id"]] = frame
         elif kind == "done":
             session_id = record.get("session_id") or session_id
+            handoff = "" if session_id else handoff  # a turn ran on the fresh session: it has the summary now
             if active:
                 history.extend(turn_entries(active["text"], record.get("text") or active["partial"],
                                             record.get("error") or "", active["partial"],
@@ -292,6 +296,12 @@ def recover(records: list[dict], requeue: bool = False) -> dict:
             session_id = record.get("session_id")
         elif kind == "mode":
             mode = record.get("mode") or mode
+        elif kind == "title":
+            title = record.get("title") or title  # renamed by the user
+        elif kind == "compacted":
+            session_id, handoff = None, record.get("handoff") or ""
+            if record.get("row"):
+                history.append(record["row"])
     recovery_start = len(history)
     if active:
         history.extend(_interrupted(active))
@@ -304,10 +314,10 @@ def recover(records: list[dict], requeue: bool = False) -> dict:
         history.extend(({"role": "user", "text": text},
                         {"role": "assistant", "text": "", "error": "Queued when Vision stopped. Send this again to run it."}))
     return {"history": history, "session_id": session_id, "model": model, "effort": effort, "mode": mode,
-            "title": meta.get("title") or "", "workdir": meta.get("workdir") or "",  # "" in journals from before it was saved
+            "title": title, "workdir": meta.get("workdir") or "",  # "" in journals from before it was saved
             "created": meta.get("at") or updated,
             "updated": updated, "interrupted": bool(active), "pending": pending, "has_base": has_base,
-            "recovery_rows": history[recovery_start:]}
+            "recovery_rows": history[recovery_start:], "handoff": handoff}
 
 
 def _interrupted(active: dict) -> list[dict]:
