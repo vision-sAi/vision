@@ -10,9 +10,14 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { Update, check } from "@tauri-apps/plugin-updater";
 import * as agents from "./agents";
 import * as scouts from "./scouts";
+import * as schedules from "./schedules";
+import * as usage from "./usage";
+import * as mic from "./mic";
 import { buddy } from "./buddy";
 import { IconName, icon, placeIcons } from "./icons";
 import { closeSetup, firstRun, setupInit, step, subscriptions } from "./setup";
+import { initFind, openFind, refreshFind } from "./find";
+import { initCompact, setCompactAvailable } from "./compact";
 import {
   Agent, Json, Msg, agentOf, drawMsg, el, markdown, planOf, setPictureLoader, setPictureViewer, splitAttachments, toolOf,
   placeFixed, updateAgent, updateTool,
@@ -27,7 +32,7 @@ const chats = new Map<string, Json>();          // chat id → its latest summar
 const transcripts = new Map<string, Msg[]>();   // chat id → what the window shows
 const questions = new Map<string, Question[]>(); // chat id → the form waiting for an answer
 let projects: Json[] = [];
-let view: "chat" | "agents" | "scout" = "chat"; // "scout": scouts.current's page, around its project chat
+let view: "chat" | "agents" | "scout" | "scheduled" = "chat"; // "scout": scouts.current's page, around its project chat; "scheduled": Coming up
 let active: string | null = null;
 let draft: Draft | null = null;
 let machine = "";
@@ -47,6 +52,9 @@ let paired: { url: string; name: string } | null = null; // the computer this wi
 let repairedLocal = false;                      // the local key was refreshed once after a refusal
 let attachments: Attachment[] = [];
 let nextAttachment = 1;
+let renaming: { chat: string; where: "side" | "head"; input: HTMLInputElement } | null = null; // a chat's name being edited
+let branching: { text: string; images: string[]; earlier: Msg[] } | null = null; // an edited message went out: switch to the chat it opens
+let redrawingSidebar = false;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -72,6 +80,7 @@ function row(r: Json): Msg {
 
 const liveStart = new Map<string, number>(); // where the running turn begins in a chat's transcript
 const fetched = new Map<string, Map<string, Msg[]>>(); // chat → its last /history rows, as messages, by row
+const rowAt = new WeakMap<Msg, { chat: string; at: number; text: string }>(); // a message from /history: its chat, its row there, its text as sent
 
 /** Load a chat's transcript ahead of its opening (hovered in the list, or one of the latest), so it opens at once. */
 const prefetching = new Set<string>();
@@ -99,10 +108,11 @@ async function loadHistory(chat: string, rejoined = false) {
     // rather than its markdown rebuilt; when nothing changed the transcript isn't redrawn at all.
     const before = fetched.get(chat);
     const next = new Map<string, Msg[]>();
-    const list = rows.map((r) => {
+    const list = rows.map((r, at) => {
       const sig = JSON.stringify(r);
       const m = before?.get(sig)?.shift() ?? row(r);
       next.has(sig) ? next.get(sig)!.push(m) : next.set(sig, [m]);
+      if (r.role === "user") rowAt.set(m, { chat, at, text: r.text ?? "" });  // what an edit names it by
       return m;
     });
     fetched.set(chat, next);
@@ -191,7 +201,9 @@ function handle(ev: Json) {
       readAloudOn = !!ev.read_aloud;
       shellOn = !!ev.shell;
       lookingOn = !!ev.looking;
+      setCompactAvailable(!!ev.compact);
       voiceOn = !!ev.voice_on;
+      mic.server(voiceOn, ev.transcribe ?? null);
       serverVersion = ev.version ?? "";
       updateHow = ev.update ?? null;
       serverProtocol = typeof ev.protocol === "number" ? ev.protocol : null;
@@ -218,6 +230,7 @@ function handle(ev: Json) {
     case "chat": {
       chats.set(ev.chat, ev);
       if (ev.waiting && ev.questions?.length) questions.set(ev.chat, ev.questions);
+      if (ev.opened && branching) { openedBranch(ev.chat); return; }
       if (ev.opened && wantNew) { wantNew = false; opened(ev.chat); return; }
       drawSidebar();
       if (ev.chat === active) { drawHeader(); drawQueued(); drawQuestion(); drawDock(); }
@@ -259,6 +272,7 @@ function handle(ev: Json) {
       return;
     case "scheduled":
       agents.onScheduled();
+      schedules.onScheduled();
       return;
     case "slept":
       agents.onSlept({ from: ev.from, to: ev.to });
@@ -278,9 +292,13 @@ function handle(ev: Json) {
       return;
     case "voice_power":
       voiceOn = !!ev.on;
+      mic.server(voiceOn);
       if (!$("settings").hidden) openSettings();
       return;
     case "error":
+      branching = null;  // an edit that couldn't open its chat: the next chat that opens isn't it
+      toast(ev.text ?? "");
+      return;
     case "toast":
       toast(ev.text ?? "");
       return;
@@ -352,7 +370,7 @@ function handle(ev: Json) {
       const c = chats.get(chat);
       if (c) c.busy = !!ev.busy;
       questions.delete(chat);
-      if (!document.hasFocus() && !ev.busy) {
+      if (!document.hasFocus() && !ev.busy && !ev.compacted) {
         const said = String(ev.text ?? "").replace(/[#*`>_\[\]]/g, "").split("\n").find((l) => l.trim()) ?? "";
         notify(c?.title || "Vision", ev.error ? `Stopped: ${ev.error}` : said.slice(0, 160) || "Replied");
       }
@@ -490,6 +508,71 @@ function opened(chat: string) {
   drawAll();
 }
 
+// ---------------------------------------------------------------- edit and resend
+
+/** Edit and resend: the edited message goes to a new chat holding this one's conversation up to it (the
+ * server hands the earlier turns to a fresh session); this chat stays as it was. */
+function resendEdited(m: Msg, text: string) {
+  const r = rowAt.get(m);
+  if (!r || !chats.has(r.chat)) return;
+  const list = transcripts.get(active ?? "") ?? [];
+  const i = list.indexOf(m);
+  branching = { text, images: m.images ?? [], earlier: i < 0 ? [] : list.slice(0, i) };
+  send({ type: "branch", chat: r.chat, at: r.at, was: r.text, text, images: m.images?.length ? m.images : undefined });
+}
+
+/** The edited message's chat is open: shown at once with the earlier turns and the message, which the server
+ * is about to run (its `start` takes this bubble as its own; the history fetched after `done` replaces the lot). */
+function openedBranch(chat: string) {
+  const b = branching!;
+  branching = null;
+  active = chat;
+  draft = null;
+  view = "chat";
+  scouts.setCurrent(null);
+  transcripts.set(chat, [...b.earlier, { ...blank("user", b.text), images: b.images }]);
+  drawAll();
+}
+
+// ---------------------------------------------------------------- rename
+
+/** A chat's name as a field, in its sidebar row or the title above it: Return keeps it, Escape puts the old one back. */
+function startRename(chat: string, where: "side" | "head") {
+  const c = chats.get(chat);
+  if (!c || renaming?.chat === chat) return;
+  if (renaming) endRename(true);
+  const input = el("input", "rename-input") as HTMLInputElement;
+  input.value = c.title || "";
+  input.placeholder = "Chat name";
+  input.maxLength = 120;  // vision/server.py TITLE_CHARS
+  input.spellcheck = false;
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); endRename(true); }
+    else if (e.key === "Escape") { e.preventDefault(); endRename(false); }  // prevented: Escape also stops a reply
+  });
+  input.addEventListener("blur", () => { if (!redrawingSidebar && renaming?.input === input) endRename(true); });
+  input.onclick = (e) => e.stopPropagation();     // not a click on the row, which opens the chat
+  input.ondblclick = (e) => e.stopPropagation();
+  renaming = { chat, where, input };
+  if (where === "side") drawSidebar(); else drawHeader();
+  input.focus();
+  input.select();
+}
+
+function endRename(save: boolean) {
+  const r = renaming;
+  if (!r) return;
+  renaming = null;
+  const title = r.input.value.replace(/\s+/g, " ").trim();
+  const c = chats.get(r.chat);
+  if (save && c && title && title !== c.title) {
+    c.title = title;  // shown at once; the server's `chat` frame says so on every app
+    send({ type: "rename", chat: r.chat, title });
+  }
+  drawSidebar();
+  drawHeader();
+}
+
 // ---------------------------------------------------------------- drawing
 
 let drawPending = false;
@@ -506,7 +589,7 @@ function fadeIfNew() {
   const key = `${view}/${active ?? ""}/${draft ? "draft" : ""}`;
   if (key === shownKey) return;
   shownKey = key;
-  for (const id of ["transcript", "welcome", "agents"]) {
+  for (const id of ["transcript", "welcome", "agents", "scheduled"]) {
     const box = $(id);
     box.classList.remove("opening");
     void box.offsetWidth; // so the animation starts again
@@ -540,7 +623,11 @@ function groupOf(updated: number, now = new Date()): string {
 function drawSidebar() {
   $("machine").textContent = machine || hostOf(paired?.url) || "Vision";
   const nav = $("chats");
+  const naming = renaming?.where === "side" ? renaming : null; // a row's name being edited keeps its field, and the caret in it
+  const refocus = !!naming && document.activeElement === naming.input;
+  redrawingSidebar = true;  // taking the field out mustn't count as leaving it
   nav.replaceChildren();
+  redrawingSidebar = false;
   const query = $<HTMLInputElement>("search").value.trim().toLowerCase();
 
   scouts.drawSidebar(nav, query, view === "scout");
@@ -554,10 +641,11 @@ function drawSidebar() {
   for (const c of all) {
     const group = c.pinned ? "Pinned" : groupOf(c.updated ?? 0);
     if (group !== heading) { nav.append(el("div", "group", group)); heading = group; }
-    const item = el("div", "chat-item" + (c.chat === active && view === "chat" ? " active" : ""));
+    const editing = naming && naming.chat === c.chat ? naming.input : null;
+    const item = el("div", "chat-item" + (c.chat === active && view === "chat" ? " active" : "") + (editing ? " renaming" : ""));
     item.title = [c.title, c.model, c.folder].filter(Boolean).join(" · ");
     const text = el("span", "chat-text");
-    text.append(el("span", "chat-name", c.title || "New chat"));
+    text.append(editing ?? el("span", "chat-name", c.title || "New chat"));
     if (c.folder) text.append(el("span", "chat-folder", c.folder));
     item.append(text);
     if (c.waiting) item.append(el("span", "dot ask"));
@@ -574,9 +662,11 @@ function drawSidebar() {
     close.onclick = (e) => { e.stopPropagation(); closing.add(c.chat); send({ type: "close", chat: c.chat }); };
     item.append(close);
     item.onclick = () => select(c.chat);
+    item.ondblclick = () => startRename(c.chat, "side");
     item.onmouseenter = () => prefetch(c.chat);
     nav.append(item);
   }
+  if (refocus && naming?.input.isConnected) naming.input.focus();
   const said = query ? messageHits(query, new Set(all.map((c) => c.chat))) : [];
   if (said.length) {
     nav.append(el("div", "group", "In messages"));
@@ -585,6 +675,7 @@ function drawSidebar() {
   if (!all.length && !said.length) nav.append(el("div", "empty-list", !query ? "No chats yet." : found.query === query ? "Nothing matches." : "Searching…"));
   for (const b of document.querySelectorAll<HTMLElement>(".side-row[data-action=new_chat]")) b.classList.toggle("active", !!draft && view === "chat");
   for (const b of document.querySelectorAll<HTMLElement>(".side-row[data-action=agents]")) b.classList.toggle("active", view === "agents");
+  for (const b of document.querySelectorAll<HTMLElement>(".side-row[data-action=scheduled]")) b.classList.toggle("active", view === "scheduled");
 }
 
 // ---------------------------------------------------------------- search inside chats
@@ -752,6 +843,10 @@ function drawView() {
   $("main").classList.toggle("is-agents", board);
   $("main").classList.toggle("is-scout", view === "scout");
   if (board) agents.draw($("agents"));
+  const coming = view === "scheduled";
+  $("scheduled").hidden = !coming;
+  $("main").classList.toggle("is-scheduled", coming);
+  if (coming) schedules.draw($("scheduled"));
 }
 
 /** A scout's header and rail, when its page is on screen. */
@@ -791,6 +886,7 @@ function drawBadge() {
 
 function drawHeader() {
   $("open-terminal").hidden = true;  // a chat's own button; the scout page and the board have their own header
+  $("chat-title").title = "";
   if (view === "scout") {
     const p = scouts.project(scouts.current);
     $("chat-title").textContent = p ? scouts.nameOf(p) : "";
@@ -802,8 +898,16 @@ function drawHeader() {
     $("chat-folder").textContent = agents.summary() || "Nothing running";
     return;
   }
+  if (view === "scheduled") {
+    $("chat-title").textContent = "Coming up";
+    $("chat-folder").textContent = schedules.summary();
+    return;
+  }
   const c = active ? chats.get(active) : undefined;
-  $("chat-title").textContent = c ? c.title || "New chat" : "";
+  const naming = renaming?.where === "head" && renaming.chat === c?.chat ? renaming.input : null;
+  if (!naming) $("chat-title").textContent = c ? c.title || "New chat" : "";
+  else if (naming.parentElement !== $("chat-title")) $("chat-title").replaceChildren(naming);
+  $("chat-title").title = c && !draft && !naming ? "Double-click to rename" : "";
   $("chat-folder").textContent = c?.folder ?? "";
   // As on the phone: the chat in a terminal window on its computer, `vision --join` (one already in a
   // terminal has nowhere to go).
@@ -876,6 +980,9 @@ function msgActions() {
   return {
     retry: retryFrom, readAloud: readAloudOn ? readAloud : undefined,
     stopShell: () => active && send({ type: "shell_stop", chat: active }),
+    // Not in a scout's chat: its check-ins and reports don't make a plain chat.
+    editable: (m: Msg) => { const r = rowAt.get(m); return !!r && !chats.get(r.chat)?.project && !projects.some((p) => p.chat === r.chat); },
+    resend: resendEdited,
   };
 }
 
@@ -902,6 +1009,7 @@ function warm(chat: string) {
 function drawTranscript(jump: boolean) {
   const box = $("transcript");
   const pinned = jump || stuck;
+  const typing = box.contains(document.activeElement) ? document.activeElement as HTMLElement : null; // a message being edited
   box.replaceChildren();
   const list = active ? transcripts.get(active) ?? [] : [];
   const scout = view === "scout" ? scouts.project(scouts.current) : undefined;
@@ -936,7 +1044,9 @@ function drawTranscript(jump: boolean) {
   follow.disconnect();
   follow.observe(box);
   for (const n of box.children) follow.observe(n);
+  if (typing?.isConnected) typing.focus({ preventScroll: true });  // its drawn bubble was put back: so is the caret
   bringFoundIntoView();
+  refreshFind();
 }
 
 /** Messages waiting for the running reply to finish, as the server lists them. */
@@ -1499,6 +1609,7 @@ function act(action: string) {
   switch (action) {
     case "new_chat": startDraft(); break;
     case "connect": showPairing(); break;
+    case "find": openFind(); break;
     case "search":
       if (document.documentElement.classList.contains("collapsed")) toggleSidebar();
       $("search").focus();
@@ -1516,6 +1627,8 @@ function act(action: string) {
     case "settings": openSettings(); break;
     case "agents": view = "agents"; scouts.setCurrent(null); drawAll(); agents.loadAll(); break;
     case "new_scout": scouts.openNew(); break;
+    case "scheduled": view = "scheduled"; scouts.setCurrent(null); drawAll(); schedules.load(); break;
+    case "usage": usage.open(); break;
   }
 }
 
@@ -1618,6 +1731,10 @@ async function openSettings() {
       voice.append(setRow("Speed", "", wrap));
     }).catch(() => {});
   }
+
+  const showUsage = el("button", "chip-btn bordered", "Show…");
+  showUsage.onclick = () => usage.open();
+  body.append(section("Usage", setRow("Subscription usage", "How much of each plan's session and week is used, and when they reset.", showUsage)));
 
   if (isLocal(paired?.url)) {
     const manage = el("button", "chip-btn bordered", "Manage…");
@@ -1746,6 +1863,18 @@ agents.setHost({
   notify,
 });
 
+schedules.setHost({
+  http, toast, active: () => active,
+  chats: () => {
+    const scoutChats = new Set(projects.map((p) => p.chat));
+    return [...chats.values()].filter((c) => !scoutChats.has(c.chat) && !c.project).sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0));
+  },
+  openChat: (chat) => { if (chats.has(chat)) select(chat); else { active = chat; view = "chat"; } },
+  changed: () => { if (view === "scheduled") drawHeader(); },
+});
+
+usage.setHost({ http, chat: () => (view === "chat" || view === "scout" ? active : null) });
+
 let hasTray = false;
 if ((window as any).SCENES) (window as any).__buddy = buddy; // the screenshot harness draws every mood with it
 
@@ -1774,6 +1903,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   for (const b of document.querySelectorAll<HTMLElement>("[data-action]")) b.onclick = () => act(b.dataset.action!);
+  initFind({ chat: () => active, scrolled: () => { stuck = nearBottom($("transcript")); } });
+  initCompact({ chat: () => (active && !draft ? chats.get(active) : undefined), send, popover, closePopover });
   $("computer").onclick = () => showPairing();
   $("viewer").onclick = () => ($("viewer").hidden = true);
   $("settings").onclick = (e) => { if (e.target === $("settings")) $("settings").hidden = true; };
@@ -1790,6 +1921,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (e.key === "Escape") { e.preventDefault(); ($("search") as HTMLInputElement).value = ""; onSearch(); $("input").focus(); }
     if (e.key === "Enter") $("chats").querySelector<HTMLElement>(".chat-item")?.click();
   });
+  $("chat-title").addEventListener("dblclick", () => { if (view === "chat" && active && !draft) startRename(active, "head"); });
 
   $("composer").onsubmit = (e) => { e.preventDefault(); submit(); };
   const input = $<HTMLTextAreaElement>("input");
@@ -1829,6 +1961,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("model").onclick = (e) => { e.stopPropagation(); openModels(); };
   $("folder").onclick = (e) => { e.stopPropagation(); if (draft) openFolders(); };
   $("attach").onclick = () => $("file").click();
+  mic.setup({ toast });
   $("file").addEventListener("change", () => {
     const f = $<HTMLInputElement>("file");
     if (f.files?.length) attach(f.files);

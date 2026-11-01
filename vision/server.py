@@ -16,6 +16,9 @@ a phone → machine frame without one goes to the most recently active chat.
                      project: open that project's chat, or switch to it when it is already open) · close {chat} · resume {session_id, provider?} · model {chat, model, effort} · ping
                    looking (the app came to the front: look for a newer Vision now, as connecting does)
                    mode {chat, mode} ("auto" or "plan", as /mode in the terminal; refused while the chat is replying)
+                   compact {chat} (summarise the conversation and carry on from the summary in a fresh session of the same
+                     brain, so its context empties; refused, as a toast, while the chat is replying. It runs like a turn:
+                     start {note}, status, done {compacted: true}; GET /history keeps a {role: "note", compacted: true} row)
                    hush {chat?} (a call hung up: no more speech for that chat's reply, every reply with no chat; the text carries on)
                    open_terminal {chat} (a terminal window here running `vision --join <chat>`; one per chat:
                      a chat that already has one gets it brought forward, on Hyprland, and a toast)
@@ -558,6 +561,18 @@ class VoiceOff(RuntimeError):
         super().__init__(VOICE_OFF)
 
 
+def whisper_installed() -> bool:
+    """A voice extra is installed, so POST /transcribe has a Whisper to load (faster-whisper, or MLX on a Mac).
+    Loads nothing: hello says so, and the desktop app shows its mic button only then."""
+    import importlib.util
+
+    from vision.mlxrun import mlx_available
+
+    if importlib.util.find_spec("soundfile") is None:
+        return False
+    return importlib.util.find_spec("faster_whisper") is not None or mlx_available()
+
+
 class WireSpeaker(StreamingSpeaker):
     """StreamingSpeaker that ships synthesised audio to a sink instead of the sound card."""
 
@@ -677,6 +692,7 @@ class Chat:
         # see Brain.on_steer_taken): still listed as queued, so the phone keeps the bubble waiting.
         self._sent: list[str] = []
         self._driver = None  # what answers this turn (the brain, or the conversation model on a call)
+        self._compact_stopped = False  # Stop pressed while compacting: the chat keeps the session it has
         self.journal = None
         self._journal_has_base = bool(restored and restored["has_base"])
         if hub.journal_enabled:
@@ -699,7 +715,11 @@ class Chat:
             if not brain.session_id and self._transcript:
                 from vision.turnjournal import recovery_context
 
-                brain.handoff = recovery_context(self._transcript, restored["recovery_rows"])
+                # A chat compacted since its last turn carries on from its summary, as it would have.
+                handoff = restored.get("handoff") or ""
+                if handoff and restored["recovery_rows"]:
+                    handoff += "\n\nSince then:\n\n" + recovery_context(restored["recovery_rows"])
+                brain.handoff = handoff or recovery_context(self._transcript, restored["recovery_rows"])
 
     # -- the bits of the brain the hub reads (LinkedChat has the same, from the terminal's summary)
     source = "server"
@@ -795,6 +815,14 @@ class Chat:
             self._transcript.append({"role": "assistant", "text": text})
         self.updated = time.time()
         self.post({"type": "note", "text": text})
+
+    def rename(self, title: str) -> None:
+        """The user's own title: kept with the chat's journal, so a restart brings it back, and never
+        replaced by one worked out from the first message (those only fill an empty title)."""
+        self.title = title
+        if self.journal:
+            self.journal.append("title", title=title)
+        self.hub.post(self.summary())
 
     @property
     def provider(self) -> str:
@@ -993,6 +1021,7 @@ class Chat:
         self._pending.clear()
 
     def cancel(self) -> None:
+        self._compact_stopped = True
         fut = self._question
         if fut is not None and not fut.done():
             fut.set_result(None)
@@ -1092,6 +1121,105 @@ class Chat:
             text = f"Effort set to {effort_word}"
         self._noted = now
         self.post({"type": "note", "text": text, "switch": True})  # a joined terminal had it as `switched`
+
+    COMPACT_PROMPT = (
+        "Vision is about to compact this conversation: you will carry on in a fresh session that sees only what you "
+        "write now. Summarise the conversation so far for it: what the user wants and how they like to work, what was "
+        "decided, what has been done (files changed, commands run, results), anything still open and what comes next. "
+        "Keep the specifics (paths, names, numbers, errors) and leave out pleasantries. Reply with the summary only, "
+        "without using any tools.")
+    COMPACT_CHARS = 16_000  # the longest summary carried into the fresh session
+
+    def start_compact(self) -> str:
+        """Compact this chat (compact below), or say why not."""
+        if self.hub.restarting:
+            return "Vision is restarting; compact this chat once it is back."
+        if self.busy:
+            return "Vision is still replying; compact once it has finished."
+        if not self.brain.session_id:
+            return "Nothing to compact yet."
+        self.busy = True  # reserved before yielding: a message sent meanwhile queues behind the compaction
+        self._turn_task = asyncio.create_task(self.compact())
+        return ""
+
+    async def compact(self) -> None:
+        """Have the brain summarise the conversation, then carry on in a fresh session of the same brain seeded with
+        that summary and the latest exchanges (its handoff), so the context empties; /compact in Claude Code, for any
+        brain. It runs like a turn, so every app shows it under way; the transcript stays, with a note where it
+        happened. Without a summary (the brain failed) the latest exchanges alone carry on, as a scout's
+        coordinator does when it starts fresh (projects.coordinator_fresh)."""
+        from vision.brain import COMPACTED
+        from vision.projects import recap
+
+        loop = asyncio.get_running_loop()
+        before = context_figure(self.brain)
+        self.busy, self.partial, self.user_text, self.suggestion = True, "", "", ""
+        self.agents, self.tools, self._steers, self._parts = {}, {}, [], []
+        self._compact_stopped = False
+        self._started = time.time()
+        error = ""
+        try:
+            await loop.run_in_executor(None, self.history)
+            self.post({"type": "start", "text": "", "note": "Compacting the conversation"})
+            self.post({"type": "status", "tool": "", "label": "Summarising the conversation…"})
+            self.hub.post(self.summary())
+            self.log("compacting")
+            summary = ""
+            try:
+                turn = await loop.run_in_executor(None, lambda: self.brain.ask(self.COMPACT_PROMPT, on_question=lambda _q: None))
+                summary = "" if turn.is_error else (turn.text or "").strip()[:self.COMPACT_CHARS]
+            except Exception as e:  # noqa: BLE001
+                self.log(f"  no summary: {e}")
+            with self._lock:
+                rows = list(self._transcript or [])
+            latest = recap(rows)
+            if self._compact_stopped or self.closed:
+                error = "Stopped; the chat carries on as it was."
+            elif not summary and not latest:
+                error = "Couldn't summarise this chat, so it carries on as it was."
+            else:
+                handoff = COMPACTED + (f" A summary of it so far:\n\n{summary}" if summary else "")
+                if latest:
+                    handoff += f"\n\nThe latest exchanges, as they were said:\n\n{latest}"
+                self.brain.new_session()
+                self.brain.handoff = handoff
+                if before:
+                    self.brain.context = (len(handoff) // 4, before["window"])  # a guess until the next turn measures it
+                warm_soon(self.brain)
+                was = f" ({before['tokens'] // 1000}k tokens)" if before else ""
+                text = (f"Compacted the conversation{was} into a summary; Vision carries on from it in a fresh session."
+                        if summary else f"Compacted the conversation{was}; Vision carries on from its latest exchanges in a fresh session.")
+                row = {"role": "note", "text": text, "compacted": True, "summary": summary,
+                       "duration_ms": int((time.time() - self._started) * 1000)}
+                with self._lock:
+                    base = list(self._transcript or [])
+                    self._transcript = [*base, row][-200:]
+                if self.journal:  # a restart before the next turn carries on from the summary too
+                    if not self._journal_has_base:
+                        self.journal.append("base", history=base)
+                        self._journal_has_base = True
+                    self.journal.append("compacted", row=row, handoff=handoff)
+                self.log(f"  compacted{was}")
+        except Exception as e:  # noqa: BLE001
+            error = f"Couldn't compact this chat: {e}"
+        self.updated = time.time()
+        if error:
+            self.log(f"  ✗ {error}")
+            self.post({"type": "toast", "text": error})  # the reply row it fails in goes with the history refetch
+        self.post({"type": "done", "text": "", "error": error, "busy": bool(self._pending), "compacted": not error,
+                   "session_id": self.brain.session_id, "history_id": self.history_id,
+                   "duration_ms": int((time.time() - self._started) * 1000)})
+        self.busy = False
+        self._turn_task = None
+        if self.closed:
+            return
+        self.hub.post(self.summary())
+        # Messages sent while it ran go to the fresh session, as after a model switch.
+        if self._pending and not self.hub.restarting:
+            text, speak, voice, talk = self._pending.popleft()
+            self.busy = True
+            self._turn_task = asyncio.create_task(self.run_turn(text, speak, voice, talk))
+        self.hub.maybe_restart()
 
     async def run_turn(self, text: str, speak: bool, voice: bool, talk: bool = False) -> None:
         """Run this turn and every follow-up queued while it is active, in arrival order."""
@@ -1363,6 +1491,32 @@ def _title_from(text: str, limit: int = 60) -> str:
     return line if len(line) <= limit else line[: limit - 1].rstrip() + "…"
 
 
+TITLE_CHARS = 120  # the longest title a rename keeps
+
+
+def _branch_row(rows: list[dict], at, was: str = "") -> int | None:
+    """Where the message to branch at is in `rows` (GET /history's): row `at` when it is the user's and
+    reads `was` (when given), else the last of the user's rows that reads `was`. None when neither is
+    there: an app's copy of the history can be behind (a turn finished since, or a note it never had)."""
+    if isinstance(at, int) and not isinstance(at, bool) and 0 <= at < len(rows):
+        row = rows[at]
+        if row.get("role") == "user" and (not was or row.get("text") == was):
+            return at
+    if was:
+        for i in range(len(rows) - 1, -1, -1):
+            if rows[i].get("role") == "user" and rows[i].get("text") == was:
+                return i
+    return None
+
+
+def _branch_title(title: str) -> str:
+    """A branch's title: its chat's, marked; a branch of a branch is not marked twice."""
+    title = title.strip()
+    if not title or title.endswith(" (edit)"):
+        return title
+    return f"{title[: TITLE_CHARS - 7].rstrip()} (edit)"
+
+
 # ---------------------------------------------------------------- linked (terminal) chats
 class LinkedChat:
     """A chat that lives in a terminal `vision` process (see link.py), driven over its Unix socket.
@@ -1382,6 +1536,7 @@ class LinkedChat:
         self.updated = self.created
         self.state: dict = {}  # the terminal's latest summary
         self.title = ""
+        self._renamed = False  # the title is one the user gave it on an app: the terminal's own doesn't replace it
         self.busy = False
         self.partial = ""
         self.user_text = ""
@@ -1481,6 +1636,11 @@ class LinkedChat:
         self.link.send({"type": "note", "text": text})
         self.post({"type": "note", "text": text})
 
+    def rename(self, title: str) -> None:
+        """Named on an app: shown there for as long as this conversation lasts (the terminal keeps its own)."""
+        self.title, self._renamed = title, True
+        self.hub.post(self.summary())
+
     def answer(self, answers) -> None:
         self.link.send({"type": "answer", "answers": answers if isinstance(answers, dict) and answers else None})
 
@@ -1535,10 +1695,10 @@ class LinkedChat:
                 # /new or /resume in the terminal: another conversation now, so the old title goes too
                 # (a fresh chat getting its first id mid-turn is the same conversation: its title stays)
                 if before[1]:
-                    self.title = ""
+                    self.title, self._renamed = "", False
                 if self._transcript is not None:
                     self.reset_history()
-            if ev.get("title"):
+            if ev.get("title") and not self._renamed:
                 self.title = ev["title"]
             self.busy = bool(ev.get("busy"))
             self._questions = ev.get("questions") or []
@@ -2290,7 +2450,9 @@ class Hub:
             "read_aloud": True,  # POST /speak/pieces: the app puts a read-aloud button under a reply only then
             "widgets": True,  # GET /widgets: the Home Screen widgets have something to ask
             "looking": True,  # takes `looking` frames: an app sends one only then (an older Vision calls it unknown)
+            "compact": True,  # takes `compact` frames: an app offers Compact only then
             "voice_on": self.cfg.voice.enabled,  # the voice switch; a `voice_power` frame when it changes
+            "transcribe": whisper_installed(),  # POST /transcribe has a Whisper here (and answers 503 while voice_on is off)
             "workdir": chats[0].workdir if chats else "",
             "asleep": self.sleep.recent() if getattr(self, "sleep", None) else [],  # suspends in the last day
             "chats": [c.summary() for c in chats],
@@ -3127,6 +3289,28 @@ class Hub:
             self.post({"type": "chat_closed", "chat": chat.id})
         elif kind == "pin":
             self.pin(chat.id, bool(msg.get("pinned", True)))
+        elif kind == "rename":
+            # The user's own title, on every app. An empty one changes nothing.
+            title = " ".join(str(msg.get("title") or "").split())[:TITLE_CHARS]
+            if title and title != chat.title:
+                chat.rename(title)
+        elif kind == "branch":
+            # Edit and resend: a new chat with this one's conversation before the message at row `at`
+            # of /history, which then runs the edited `text`. This chat is left as it was.
+            text = with_attachments((msg.get("text") or "").strip(), msg.get("images"))
+            if not text:
+                return
+            try:
+                branch = await self.branch_chat(chat, msg.get("at"), str(msg.get("was") or ""))
+            except ValueError as e:
+                await ws.send_json({"type": "error", "text": str(e)})
+                return
+            except Exception as e:  # noqa: BLE001  (its model's provider can't start, say)
+                await ws.send_json({"type": "error", "text": f"could not open the edited chat: {e}"})
+                return
+            await ws.send_json({**branch.summary(), "opened": True})  # the asker switches to it
+            self.post(branch.summary())                                  # everyone else just lists it
+            branch.queue(text, False, False)
         elif kind == "model":
             if chat.busy:
                 await ws.send_json({"type": "error", "text": "Vision is still replying; switch models once it has finished."})
@@ -3142,6 +3326,10 @@ class Hub:
                 await ws.send_json({"type": "error", "text": "Vision is still replying; switch modes once it has finished."})
             else:
                 chat.set_mode(mode)
+        elif kind == "compact":
+            why = chat.start_compact() if isinstance(chat, Chat) else "This chat is open in a terminal, so it can't be compacted from here."
+            if why:
+                await ws.send_json({"type": "toast", "text": why})
         elif kind == "open_terminal":
             # An app (the phone, the desktop) asks for this chat in a terminal window here: `vision --join <chat>` (remote.py
             # attaches it; this process keeps running the conversation, the window mirrors it).
@@ -3229,6 +3417,38 @@ class Hub:
         await ws.send_json({**chat.summary(), "opened": True})
         self.post(chat.summary())
         chat.post({"type": "note", "text": detail})
+
+    async def branch_chat(self, chat, at, was: str = "") -> Chat:
+        """Edit and resend: a new chat holding `chat`'s conversation up to the message the user sent at
+        row `at` of its history (`was`: that message, to find it by when the app's rows are behind).
+        Its brain starts a fresh session with the conversation so far handed over as text, as a switch
+        to another provider's model does, so it works the same on every brain. `chat` is left as it was.
+        Raises ValueError when the message can't be found."""
+        from vision.sessions import format_transcript
+
+        loop = asyncio.get_running_loop()
+        rows = await loop.run_in_executor(None, chat.history, 200)  # it may read the session from disk
+        i = _branch_row(rows, at, was)
+        if i is None:
+            raise ValueError("That message is no longer in this chat. Open the chat again and retry.")
+        earlier = copy.deepcopy(rows[:i])
+        if isinstance(chat, Chat):
+            cfg = copy.deepcopy(chat.cfg)  # its model, effort and mode
+            cfg.brain.ask_tools, cfg.brain.denied_tools = (list(r) for r in chat._own_rules)  # not a project's rules
+        else:
+            cfg = self.picked_cfg(chat.model_id, chat.effort)  # a terminal's chat: its model, else the defaults
+        brain, cfg, note = await loop.run_in_executor(None, lambda: self._prepare_chat(cfg, chat.workdir))
+        branch = self.open_chat(brain, cfg, title=_branch_title(chat.title or ""), note=note)
+        branch._transcript = earlier
+        brain.handoff = format_transcript([r for r in earlier if r.get("role") in ("user", "assistant")]) or None
+        if branch.journal:
+            # A restart before its first reply still brings the earlier rows back, and hands them over again.
+            branch.journal.append("base", history=earlier)
+            branch._journal_has_base = True
+            if cfg.brain.mode != self.cfg.brain.mode:
+                branch.journal.append("mode", mode=cfg.brain.mode)
+        branch.log(f"branched from chat {chat.id[:4]} at row {i}")
+        return branch
 
     def adopt_chat(self, chat: Chat, body: dict) -> dict:
         """Make an open chat a project's, as it is: it keeps its conversation and folder and is the
@@ -4213,6 +4433,10 @@ def create_app(hub: Hub) -> FastAPI:
             raise HTTPException(status_code=409, detail="live preview needs Whisper on the GPU")  # the load, if any, ran in the executor
         try:
             text = await asyncio.get_running_loop().run_in_executor(None, hub.transcribe_bytes, data)
+        except VoiceOff:
+            raise  # 503 with VOICE_OFF, as /speak answers
+        except ImportError:
+            raise HTTPException(status_code=503, detail="Speech recognition isn't installed on the computer.")
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=422, detail=f"could not decode audio: {e}")
         if preview:

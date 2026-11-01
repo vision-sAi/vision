@@ -157,6 +157,9 @@ def shell_note(runs: list[tuple[str, str, int | None]], max_chars: int = 12_000)
     return "\n\n".join(out)
 
 
+COMPACTED = "This conversation was compacted to free its context."  # opens a handoff that carries a chat on (server Chat.compact)
+
+
 def inject_handoff(brain, prompt: str) -> str:
     """Prepend the previous provider's transcript to the first message of a fresh session, the voice
     turns the session has not seen (`catchup`, set by the typed turn's routing) to any message, and the
@@ -170,6 +173,8 @@ def inject_handoff(brain, prompt: str) -> str:
     catchup = getattr(brain, "catchup", None)
     if catchup:
         brain.catchup = None  # delivered with this prompt (a fresh session's handoff carries the transcript already)
+    if note and not brain.session_id and note.startswith(COMPACTED):
+        return f"{note}\n\n---\n\nContinue naturally from here; do not mention the summary unless asked. The user's next message:\n\n{prompt}"
     if note and not brain.session_id:
         return (
             "You are taking over an ongoing conversation from another model. What happened so far:\n\n"

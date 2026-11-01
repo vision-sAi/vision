@@ -160,6 +160,20 @@ svg.icon { width: 16px; height: 16px; stroke-width: 1.8; flex: none; }
 .hit-line mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--side-text); border-radius: 3px; padding: 0 1px; }
 .found { animation: found 1.6s ease-out; border-radius: 12px; }
 @keyframes found { 0%, 30% { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 16%, transparent); } }
+/* Find in chat (find.ts): a bar at the chat's top right, every match marked, the current one stronger. */
+.find-bar {
+  position: absolute; top: calc(var(--top-h) + 10px); right: 18px; z-index: 6; display: flex; align-items: center; gap: 2px;
+  padding: 4px 4px 4px 10px; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: var(--shadow);
+}
+.find-bar[hidden] { display: none; }
+.find-bar > svg.icon { color: var(--dim); flex: none; }
+.find-input { width: 190px; border: 0; background: none; color: var(--text); font: inherit; font-size: 13px; padding: 4px 6px; outline: none; }
+.find-count { min-width: 64px; text-align: right; padding-right: 6px; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.find-bar.none .find-count { color: var(--danger); }
+.find-bar .icon-btn { width: 26px; height: 26px; }
+mark.find-hit { background: color-mix(in srgb, var(--warn) 32%, transparent); color: inherit; border-radius: 3px; }
+.bubble mark.find-hit { background: color-mix(in srgb, var(--warn) 60%, transparent); }
+mark.find-hit.current { background: var(--warn); color: #1a1400; box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 45%, transparent); }
 @keyframes pulse { 50% { opacity: 0.3; } }
 
 .computer {
@@ -389,7 +403,7 @@ svg.icon { width: 16px; height: 16px; stroke-width: 1.8; flex: none; }
   display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px; border: 0; border-radius: 8px;
   background: none; color: var(--dim); font-size: 12.5px; max-width: 260px; white-space: nowrap;
 }
-.context { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 6px; color: var(--dim); font-size: 12.5px; font-variant-numeric: tabular-nums; cursor: default; flex: none; }
+.context { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 6px; color: var(--dim); font-size: 12.5px; font-variant-numeric: tabular-nums; cursor: pointer; border-radius: 8px; flex: none; }
 .context[hidden] { display: none; }
 .context svg { width: 16px; height: 16px; transform: rotate(-90deg); }
 .context circle { fill: none; stroke-width: 2.5; }
@@ -397,6 +411,24 @@ svg.icon { width: 16px; height: 16px; stroke-width: 1.8; flex: none; }
 .context .fill { stroke: currentColor; stroke-linecap: round; stroke-dasharray: var(--fill, 0) 100; transition: stroke-dasharray 0.3s; }
 .context.warn { color: var(--warn); }
 .context.full { color: var(--danger); }
+/* The ring opens a popover with the token counts and Compact (compact.ts). */
+.context:hover { background: var(--hover); }
+.context:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
+.context-pop { display: flex; flex-direction: column; gap: 8px; padding: 8px 8px 6px; }
+.context-pop-head { display: flex; justify-content: space-between; align-items: baseline; font-weight: 600; font-size: 13px; }
+.context-pop-percent { font-variant-numeric: tabular-nums; color: var(--dim); }
+.context-pop.warn .context-pop-percent { color: var(--warn); }
+.context-pop.full .context-pop-percent { color: var(--danger); }
+.context-meter { height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--dim) 22%, transparent); overflow: hidden; }
+.context-meter-fill { height: 100%; border-radius: 3px; background: var(--accent); }
+.context-pop.warn .context-meter-fill { background: var(--warn); }
+.context-pop.full .context-meter-fill { background: var(--danger); }
+.context-pop-tokens { font-size: 12.5px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.context-pop-text { margin: 0; font-size: 12.5px; line-height: 1.45; }
+.context-compact { align-self: flex-end; height: 30px; padding: 0 14px; justify-content: center; }
+.context-compact:disabled { opacity: 0.45; cursor: default; filter: none; }
+.context-usage { align-self: flex-start; background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
+.context-usage:hover { text-decoration: underline; }
 .chip-btn:disabled { opacity: 0.4; cursor: default; }
 .chip-btn span:not([data-icon]) { overflow: hidden; text-overflow: ellipsis; }
 .chip-btn svg.icon { width: 14px; height: 14px; }
@@ -593,6 +625,24 @@ svg.icon { width: 16px; height: 16px; stroke-width: 1.8; flex: none; }
 .act { display: grid; place-items: center; width: 28px; height: 26px; border: 0; border-radius: 6px; background: none; color: var(--dim); }
 .act:hover { background: var(--hover); color: var(--text); }
 .took { font-size: 11.5px; color: var(--dim); margin-left: 6px; }
+/* A sent message: Copy and Edit on hover only; editing opens it in place, sent as a new chat. */
+.msg.user .actions { margin-top: 4px; }
+.msg.user:not(:hover) .actions { opacity: 0; }
+.edit-box { width: 78%; display: flex; flex-direction: column; gap: 8px; }
+.edit-input {
+  resize: none; border: 1px solid var(--accent); border-radius: 14px; background: var(--bg); padding: 9px 14px;
+  outline: none; font: inherit; color: var(--text); line-height: 1.55; overflow-y: auto;
+}
+.edit-foot { display: flex; align-items: center; gap: 14px; justify-content: flex-end; }
+.edit-foot .dim { margin-right: auto; }
+.edit-foot .primary { padding: 5px 14px; }
+/* Renaming a chat: its row's name, or the title above the chat, becomes a field. */
+.rename-input {
+  width: 100%; min-width: 0; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); color: var(--text);
+  font: inherit; padding: 1px 6px; margin-left: -7px; outline: none;
+}
+.chat-head h1 .rename-input { font-weight: 600; width: min(420px, 50vw); }
+.chat-item.renaming .pin, .chat-item.renaming .close { display: none; }
 .reply-error {
   display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; padding: 9px 12px; border-radius: 10px; font-size: 13.5px;
   background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger);
@@ -1059,3 +1109,88 @@ svg.icon { width: 16px; height: 16px; stroke-width: 1.8; flex: none; }
 .inbox-answer { flex: 1; min-width: 0; height: 26px; padding: 0 2px; border: 0; border-bottom: 1px solid var(--line-strong); background: none; color: var(--text); font: inherit; font-size: 13px; outline: none; }
 .inbox-answer:focus { border-bottom-color: var(--accent); }
 .inbox-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 30px 10px; text-align: center; }
+
+/* ---------------------------------------------------------------- Coming up (schedules.ts) */
+.main.is-scheduled #transcript, .main.is-scheduled #welcome, .main.is-scheduled #dock { display: none !important; }
+.main.is-scheduled .notice { margin-top: 4px; }
+.scheduled { flex: 1; min-height: 0; overflow-y: auto; }
+.scheduled.opening { animation: fade-in 0.18s ease-out; }
+.sched-page { max-width: 780px; margin: 0 auto; padding: 14px 28px 28px; display: flex; flex-direction: column; gap: 18px; }
+.sched-new { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 14px; border: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+.sched-new input, .sched-new select {
+  height: 30px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg); padding: 0 8px; font-size: 13px; outline: none;
+}
+.sched-new input:focus, .sched-new select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+.sched-new .sched-words { height: 34px; font-size: 14px; padding: 0 10px; }
+.sched-when { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sched-when .segmented { margin: 0 4px 0 0; }
+.sched-when .segmented button { font-size: 12.5px; padding: 3px 12px; }
+.sched-chat { max-width: 240px; }
+.sched-add { margin-left: auto; height: 30px; padding: 0 16px; }
+.sched-add:disabled { opacity: 0.45; filter: none; }
+.sched-hint { margin: 0 2px; }
+.sched-groups { display: flex; flex-direction: column; gap: 18px; }
+.sched-group .lane-head h3::before { content: none; }
+.sched-item { padding: 10px 12px; gap: 12px; }
+.sched-mark { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--hover); color: var(--text); }
+.sched-item.off .sched-mark { color: var(--dim); }
+.sched-item .sched-title { font-weight: 550; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sched-next { color: color-mix(in srgb, var(--accent) 75%, var(--text)); }
+.sched-item .chip-btn { height: 28px; }
+.sched-foot { margin: -6px 2px 0; }
+.sched-loading { margin: 8px 2px; }
+
+/* ---------------------------------------------------------------- Usage (usage.ts) */
+.usage-body { display: flex; flex-direction: column; gap: 12px; padding-top: 10px; background: color-mix(in srgb, var(--panel) 60%, var(--raised)); }
+.usage-updated { margin: 0 0 -4px 2px; min-height: 18px; }
+.usage-refresh.spinning svg.icon { animation: spin-back 0.9s linear infinite; }
+@keyframes spin-back { to { transform: rotate(-360deg); } }
+.usage-card { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; border-radius: 14px; background: var(--raised); border: 1px solid var(--line); }
+.usage-head { display: flex; align-items: center; gap: 9px; font-size: 14px; }
+.usage-badge {
+  width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; flex: none; color: #fff;
+  background: linear-gradient(135deg, var(--tint), color-mix(in srgb, var(--tint) 70%, #000));
+}
+.usage-plan { font-size: 11.5px; font-weight: 600; color: var(--dim); background: var(--hover); border-radius: 999px; padding: 1px 8px; }
+.usage-asof { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
+.usage-bars { display: flex; flex-direction: column; gap: 14px; }
+.usage-bar-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 13px; font-weight: 600; }
+.usage-pct { font-variant-numeric: tabular-nums; }
+.usage-bar.warn .usage-pct { color: var(--warn); }
+.usage-bar.full .usage-pct { color: var(--danger); }
+.usage-track { height: 8px; border-radius: 4px; background: var(--line-strong); overflow: hidden; }
+.usage-fill {
+  height: 100%; border-radius: 4px; transition: width 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--tint) 80%, #fff), var(--tint));
+}
+.usage-bar.warn .usage-fill { background: var(--warn); }
+.usage-bar.full .usage-fill { background: var(--danger); }
+.usage-resets { margin-top: 5px; }
+.usage-card.loading .usage-fill { background: var(--line-strong); }
+.usage-card.loading .usage-pct, .usage-card.loading .usage-resets { color: transparent; background: var(--hover); border-radius: 4px; }
+.usage-card.loading { animation: usage-pulse 1.4s ease-in-out infinite; }
+@keyframes usage-pulse { 50% { opacity: 0.55; } }
+.usage-error { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--hover); color: var(--dim); font-size: 12.5px; }
+.usage-error svg.icon { margin-top: 2px; }
+.usage-none { margin: 0; }
+.usage-banked { display: flex; flex-direction: column; }
+.usage-banked-head { font-size: 12px; font-weight: 600; color: var(--dim); margin-bottom: 4px; }
+.usage-reset { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-top: 1px solid var(--line); }
+.usage-banked-head + .usage-reset { border-top: 0; }
+.usage-reset-mark { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; flex: none; color: var(--tint); background: color-mix(in srgb, var(--tint) 14%, transparent); }
+.usage-reset-text { flex: 1; min-width: 0; }
+.usage-reset-kind { font-weight: 600; font-size: 13px; }
+.usage-soon { color: var(--warn); }
+.chip-btn.usage-use { height: 28px; padding: 0 14px; border-radius: 999px; color: #fff; font-weight: 600; background: var(--tint); }
+.chip-btn.usage-use.confirm { background: var(--danger); }
+.chip-btn.usage-use:disabled { opacity: 0.5; }
+.usage-sure { margin: 0 0 6px 42px; }
+.usage-sure .link-btn { font-size: 12px; }
+.usage-outcome { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--dim); }
+.usage-outcome.ok { color: var(--ok); }
+.usage-notes { margin: -4px 0 0; font-size: 12px; color: var(--dim); opacity: 0.8; }
+.usage-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 36px 10px; text-align: center; color: var(--dim); }
+.usage-empty b { color: var(--text); font-size: 15px; }
+.usage-empty .chip-btn { margin-top: 6px; }
+.composer .context:not([hidden]) { cursor: pointer; border-radius: 8px; }
+.composer .context:hover { background: var(--hover); }

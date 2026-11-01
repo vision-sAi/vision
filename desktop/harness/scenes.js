@@ -154,6 +154,47 @@
     { name: "grok", label: "Grok", product: "Grok", note: "via Grok CLI · Grok Subscription", enabled: true, installed: false, signed_in: false, detail: "", install_cmd: "", install_url: "https://x.ai/cli", login_cmd: ["grok", "login"] },
   ];
 
+  // GET /usage as vision/usage.py's usage_data shapes each provider.
+  const win = (label, pct, inSecs) => ({ label, used_percent: pct, resets_at: now + inSecs, resets: null });
+  const CLAUDE_USAGE = { provider: "claude", label: "Claude", plan: "Max", source: "live", at: null, error: null, notes: [],
+    windows: [win("Current session", 34, 2.5 * 3600 + 30), win("Current week", 78, 3 * D + 4 * 3600), win("Fable", 93, 3 * D + 4 * 3600)],
+      banked: { count: 2, expires_at: now + 20 * D, label: null, items: [{ id: "g1", kind: "Full Reset", expires_at: now + 2 * D }, { id: "g2", kind: "Session Reset", expires_at: now + 20 * D }] } };
+  const USAGE_HTTP = {
+    "GET providers": { providers: [{ name: "claude", tint: "#d97857" }, { name: "codex", tint: "#0f997a" }, { name: "grok", tint: "#5c6680" }] },
+    "GET usage": () => ({ at: now, providers: [
+      { provider: "grok", label: "Grok", plan: null, windows: [], banked: null, notes: [], source: null, at: null,
+        error: "Grok usage unavailable: needs a live grok.com login (run `grok login`)." },
+      CLAUDE_USAGE,
+      { provider: "codex", label: "Codex", plan: "Pro", source: "snapshot", at: now - 1500, error: null, banked: null,
+        windows: [win("Current session", 8, 4 * 3600), win("Current week", 41, 5 * D)], notes: ["from the last reply's rate-limit snapshot"] },
+    ] }),
+    "POST usage/reset": (q, b) => ({ ok: true, outcome: "reset", message: "Session cleared: your Claude session and weekly limits are back to zero.",
+      provider: { ...CLAUDE_USAGE, windows: [win("Current session", 0, 5 * 3600), win("Current week", 0, 7 * D), win("Fable", 93, 3 * D)],
+        banked: { count: 1, expires_at: now + 20 * D, items: [{ id: "g2", kind: "Session Reset", expires_at: now + 20 * D }] } } }),
+  };
+  // GET /scheduled as vision/scheduled.py keeps tasks; the scene's steps change it and send a `scheduled` frame.
+  const SCHED_HTTP = () => {
+    const list = window.__sched = [
+      { id: "s1", title: "Morning brief", prompt: "Summarise my calendar and the weather", kind: "task", chat: "c1", repeat: "weekdays", time: "08:30", enabled: true, next_run: now + 13 * 3600 },
+      { id: "s2", title: "Call the dentist", prompt: "Call the dentist", kind: "reminder", chat: "", repeat: "once", date: "2026-11-02", time: "18:00", enabled: true, next_run: new Date(2026, 10, 2, 18).getTime() / 1000 },
+      { id: "s3", title: "Check the build", prompt: "Check the nightly build", kind: "task", chat: "", repeat: "daily", time: "07:00", enabled: false, next_run: null },
+      { id: "s4", title: "Stretch", prompt: "Stretch", kind: "reminder", chat: "", repeat: "every", every_minutes: 120, time: "", enabled: true, next_run: now + 1800 },
+      { id: "k1", title: "Atlas's status report", prompt: "", kind: "checkin", project: "p1", repeat: "daily", time: "08:00", enabled: true, next_run: now + 13 * 3600 },
+    ];
+    return {
+      "GET scheduled": () => list.map((t) => ({ ...t })),
+      "GET projects/p1/threads": [], "GET projects/p2/threads": [], "GET projects/p3/threads": [], "GET projects/p4/threads": [],
+      "POST scheduled": (q, b) => {
+        const old = list.find((t) => t.id === b.id);
+        const task = { title: b.prompt, chat: "", ...old, ...b, id: b.id ?? `n${list.length}`, next_run: b.enabled === false ? null : now + 2 * D };
+        if (old) list[list.indexOf(old)] = task; else list.push(task);
+        return task;
+      },
+      "DELETE scheduled/s9": () => { list.splice(list.findIndex((t) => t.id === "s9"), 1); return { ok: true }; },
+      "POST scheduled/s2/run": {},
+    };
+  };
+
   window.SCENES = {
     chat: { ...base, steps: [
       { wait: 300, check: "the composer shows how full the chat's context is", fn: () => !document.querySelector("#context").hidden && document.querySelector("#context-text").textContent === "42%" },
@@ -557,6 +598,88 @@
         { run: () => { const s = document.querySelector("#search"); s.value = "restic"; s.dispatchEvent(new Event("input", { bubbles: true })); } },
       ] },
 
+    // Find in the open chat: every match marked, stepped through, and marked again when the reply redraws.
+    find: { ...base, http: { "GET history": (q) => q.chat === "c1" && window.__replied ? [...HISTORY.c1,
+      { role: "user", text: "run the test again" }, { role: "assistant", text: "Testing it now: the test passed.", duration_ms: 3100 }] : HISTORY[q.chat] ?? [] },
+      steps: (() => {
+        const bar = () => document.querySelector(".find-bar");
+        const hits = () => [...document.querySelectorAll("#transcript mark.find-hit")];
+        const ctrlF = () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true }));
+        const press = (key, shiftKey = false) => document.querySelector(".find-input").dispatchEvent(new KeyboardEvent("keydown", { key, shiftKey, bubbles: true, cancelable: true }));
+        let first;
+        return [
+          { wait: 300, run: ctrlF },
+          { check: "Ctrl+F opens the find bar, ready to type", fn: () => !bar().hidden && document.activeElement === document.querySelector(".find-input") },
+          { type: [".find-input", "test"] },
+          { check: "every match in the chat is marked and counted", fn: () => hits().length === 4 && document.querySelector(".find-count").textContent === "1 of 4" },
+          { check: "the tool rows and buttons are left alone", fn: () => !document.querySelector(".actions mark, .steps mark, button mark") },
+          { run: () => { first = document.querySelector("mark.find-hit.current"); press("Enter"); } },
+          { check: "Return steps to the next match", fn: () => document.querySelector(".find-count").textContent === "2 of 4" && hits()[1].classList.contains("current") },
+          { run: () => press("Enter", true) },
+          { check: "Shift+Return steps back", fn: () => document.querySelector(".find-count").textContent === "1 of 4" && document.querySelector("mark.find-hit.current") === first },
+          { run: () => press("ArrowUp") },
+          { check: "and past the first goes round to the last", fn: () => document.querySelector(".find-count").textContent === "4 of 4" },
+          { frame: { type: "chat", ...CHATS[0], busy: true } },
+          { frame: { type: "start", chat: "c1", text: "run the test again" } },
+          { frame: { type: "delta", chat: "c1", text: "Testing it now: the test passed." } },
+          { wait: 300, check: "a streaming reply is marked as it comes in", fn: () => hits().length === 7 && document.querySelector(".msg.streaming mark.find-hit") !== null },
+          { check: "and the current match stays put", fn: () => document.querySelector(".find-count").textContent === "4 of 7" },
+          { run: () => { window.__replied = true; } },
+          { frame: { type: "done", chat: "c1", text: "Testing it now: the test passed.", error: "", busy: false, duration_ms: 3100 } },
+          { wait: 400, check: "the marks come back after the history is fetched again", fn: () => !document.querySelector(".msg.streaming") && hits().length === 7 && /^\d of 7$/.test(document.querySelector(".find-count").textContent) },
+          { type: [".find-input", "nothing like this"] },
+          { check: "no match says so", fn: () => document.querySelector(".find-count").textContent === "No matches" && hits().length === 0 },
+          { run: () => press("Escape") },
+          { check: "Escape closes the bar and takes the marks away", fn: () => bar().hidden && !document.querySelector("mark.find-hit") },
+          { check: "without stopping anything", fn: () => !sentOf("cancel").length },
+          { run: ctrlF },
+          { type: [".find-input", "drop"] },
+          { check: "a search again finds the word inside code too", fn: () => hits().length >= 1 && document.querySelector(".md code mark.find-hit") !== null },
+          { type: [".find-input", "test"] },
+          { run: () => press("Enter") },
+        ];
+      })() },
+
+    // The context ring opens a popover with the token counts and Compact; the server shows it under way like a turn.
+    compact: { ...base, chats: [{ ...CHATS[0], context: { tokens: 152_000, window: 200_000 } }, ...CHATS.slice(1)],
+      http: { "GET history": (q) => q.chat === "c1" && window.__compacted ? [...HISTORY.c1,
+        { role: "note", text: "Compacted the conversation (152k tokens) into a summary; Vision carries on from it in a fresh session.", compacted: true, duration_ms: 8200 }]
+        : HISTORY[q.chat] ?? [] },
+      onSend: (f, emit) => {
+        if (f.type !== "compact") return;
+        emit({ ...CHATS[0], busy: true, context: { tokens: 152_000, window: 200_000 } });
+        emit({ type: "start", chat: "c1", text: "", note: "Compacting the conversation" });
+        emit({ type: "status", chat: "c1", tool: "", label: "Summarising the conversation…" });
+        setTimeout(() => {
+          window.__compacted = true;
+          emit({ type: "done", chat: "c1", text: "", error: "", busy: false, compacted: true, duration_ms: 8200 });
+          emit({ ...CHATS[0], busy: false, context: { tokens: 3_900, window: 200_000 } });
+        }, 1500);
+      },
+      steps: [
+        { wait: 300, check: "a full context shows amber", fn: () => document.querySelector("#context").classList.contains("warn") && document.querySelector("#context-text").textContent === "76%" },
+        { click: "#context" },
+        { wait: 150, check: "the ring opens a popover with the token counts", fn: () => !document.querySelector("#popover").hidden && document.querySelector(".context-pop-tokens")?.textContent === "152,000 of 200,000 tokens" },
+        { check: "and Compact stands out from 70%", fn: () => document.querySelector(".context-compact")?.classList.contains("primary") && !document.querySelector(".context-compact").disabled },
+        { click: ".context-compact" },
+        { wait: 100, check: "Compact asks the server to compact this chat", fn: () => sentOf("compact").length === 1 && sentOf("compact")[0].chat === "c1" && document.querySelector("#popover").hidden },
+        { check: "and it shows under way", fn: () => [...document.querySelectorAll(".note-text")].some((n) => n.textContent === "Compacting the conversation") && document.querySelector(".msg.streaming .status")?.textContent.includes("Summarising") },
+        { click: "#context" },
+        { wait: 150, check: "while it runs Compact waits", fn: () => document.querySelector(".context-compact")?.disabled === true },
+        { click: "#context" },
+        { wait: 1600, check: "afterwards a note marks the place, after the history refetch", fn: () => !document.querySelector(".msg.streaming") && [...document.querySelectorAll(".note-text")].some((n) => n.textContent.startsWith("Compacted the conversation")) },
+        { check: "and the ring shows the context emptied", fn: () => document.querySelector("#context-text").textContent === "2%" && !document.querySelector("#context").classList.contains("warn") },
+        { check: "nothing pinged as a reply", fn: () => !window.__notified.length },
+        { click: "#context" },
+        { wait: 150, check: "with room to spare Compact is a plain button", fn: () => document.querySelector(".context-compact")?.classList.contains("bordered") && !document.querySelector(".context-compact").classList.contains("primary") },
+      ] },
+
+    // An older Vision has no compact: the popover says so instead of offering it.
+    compactold: { ...base, compact: false, steps: [
+      { wait: 300, click: "#context" },
+      { wait: 150, check: "an older Vision gets no Compact button", fn: () => !document.querySelector(".context-compact") && document.querySelector(".context-pop")?.textContent.includes("needs a newer Vision") },
+    ] },
+
     // Files from the file manager come as a native drop (paths); a screenshot pasted comes from the native clipboard.
     drop: { ...base, clipboard: [{ name: "pasted image.png", path: "/home/me/.local/share/vision/uploads/x-pasted-image.png" }], steps: [
       { wait: 300, run: () => window.__emit("tauri://drag-enter", { paths: ["/home/me/Pictures/chart.png"], position: { x: 600, y: 400 } }) },
@@ -580,6 +703,204 @@
       { wait: 50, check: "plain text still pastes as text", fn: () => window.__textPasteKept === true && document.querySelectorAll(".attachment").length === 3 },
     ] },
 
+    // Double-click a chat's name (in the sidebar or above the chat) to rename it; the server tells every app.
+    rename: { ...base, onSend: (f, emit) => {
+      const c = CHATS.find((x) => x.chat === f.chat);
+      if (f.type === "rename" && c) setTimeout(() => emit({ ...c, title: f.title }), 20);
+    }, steps: (() => {
+      const row = (name) => [...document.querySelectorAll("#chats .chat-item")].find((i) => i.textContent.includes(name));
+      const dbl = (node) => node.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      return [
+        { wait: 300, run: () => dbl(row("Fix the flaky")) },
+        { wait: 100, check: "double-clicking a chat in the sidebar makes its name a field", fn: () => document.activeElement?.classList.contains("rename-input")
+          && document.querySelector("#chats .chat-item.renaming .rename-input")?.value === "Fix the flaky upload test" },
+        { type: [".rename-input", "Upload race"] },
+        { key: [".rename-input", "Enter"] },
+        { wait: 100, check: "Return renames it on the server", fn: () => sentOf("rename")[0]?.chat === "c1" && sentOf("rename")[0]?.title === "Upload race" },
+        { check: "and the row and title show the new name", fn: () => !document.querySelector(".rename-input") && !!row("Upload race") && document.querySelector("#chat-title").textContent === "Upload race" },
+        { run: () => dbl(document.querySelector("#chat-title")) },
+        { wait: 100, check: "the title above the chat renames it too", fn: () => document.querySelector("#chat-title .rename-input")?.value === "Upload race" },
+        { type: ["#chat-title .rename-input", "Something else"] },
+        { key: ["#chat-title .rename-input", "Escape"] },
+        { wait: 100, check: "Escape puts the old name back and sends nothing", fn: () => sentOf("rename").length === 1 && document.querySelector("#chat-title").textContent === "Upload race" },
+        { check: "nor stops anything", fn: () => !sentOf("cancel").length },
+        { run: () => dbl(row("Homelab backup")) },
+        { wait: 100, type: [".rename-input", "Backups: NAS and offsite"] },
+        { frame: { type: "chat", ...CHATS[1], busy: false } },  // another chat changing redraws the list
+        { wait: 100, check: "a field being typed in survives the list redrawing", fn: () => document.activeElement?.classList.contains("rename-input") && document.activeElement.value === "Backups: NAS and offsite" },
+      ];
+    })() },
+
+    // Hover a sent message, Edit: the edited message goes to a new chat branched from that point.
+    edit: { ...base,
+      history: { ...HISTORY, "c1-edit": [
+        { role: "user", text: "why does test_upload fail about one run in three on CI only?" },
+        { role: "assistant", text: "On CI the runner is slower, so the hourly sweep catches the upload more often. The same fix applies: skip files younger than a minute.", duration_ms: 21300 },
+      ] },
+      onSend: (f, emit) => {
+        if (f.type !== "branch") return;
+        const reply = "On CI the runner is slower, so the hourly sweep catches the upload more often. The same fix applies: skip files younger than a minute.";
+        const opened = { ...CHATS[0], chat: "c1-edit", title: "Fix the flaky upload test (edit)", updated: now, suggestion: "", context: null };
+        emit({ ...opened, opened: true });
+        emit(opened);
+        setTimeout(() => emit({ type: "start", chat: "c1-edit", text: f.text }), 30);
+        setTimeout(() => emit({ type: "delta", chat: "c1-edit", text: reply }), 80);
+        setTimeout(() => emit({ type: "done", chat: "c1-edit", text: reply, error: "", busy: false, duration_ms: 21300 }), 140);
+      },
+      steps: [
+        { wait: 400, check: "a sent message offers Edit", fn: () => !!document.querySelector(".msg.user .act.edit") },
+        { check: "a reply doesn't", fn: () => !document.querySelector(".msg.assistant .act.edit") },
+        { run: () => document.querySelector(".msg.user .act.edit").click() },
+        { wait: 100, check: "Edit opens the message in place", fn: () => document.querySelector(".msg.user .edit-input")?.value === "why does test_upload fail about one run in five?"
+          && document.querySelector(".msg.user .bubble").hidden && document.activeElement?.classList.contains("edit-input") },
+        { key: [".edit-input", "Escape"] },
+        { wait: 50, check: "Escape puts it back as it was", fn: () => !document.querySelector(".edit-box") && !document.querySelector(".msg.user .bubble").hidden && !sentOf("cancel").length },
+        { run: () => document.querySelector(".msg.user .act.edit").click() },
+        { wait: 100, type: [".edit-input", "why does test_upload fail about one run in three on CI only?"] },
+        { key: [".edit-input", "Enter"] },
+        { wait: 50, check: "Return sends it as a branch of this chat from that message", fn: () => {
+          const b = sentOf("branch")[0];
+          return b?.chat === "c1" && b.at === 0 && b.was === "why does test_upload fail about one run in five?" && b.text === "why does test_upload fail about one run in three on CI only?";
+        } },
+        { check: "nothing goes to the chat itself", fn: () => !sentOf("message").length },
+        { wait: 300, check: "the new chat opens with the edited message and its reply", fn: () => document.querySelector("#chat-title").textContent === "Fix the flaky upload test (edit)"
+          && document.querySelector(".msg.user .bubble")?.textContent === "why does test_upload fail about one run in three on CI only?"
+          && document.querySelector(".msg.assistant")?.textContent.includes("the runner is slower") },
+        { check: "its reply keeps its time after the history is fetched again", fn: () => document.querySelector(".msg.assistant .took")?.textContent === "21.3s"
+          && window.__http.some((h) => h.path === "history" && h.query?.chat === "c1-edit") },
+        { check: "and the sidebar lists it beside the chat it came from", fn: () => [...document.querySelectorAll("#chats .chat-name")].map((n) => n.textContent).filter((t) => t.startsWith("Fix the flaky")).length === 2 },
+        { run: () => [...document.querySelectorAll("#chats .chat-item")].find((i) => i.textContent.includes("upload test") && !i.textContent.includes("(edit)")).click() },
+        { wait: 300, check: "the chat it came from is as it was", fn: () => document.querySelector(".msg.user .bubble")?.textContent === "why does test_upload fail about one run in five?" && document.querySelectorAll(".msg").length === 2 },
+        { run: () => document.querySelector(".msg.user .act.edit").click() },
+        { wait: 100, type: [".edit-input", "why does test_upload fail about one run in five, and only since Tuesday?"] },
+      ] },
+
     collapsed: { ...base, steps: [{ wait: 300, click: ".side-top [data-action=toggle_sidebar]" }, { wait: 400, check: "the sidebar folds away", fn: () => document.querySelector(".main").getBoundingClientRect().left < 20 }] },
+
+    usage: { ...base, http: USAGE_HTTP, steps: [
+      { wait: 300, click: "#context" },
+      { wait: 100, click: ".context-usage" },
+      { wait: 200, check: "the context ring's popover opens Usage", fn: () => !document.querySelector("#settings").hidden && document.querySelector("#settings-card h2")?.textContent === "Usage" },
+      { check: "it asks for every provider, as the chat on screen", fn: () => window.__http.some((r) => r.path === "usage" && r.query?.provider === "all" && r.query?.chat === "c1") },
+      { check: "a card per provider, in the house order", fn: () => [...document.querySelectorAll(".usage-head b")].map((b) => b.textContent).join() === "Claude,Codex,Grok" },
+      { check: "a window's name is short, with its percent", fn: () => { const b = document.querySelector(".usage-bar"); return b.querySelector(".usage-bar-title").textContent === "Session" && b.querySelector(".usage-pct").textContent === "34%"; } },
+      { check: "when it resets sits beneath the bar", fn: () => document.querySelector(".usage-bar .usage-resets").textContent.startsWith("Resets in 2h") },
+      { check: "amber from 75%, red from 90%", fn: () => { const bars = [...document.querySelectorAll(".usage-bar")]; return bars[1].classList.contains("warn") && bars[2].classList.contains("full") && !bars[0].matches(".warn,.full"); } },
+      { check: "the plan and a snapshot's time show", fn: () => document.querySelector(".usage-plan")?.textContent === "Max" && document.querySelectorAll(".usage-asof").length === 1 },
+      { check: "a provider that can't say says why", fn: () => document.querySelector(".usage-error")?.textContent.includes("grok login") },
+      { check: "banked resets get a row each", fn: () => document.querySelectorAll(".usage-reset").length === 2 },
+      { run: () => document.querySelector("#settings-card .set-head .icon-btn:last-child").click() },
+      { wait: 80, click: "[data-action=settings]" },
+      { wait: 150, check: "Settings has a way into Usage", fn: () => [...document.querySelectorAll(".set-section h3")].some((h) => h.textContent === "Usage") },
+      { run: () => [...document.querySelectorAll(".set-row")].find((r) => r.textContent.includes("Subscription usage")).querySelector("button").click() },
+      { wait: 150, check: "which opens it again, refreshed", fn: () => document.querySelector("#settings-card h2")?.textContent === "Usage" && window.__http.filter((r) => r.path === "usage").length === 2 },
+      { run: () => document.querySelector(".usage-use").click() },
+      { wait: 80, check: "Use asks once more first", fn: () => document.querySelector(".usage-use").textContent === "Use now" && !!document.querySelector(".usage-sure") && !window.__http.some((r) => r.path === "usage/reset") },
+      { run: () => document.querySelector(".usage-use").click() },
+      { wait: 150, check: "then spends exactly that reset", fn: () => window.__http.some((r) => r.path === "usage/reset" && r.body?.provider === "claude" && r.body?.id === "g1") },
+      { check: "and says how it went, with the fresh numbers", fn: () => document.querySelector(".usage-outcome.ok")?.textContent.includes("Session cleared") && document.querySelector(".usage-pct").textContent === "0%" },
+    ] },
+
+    scheduled: { ...base, http: SCHED_HTTP(), steps: [
+      { wait: 300, click: ".side-row[data-action=scheduled]" },
+      { wait: 200, check: "the sidebar opens Coming up", fn: () => !document.querySelector("#scheduled").hidden && document.querySelector("#chat-title").textContent === "Coming up" && document.querySelector(".side-row[data-action=scheduled]").classList.contains("active") },
+      { check: "the header counts them", fn: () => document.querySelector("#chat-folder").textContent === "2 reminders · 2 scheduled prompts" },
+      { check: "reminders and prompts are listed apart, scout check-ins left to their scouts", fn: () => [...document.querySelectorAll(".sched-group h3")].map((h) => h.textContent).join() === "Reminders,Scheduled prompts" && !document.body.textContent.includes("Atlas's status report") },
+      { check: "each says how it repeats and when it's next", fn: () => { const r = document.querySelector(".sched-item[data-id=s2]"); return r.textContent.includes("Reminder · Once, Nov 2 at 6:00 PM") && r.querySelector(".sched-next").textContent.startsWith("Next ")
+        && document.querySelector(".sched-item[data-id=s4]").textContent.includes("Every 2 hours"); } },
+      { check: "a prompt says which chat it goes to", fn: () => [...document.querySelectorAll(".sched-item")].some((r) => r.textContent.includes("Weekdays at") && r.textContent.includes("in “Fix the flaky upload test”")) },
+      { check: "a paused one sits last, marked paused", fn: () => { const rows = [...document.querySelectorAll(".sched-group")[1].querySelectorAll(".sched-item")]; return rows.at(-1).classList.contains("off") && rows.at(-1).textContent.includes("Paused"); } },
+      { run: () => { window.__sched.push({ id: "s9", title: "Water the plants", prompt: "Water the plants", kind: "reminder", repeat: "daily", time: "19:00", enabled: true, next_run: now + 5 * 3600 }); } },
+      { frame: { type: "scheduled" } },
+      { wait: 150, check: "a scheduled frame brings in a new one", fn: () => document.body.textContent.includes("Water the plants") && document.querySelector("#chat-folder").textContent.startsWith("3 reminders") },
+      { run: () => document.querySelector(".sched-item[data-id=s2] .sched-run").click() },
+      { wait: 100, check: "Run now runs it", fn: () => window.__http.some((r) => r.method === "POST" && r.path === "scheduled/s2/run") },
+      { run: () => document.querySelector(".sched-item[data-id=s9] .sched-cancel").click() },
+      { wait: 150, check: "Cancel takes it off the computer and the list", fn: () => window.__http.some((r) => r.method === "DELETE" && r.path === "scheduled/s9") && !document.querySelector(".sched-item[data-id=s9]") },
+      { run: () => document.querySelector(".sched-item[data-id=s3] .toggle").click() },
+      { wait: 100, check: "the switch resumes a paused one", fn: () => window.__http.some((r) => r.method === "POST" && r.path === "scheduled" && r.body?.id === "s3" && r.body?.enabled === true) },
+      { check: "a reminder can't be added with no words", fn: () => document.querySelector(".sched-add").disabled },
+      { type: [".sched-words", "Take the bins out"] },
+      { run: () => { const r = document.querySelector(".sched-repeat"); r.value = "weekly"; r.dispatchEvent(new Event("change")); const d = document.querySelector(".sched-day"); d.value = "2"; document.querySelector(".sched-time").value = "20:30"; } },
+      { run: () => document.querySelector(".sched-add").click() },
+      { wait: 150, check: "the form adds a weekly reminder", fn: () => window.__http.some((r) => r.method === "POST" && r.path === "scheduled" && r.body?.kind === "reminder" && r.body?.repeat === "weekly" && r.body?.weekday === 2 && r.body?.time === "20:30" && r.body?.prompt === "Take the bins out") },
+      { check: "and it shows, with the box cleared", fn: () => document.body.textContent.includes("Wednesdays at") && document.querySelector(".sched-words").value === "" },
+      { run: () => document.querySelectorAll(".sched-kinds button")[1].click() },
+      { wait: 50, check: "a prompt picks its chat, the last one open first", fn: () => !document.querySelector(".sched-chat").hidden && document.querySelector(".sched-chat").value === "c1" && document.querySelector(".sched-words").placeholder === "What should Vision do?" },
+      { run: () => { const r = document.querySelector(".sched-repeat"); r.value = "daily"; r.dispatchEvent(new Event("change")); } },
+      { type: [".sched-words", "Check the nightly build and say if it failed"] },
+      { run: () => document.querySelector(".sched-add").click() },
+      { wait: 150, check: "the form sends a prompt into that chat", fn: () => window.__http.some((r) => r.method === "POST" && r.path === "scheduled" && r.body?.kind === "task" && r.body?.chat === "c1" && r.body?.repeat === "daily" && !("date" in r.body)) },
+      { run: () => document.querySelectorAll(".sched-kinds button")[0].click() },
+    ] },
+
+    noscheduled: { ...base, http: { "GET scheduled": [] }, steps: [
+      { wait: 300, click: ".side-row[data-action=scheduled]" },
+      { wait: 200, check: "with nothing set, it says how to set something", fn: () => document.querySelector("#scheduled .board-empty h3")?.textContent === "Nothing coming up" && document.querySelector("#chat-folder").textContent === "Nothing coming up" },
+    ] },
+    // Dictation (mic.ts): hold, let go, the words land in the composer unsent. The scene ends idle with them there.
+    mic: { ...base, voiceOn: true, transcribe: true, mic: {}, heard: "remind me to water the plants at six", steps: [
+      { wait: 300, check: "the mic button sits by the paperclip, ready", fn: () => { const b = mic(); return !b.hidden && !b.classList.contains("off") && b.title.includes("Hold to dictate") && b.previousElementSibling?.id === "attach"; } },
+      { type: ["#input", "Note:"] },
+      { run: () => micPress() },
+      { wait: 900, check: "holding records: a pulsing dot, the level and the time", fn: () => mic().classList.contains("recording") && /^0:0\d$/.test(mic().textContent.trim())
+        && Number(getComputedStyle(document.querySelector(".mic-level")).getPropertyValue("--level")) > 0 },
+      { run: () => micRelease() },
+      { wait: 30, check: "letting go shows Transcribing…", fn: () => mic().classList.contains("transcribing") && mic().textContent.includes("Transcribing…") },
+      { wait: 500, check: "the words land after what was typed, a space apart", fn: () => document.querySelector("#input").value === "Note: remind me to water the plants at six" },
+      { check: "nothing was sent, and Send is ready for it", fn: () => !window.__sent.some((f) => f.type === "message") && !document.querySelector("#composer").classList.contains("blank") },
+      { check: "the recording is a 16 kHz mono 16-bit WAV", fn: () => { const w = window.__transcribed[0]; return w.riff === "RIFF" && w.rate === 16000 && w.channels === 1 && w.bits === 16 && w.bytes > 16000; } },
+      { check: "back to the plain button", fn: () => !mic().classList.contains("recording") && !mic().classList.contains("transcribing") && !mic().textContent.trim() },
+      { run: () => window.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", ctrlKey: true, shiftKey: true, bubbles: true })) },
+      { wait: 600, check: "holding Ctrl+Shift+Space records too", fn: () => mic().classList.contains("recording") },
+      { run: () => window.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space", ctrlKey: true, shiftKey: true, bubbles: true })) },
+      { wait: 500, check: "and letting go of it transcribes", fn: () => window.__transcribed.length === 2 && document.querySelector("#input").value.endsWith("six remind me to water the plants at six") },
+      { run: () => { micPress(); micRelease(); } },
+      { wait: 600, check: "a click keeps recording until the next", fn: () => mic().classList.contains("recording") },
+      { run: () => document.querySelector("#input").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })) },
+      { wait: 100, check: "Esc throws the recording away", fn: () => !mic().classList.contains("recording") && window.__transcribed.length === 2 },
+      { check: "and doesn't stop a reply", fn: () => !window.__sent.some((f) => f.type === "cancel") },
+    ] },
+    micrecording: { ...base, voiceOn: true, transcribe: true, mic: {}, steps: [
+      { wait: 300, type: ["#input", "Draft: "] },
+      { run: () => micPress() },
+      { wait: 1600, check: "recording shows the dot, the level and the time", fn: () => mic().classList.contains("recording") && mic().textContent.trim() === "0:01" },
+    ] },
+    mictranscribing: { ...base, voiceOn: true, transcribe: true, mic: {}, heard: null, steps: [
+      { wait: 300, run: () => micPress() },
+      { wait: 800, run: () => micRelease() },
+      { wait: 100, check: "while the computer works it says Transcribing…", fn: () => mic().classList.contains("transcribing") && mic().title === "Transcribing…" },
+      { run: () => micPress() },
+      { wait: 100, check: "and a press then does nothing", fn: () => mic().classList.contains("transcribing") && window.__transcribed.length === 1 },
+    ] },
+    micoff: { ...base, voiceOn: false, transcribe: true, mic: {}, steps: [
+      { wait: 300, check: "with the voice off the mic is greyed, and says why", fn: () => !mic().hidden && mic().classList.contains("off") && mic().title.includes("turn it on in Settings") },
+      { run: () => micPress() },
+      { wait: 100, check: "a press says why instead of recording", fn: () => !mic().classList.contains("recording") && document.querySelector("#toast").textContent.includes("voice on") },
+      { run: () => micRelease() },
+      { frame: { type: "voice_power", on: true } },
+      { wait: 100, check: "the voice coming on makes it ready", fn: () => !mic().classList.contains("off") },
+      { frame: { type: "voice_power", on: false } },
+      { wait: 100, check: "and going off greys it again", fn: () => mic().classList.contains("off") },
+    ] },
+    micmissing: { ...base, voiceOn: true, transcribe: false, mic: {}, steps: [
+      { wait: 300, check: "no Whisper on the computer: no mic button", fn: () => mic().hidden && mic().getBoundingClientRect().width === 0 },
+      { run: () => window.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", ctrlKey: true, shiftKey: true, bubbles: true })) },
+      { wait: 300, check: "and the shortcut does nothing", fn: () => !mic().classList.contains("recording") && !window.__transcribed.length },
+    ] },
+    micrefused: { ...base, voiceOn: true, transcribe: true, mic: {}, transcribeError: "The voice is off on the computer.", steps: [
+      { wait: 300, run: () => micPress() },
+      { wait: 800, run: () => micRelease() },
+      { wait: 200, check: "a refusal says why and the button is ready again", fn: () => document.querySelector("#toast").textContent === "Couldn't transcribe: The voice is off on the computer."
+        && !mic().classList.contains("transcribing") && document.querySelector("#input").value === "" },
+    ] },
+    micdenied: { ...base, voiceOn: true, transcribe: true, mic: { denied: true }, steps: [
+      { wait: 300, run: () => micPress() },
+      { wait: 200, check: "no microphone permission says so", fn: () => document.querySelector("#toast").textContent.startsWith("Vision isn't allowed to use the microphone.") && !mic().classList.contains("recording") },
+    ] },
   };
+
+  function mic() { return document.querySelector("#mic"); }
+  function micPress() { mic().dispatchEvent(new PointerEvent("pointerdown", { button: 0, pointerId: 1, bubbles: true, cancelable: true })); }
+  function micRelease() { mic().dispatchEvent(new PointerEvent("pointerup", { button: 0, pointerId: 1, bubbles: true })); }
 })();
