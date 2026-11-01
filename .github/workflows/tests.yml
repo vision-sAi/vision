@@ -36,4 +36,4 @@ jobs:
       # Test-only packages: numpy and soundfile for the audio fakes, soxr for the resampler, pillow for library thumbnails, httpx2
       # for starlette's TestClient, pytest for test_int8's markers.
       - run: uv pip install numpy soundfile soxr pillow pytest httpx2
-      - run: .venv/bin/python -X faulthandler -c "import faulthandler, unittest; faulthandler.dump_traceback_later(60, repeat=True); unittest.main(module=None, argv=['unittest', 'discover', '-s', 'tests', '-v'])"
+      - run: uv run --frozen --no-sync python -m unittest discover -s tests

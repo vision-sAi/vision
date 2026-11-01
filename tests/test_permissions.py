@@ -126,6 +126,7 @@ class ServerTest(unittest.TestCase):
         self.addCleanup(projects.set_default_rules, {})
         cfg = Config()
         cfg.brain.ask_tools = ["Edit(.env)"]
+        cfg.remote.suggestions = False  # a finished turn's guess runs on a thread that outlives the test
         self.hub = server.Hub(cfg, _Recorder(cfg.brain), "tok", log=lambda *_: None, follow_defaults=False, open_initial=False)
         self.hub.schedule = Schedule(self.tmp / "scheduled.json")
         self.hub.push = lambda *a, **kw: None
