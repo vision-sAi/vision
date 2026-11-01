@@ -140,10 +140,33 @@ if [ ! -x .venv/bin/python ]; then
     say "creating .venv (Python 3.12; uv downloads it if needed)"
     "$uv" venv --python 3.12 .venv
 fi
+
+# Keep the extras an earlier run installed, so a re-run without their flags (install.sh, `vision upgrade`)
+# still brings in packages added to them since. The voice build is only kept when no voice flag picks one.
+installed=" $("$uv" pip list --python .venv/bin/python --format freeze 2>/dev/null | awk -F'==' '{ printf "%s ", tolower($1) }')"
+has() { case "$installed" in *" $1 "*) return 0 ;; esac; return 1; }
+wants() { case " ${extras[*]-} " in *" $1 "*) return 0 ;; esac; return 1; }
+kept=()
+if [ "$voice" = 0 ]; then
+    if has mlx-audio; then kept+=(voice-mac)
+    elif has nvidia-cublas-cu12; then kept+=(voice-nvidia)
+    elif has torch; then kept+=(voice-cpu)
+    fi
+fi
+has fastapi && ! wants serve && kept+=(serve)
+has cryptography && ! has fastapi && ! wants weather && kept+=(weather)
 sync=(sync --frozen --inexact)  # --inexact: a re-run never removes what an earlier one installed
 for extra in ${extras[@]+"${extras[@]}"}; do sync+=(--extra "$extra"); done  # bash 3.2 (macOS): empty array + set -u
 say "installing: text chat${extras[*]+ + ${extras[*]}}"
 "$uv" "${sync[@]}"
+
+# The kept extras go in a second sync that may fail: what was asked for is in, and a kept extra that won't
+# install now (no network, a platform it no longer resolves on) leaves the old packages working as they were.
+if [ ${#kept[@]} -gt 0 ]; then
+    say "keeping what's installed up to date: ${kept[*]}"
+    for extra in "${kept[@]}"; do sync+=(--extra "$extra"); done
+    "$uv" "${sync[@]}" || say "couldn't update ${kept[*]}; the versions already installed stay as they are"
+fi
 
 # Switching an NVIDIA build to --cpu: --inexact left the CUDA libraries behind, and nothing uses them now.
 if [ "$voice" = 1 ] && [ "$backend" = cpu ]; then
