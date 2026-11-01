@@ -6,7 +6,7 @@
   const params = new URLSearchParams(location.search);
   const scene = window.SCENES[params.get("scene") || "chat"];
   const theme = params.get("theme") || "dark";
-  const os = params.get("os") || "linux";
+  const os = scene.os || params.get("os") || "linux";  // a scene may be a Mac's whatever the URL says
   // Headless Chrome under a virtual time budget can hold animation frames back for good; the page draws on them.
   window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16);
   const callbacks = new Map();
@@ -18,8 +18,11 @@
   let runId = 1;
   window.__sent = [];
   window.__notified = [];
-  window.Notification = function (title, options) { window.__notified.push({ title, body: options?.body }); };
-  window.Notification.permission = "granted";
+  // Every scene shares one browser profile: Settings choices one scene makes mustn't reach the next.
+  for (const key of ["notifications", "dictation-keys"]) localStorage.removeItem(key);
+  window.Notification = function (title, options) { window.__notified.push({ title, body: options?.body, sound: options?.sound }); };
+  window.Notification.permission = scene.notifyPermission ?? "granted";  // "default": not asked yet
+  window.Notification.requestPermission = async () => (window.Notification.permission = "granted");
 
   // A microphone for the mic button's scenes (`mic: {denied?}`): headless Chrome has none, and its audio
   // never runs without a real click. Plays a 48 kHz tone through the page's ScriptProcessor in real time.
@@ -60,16 +63,20 @@
   window.__emit = emit;  // a scene's steps can play native events (a drop from the file manager)
 
   window.__http = [];
+  const NEW_CHAT = { model: "opus", effort: "high", workdir: "/home/me", mode: "auto", ...scene.newChat };  // what POST /defaults saved
   function http({ method, path, query, body }) {
     window.__http.push({ method, path, query, body });
     const routes = scene.http ?? {};
     const key = `${method} ${path}`;
     if (key in routes) return typeof routes[key] === "function" ? routes[key](query, body) : routes[key];
     if (path === "history") return (scene.history ?? {})[query?.chat] ?? [];
-    if (path === "models") return { ...MODELS, current: query?.model || "opus", effort: query?.effort || "high" };
-    if (path === "folders") return FOLDERS;
+    if (path === "models") return { ...MODELS, current: query?.model || "opus", effort: query?.effort || "high", ...(query?.chat ? {} : { mode: NEW_CHAT.mode }) };
+    if (path === "folders") return query?.path ? FOLDERS : { ...FOLDERS, path: NEW_CHAT.workdir, label: NEW_CHAT.workdir.replace("/home/me", "~") };
     if (path === "speak/pieces") return { pieces: [] };
-    if (path === "defaults") return { ...MODELS, current: body?.model ?? "opus", effort: body?.effort ?? "high" };
+    if (path === "defaults") {
+      if (method === "POST") Object.assign(NEW_CHAT, body);
+      return { ...MODELS, current: NEW_CHAT.model, effort: NEW_CHAT.effort, workdir: NEW_CHAT.workdir, folder: NEW_CHAT.workdir.replace("/home/me", "~"), mode: NEW_CHAT.mode };
+    }
     if (path === "voice") return { voice: "vision", on: true, voices: [{ id: "vision", note: "the default" }, { id: "calm", note: "designed" }] };
     if (path === "voice/rate") return { rate: 1.1 };
     if (path === "voice/power") return { on: !!body?.on };
@@ -128,7 +135,7 @@
       case "plugin:updater|check": return scene.appUpdate ? { rid: 1, currentVersion: "0.1.0", version: scene.appUpdate, date: "", body: "", rawJson: {} } : null;
       case "set_tray_status": window.__tray = args.text; return null;
       case "set_keep_in_tray": return true;
-      case "plugin:notification|is_permission_granted": return true;
+      case "plugin:notification|is_permission_granted": return window.Notification.permission === "granted";
       default: throw new Error(`fake tauri has no command ${cmd}`);
     }
   }

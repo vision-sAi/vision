@@ -741,6 +741,7 @@ function openForm(edit?: Json, prefill?: { goal?: string; reports?: Json; workdi
   };
   const sheet = document.getElementById("settings")!;
   const card = document.getElementById("settings-card")!;
+  card.classList.remove("set-paged");
   card.classList.add("scout-sheet");
   const close = () => { sheet.hidden = true; card.classList.remove("scout-sheet"); };
 
@@ -878,6 +879,7 @@ const draftLine = (d: Json) => `${d.scout?.name || "Scout"} · ${String(d.words 
 function openQuick() {
   const sheet = document.getElementById("settings")!;
   const card = document.getElementById("settings-card")!;
+  card.classList.remove("set-paged");
   card.classList.add("scout-sheet", "quick-sheet");
   const close = () => { sheet.hidden = true; card.classList.remove("scout-sheet", "quick-sheet"); };
   let draft: Json | null = null;
@@ -970,6 +972,7 @@ export function inboxChanged() {
 export function openInbox() {
   const sheet = document.getElementById("settings")!;
   const card = document.getElementById("settings-card")!;
+  card.classList.remove("set-paged");
   card.classList.add("scout-sheet", "inbox-sheet");
   const head = el("div", "set-head");
   head.append(el("h2", "", "Needs you"));

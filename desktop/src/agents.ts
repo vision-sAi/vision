@@ -14,7 +14,7 @@ export interface AgentsHost {
   /** The board's counts changed (the sidebar badge). */
   changed: () => void;
   /** A desktop notification. */
-  notify: (title: string, body: string) => void;
+  notify: (title: string, body: string, kind: "asks" | "review") => void;
 }
 
 let host: AgentsHost;
@@ -57,7 +57,7 @@ export function onThread(pid: string, thread: Json) {
     const project = host.projects().find((p) => p.id === pid);
     const where = project ? host.projectName(project) : "Agents";
     host.notify(now.state === "waiting_on_you" ? `${where}: needs you` : `${where}: ready for review`,
-      `${now.title || "A thread"}${lineOf(now) ? ` · ${lineOf(now)}` : ""}`);
+      `${now.title || "A thread"}${lineOf(now) ? ` · ${lineOf(now)}` : ""}`, NEEDS.includes(now.state) ? "asks" : "review");
   }
   host.changed();
   redraw();

@@ -114,7 +114,7 @@ from vision import __version__
 from vision import agentlog
 from vision import selfupdate
 from vision.brain import agent_frame, context_figure, tool_frame, warm_soon
-from vision.config import CONFIG_DIR, STATE_DIR, Config, save_brain_defaults, saved_brain_defaults
+from vision.config import CONFIG_DIR, MODES, STATE_DIR, Config, save_brain_defaults, save_config_value, saved_brain_defaults
 from vision.sessions import claude_history
 from vision.planvoice import plan_answer, plan_question, plan_summary
 from vision.projects import APPROVAL_PREFIX, CHECKIN_PREFIX, REPORT_PREFIX
@@ -656,6 +656,7 @@ class Chat:
         self._call_until = 0.0  # a call is taken to be on until then: a while after the last thing said on one
         self._switch_after: tuple | None = None  # (model, effort) to switch to once the reply under way is done
         self._own_rules = (list(brain.cfg.ask_tools or []), list(brain.cfg.denied_tools or []))  # before a project's are added
+        self._own_allow = list(getattr(brain.cfg, "allow_tools", None) or [])  # [brain].allow_tools, off while a project's
         self.brain = brain
         self._noted = (brain.cfg.model, brain.cfg.effort)  # the model the chat last ran on: a switch is said at the next turn
         self.conversation = VoiceConversation(cfg, agent=brain)
@@ -749,6 +750,7 @@ class Chat:
         cfg = self._brain.cfg
         cfg.ask_tools = list(dict.fromkeys(own_ask + ask))
         cfg.denied_tools = list(dict.fromkeys(own_deny + deny))
+        cfg.allow_tools = [] if project else list(getattr(self, "_own_allow", []))  # a scout's rules have no exceptions
 
     def set_project(self, project: dict | None) -> None:
         """Make this the chat of `project` (None: no project's any more). The goal and instructions go
@@ -1861,6 +1863,9 @@ class Hub:
         self._moods: dict[str, str] = {}  # project id → the mood its scout was last shown in
         self._checkins: dict[str, float] = {}  # chat id → when the check-in it's running started
         self._own_rules = (list(cfg.brain.ask_tools or []), list(cfg.brain.denied_tools or []))  # [brain]'s, for threads
+        from vision.projects import set_default_rules
+
+        set_default_rules(getattr(cfg.brain, "scout_rules", None))  # every scout's defaults, from Settings
         from vision.liveactivity import Feed
 
         self.live = Feed(lambda: self.cfg.push, log=self.log)  # the threads' Lock Screen card
@@ -1889,7 +1894,20 @@ class Hub:
         cfg.brain.model = model
         return cfg
 
-    def _prepare_chat(self, cfg: Config | None = None, workdir: str = "") -> tuple:
+    def new_chat_folder(self) -> str:
+        """Where a chat opened from the phone or the desktop starts: [remote] new_chat_folder while it is
+        there, else [brain] workdir, else the folder the server started in."""
+        if self.cfg.remote.new_chat_folder:
+            try:
+                return usable_folder(self.cfg.remote.new_chat_folder)
+            except ValueError:
+                pass  # gone since: the server's own
+        return os.path.abspath(os.path.expanduser(self.cfg.brain.workdir)) if self.cfg.brain.workdir else os.getcwd()
+
+    def new_chat_mode(self) -> str:
+        return self.cfg.remote.new_chat_mode or self.cfg.brain.mode
+
+    def _prepare_chat(self, cfg: Config | None = None, workdir: str = "", mode: str = "") -> tuple:
         """The slow part of opening a chat, kept off the event loop: the saved defaults (a config
         read), the provider check (it may probe a server for a couple of seconds) and the brain.
         Returns (brain, cfg, note); open_chat registers them."""
@@ -1915,6 +1933,8 @@ class Hub:
             self.log(moved)
         if workdir:
             cfg.brain.workdir = workdir  # the folder picked for this chat on the phone; "" keeps the server's own
+        if mode:
+            cfg.brain.mode = mode
         return create_brain(cfg.brain, voice_mode=False, continue_session=False), cfg, retired
 
     def open_chat(self, brain=None, cfg: Config | None = None, title: str = "",
@@ -2658,6 +2678,32 @@ class Hub:
         own_ask, own_deny = self._own_rules
         return list(dict.fromkeys(own_ask + ask)), list(dict.fromkeys(own_deny + deny))
 
+    def permissions_changed(self, values: dict) -> None:
+        """New [brain] rules from Settings (permissions.py): new chats start with them, open chats and scouts'
+        threads take them from their next call (a kept Claude process restarts for its new command line), and
+        when scouts' defaults changed every scout is sent again with its rules."""
+        from vision.projects import set_default_rules
+
+        brain = self.cfg.brain
+        scouts_before = dict(getattr(brain, "scout_rules", None) or {})
+        for key, value in values.items():
+            setattr(brain, key, copy.deepcopy(value))
+        self._own_rules = (list(brain.ask_tools or []), list(brain.denied_tools or []))
+        set_default_rules(brain.scout_rules)
+        for chat in list(self.chats.values()):
+            if not isinstance(chat, Chat):
+                continue  # a terminal's chat runs on that terminal's own config
+            chat._own_rules = (list(self._own_rules[0]), list(self._own_rules[1]))
+            chat._own_allow = list(brain.allow_tools or [])
+            project = self.projects.get(chat.project) if chat.project else None
+            if project is not None:
+                chat.set_project(project)  # its prompt states the rules too
+            else:
+                chat._apply_rules()
+        if brain.scout_rules != scouts_before:
+            for project in self.projects.list():
+                self.post_project(project)
+
     def request_approval(self, pid: str, target: str, tool: str, args: dict, rule: str | None) -> str | None:
         """File an approval request for a call that asks first (from a thread's worker, or the coordinator during
         a check-in): kept in approvals.json, an `approval` frame, a line of activity, and a push unless notify is
@@ -3205,8 +3251,11 @@ class Hub:
                 except ValueError as e:
                     await ws.send_json({"type": "error", "text": str(e)})
                     return
+            elif self.cfg.remote.new_chat_folder:
+                workdir = self.new_chat_folder()  # the one Settings picked (the server's own once it's gone)
             prepared = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self._prepare_chat(self.picked_cfg(msg.get("model"), msg.get("effort")), workdir))
+                None, lambda: self._prepare_chat(self.picked_cfg(msg.get("model"), msg.get("effort")),
+                                                 workdir, self.new_chat_mode()))
             chat = self.open_chat(*prepared[:2], note=prepared[2])
             await ws.send_json({**chat.summary(), "opened": True})  # the asker switches to it
             self.post(chat.summary())                                # everyone else just lists it
@@ -3602,11 +3651,14 @@ def create_app(hub: Hub) -> FastAPI:
             for tab, entries, _ in model_tabs(hub.cfg, setup_rows=False)  # enabled + set up: the phone can't install
         ]
         efforts = [{"id": v, "label": label, "description": desc} for v, label, desc in effort_choices(model)]
-        return {"tabs": tabs, "efforts": efforts, "current": model, "effort": effort}
+        folder = hub.new_chat_folder()
+        return {"tabs": tabs, "efforts": efforts, "current": model, "effort": effort,
+                "workdir": folder, "folder": tilde(folder), "mode": hub.new_chat_mode()}
 
     @app.get("/defaults", dependencies=[Depends(bearer)])
     async def get_defaults() -> dict:
-        """The model and effort a new chat starts on: config.toml's [brain], as /default saves it."""
+        """What a new chat starts on: the model and effort (config.toml's [brain], as /default saves it),
+        and the folder and mode ([remote] new_chat_folder and new_chat_mode, else [brain]'s)."""
         def read() -> dict:
             model, effort = saved_brain_defaults() or (hub.cfg.brain.model, hub.cfg.brain.effort)
             return defaults_payload(model, effort)
@@ -3615,12 +3667,37 @@ def create_app(hub: Hub) -> FastAPI:
 
     @app.post("/defaults", dependencies=[Depends(bearer)])
     async def set_defaults(body: dict) -> dict:
-        """Save a new default, like /default in the terminal. Open chats keep their own model."""
+        """Save new defaults: {model?, effort?, workdir?, mode?}, each left alone when missing. The model is
+        /default in the terminal; the folder ("" = the server's own) and the mode are the phone's and the
+        desktop's only. Open chats keep their own."""
         from vision.models import coerce_effort, find
 
+        # Everything is checked before anything is saved, so a refusal changes nothing.
         model = str(body.get("model") or "")
-        if not find(model):
+        if "model" in body and not find(model):
             raise HTTPException(status_code=400, detail=f"unknown model {model!r}")
+        folder = str(body.get("workdir") or "").strip()
+        if folder:
+            try:
+                folder = usable_folder(folder)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from None
+        mode = str(body.get("mode") or "")
+        if "mode" in body and mode not in MODES:
+            raise HTTPException(status_code=400, detail=f"mode must be {' or '.join(MODES)}")
+
+        for key, field, value in (("workdir", "new_chat_folder", folder), ("mode", "new_chat_mode", mode)):
+            if key not in body:
+                continue
+            try:
+                save_config_value("remote", field, json.dumps(value))
+            except Exception as e:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"could not save config.toml: {e}")
+            setattr(hub.cfg.remote, field, value)
+            hub.log(f"new chats start in {(tilde(value) or 'the default folder') if key == 'workdir' else value + ' mode'}")
+        if "model" not in body:
+            model, effort = saved_brain_defaults() or (hub.cfg.brain.model, hub.cfg.brain.effort)
+            return defaults_payload(model, effort)
         effort, _ = coerce_effort(model, str(body.get("effort") or ""))
         try:
             save_brain_defaults(model, effort)
@@ -3630,6 +3707,32 @@ def create_app(hub: Hub) -> FastAPI:
         hub.cfg.brain.model, hub.cfg.brain.effort = model, effort
         hub.log(f"default saved from the phone → {model} · {effort or 'effort off'}")
         return defaults_payload(model, effort)
+
+    @app.get("/permissions", dependencies=[Depends(bearer)])
+    async def get_permissions() -> dict:
+        """What brains may do without asking (permissions.py): {allow, ask, deny, builtin, scouts, claude}."""
+        from vision.permissions import view
+
+        return await asyncio.get_running_loop().run_in_executor(None, view, hub.cfg.brain)
+
+    @app.post("/permissions", dependencies=[Depends(bearer)])
+    async def set_permissions(body: dict) -> dict:
+        """Change them: {allow?, ask?, deny?: [rule]} (each list given replaces that list) and
+        {scouts?: {action: does|asks|never|default}}. Saved in config.toml's [brain]; open chats take them
+        from their next call. Returns what GET does."""
+        from vision.permissions import clean, save, view
+
+        try:
+            values = clean(body, hub.cfg.brain)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
+        try:
+            save(values, hub.cfg.brain)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"could not save config.toml: {e}")
+        hub.permissions_changed(values)
+        hub.log("permissions saved from Settings")
+        return view(hub.cfg.brain)
 
     @app.exception_handler(VoiceOff)
     async def voice_off(request: Request, exc: VoiceOff) -> JSONResponse:
@@ -3766,7 +3869,7 @@ def create_app(hub: Hub) -> FastAPI:
         (no `path`), the default folder with the recent ones."""
         from vision.sessions import list_all_sessions
 
-        default = os.path.abspath(os.path.expanduser(hub.cfg.brain.workdir)) if hub.cfg.brain.workdir else os.getcwd()
+        default = hub.new_chat_folder()
         loop = asyncio.get_running_loop()
         try:
             listing = await loop.run_in_executor(None, list_folder, path or default)
@@ -4379,6 +4482,19 @@ def create_app(hub: Hub) -> FastAPI:
         if not gone:
             raise HTTPException(status_code=404, detail="no such fact")
         return {"ok": True}
+
+    @app.post("/memory/edit", dependencies=[Depends(bearer)])
+    async def memory_edit(body: dict) -> dict:
+        """Reword one fact in place, keeping its date: {line (as listed), text, topic?}."""
+        from vision import memory
+
+        try:
+            line = memory.rewrite(str(body.get("line") or ""), str(body.get("text") or ""), str(body.get("topic") or ""))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if line is None:
+            raise HTTPException(status_code=404, detail="no such fact")
+        return memory.entry(line)
 
     @app.post("/push/register", dependencies=[Depends(bearer)])
     async def push_register(body: dict) -> dict:

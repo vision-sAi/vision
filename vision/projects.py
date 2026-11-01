@@ -200,6 +200,17 @@ ACTIONS: dict[str, dict] = {
 # The scout's own `rm -r` rules, asked only when a path is outside its folder. Spelt `prefix *` (the same rule to
 # Claude Code as `prefix:*`) so they never pass for one of the user's own [brain] rules, which always ask.
 RM_RULES = ("Bash(rm -rf *)", "Bash(rm -fr *)", "Bash(rm -r *)")
+# Every scout's rule for an action it hasn't set itself, over its leash's default: [brain].scout_rules, which
+# the server sets at start and when Settings changes it (permissions.py). Empty: the leash decides.
+DEFAULT_RULES: dict[str, str] = {}
+
+
+def set_default_rules(rules: dict | None) -> None:
+    """Take [brain].scout_rules as every scout's defaults; anything that isn't an action and a choice is left out."""
+    DEFAULT_RULES.clear()
+    for action, choice in (rules if isinstance(rules, dict) else {}).items():
+        if action in ACTIONS and str(choice).strip().lower() in RULE_CHOICES:
+            DEFAULT_RULES[action] = str(choice).strip().lower()
 
 
 def clean_rules(body, old: dict | None = None) -> dict:
@@ -221,11 +232,12 @@ def clean_rules(body, old: dict | None = None) -> dict:
 
 
 def effective_rules(project: dict | None) -> dict[str, str]:
-    """Every action's rule for this project: its leash's default unless the user set one (on call has
-    check-ins' defaults: it only works when given something, and asks the same things then)."""
+    """Every action's rule for this project: what the user set for it, else every scout's default from Settings
+    (DEFAULT_RULES), else its leash's default (on call has check-ins' defaults: it only works when given
+    something, and asks the same things then)."""
     settings = clean_settings({}, (project or {}).get("settings"))
     leash = "checkins" if settings["leash"] == "on_call" else settings["leash"]
-    return {a: settings["rules"].get(a) or spec["defaults"][leash] for a, spec in ACTIONS.items()}
+    return {a: settings["rules"].get(a) or DEFAULT_RULES.get(a) or spec["defaults"][leash] for a, spec in ACTIONS.items()}
 
 
 def rule_patterns(project: dict | None, who: str = "thread") -> tuple[list[str], list[str]]:

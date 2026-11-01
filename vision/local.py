@@ -327,8 +327,8 @@ class LocalBrain:
         except ValueError:
             return None  # localtools.run reports the bad arguments itself
         rule = first_match(getattr(self.cfg, "ask_tools", None), name, args, self.workdir)
-        if rule is None or rule in allowed:
-            return None
+        if rule is None or rule in allowed or first_match(getattr(self.cfg, "allow_tools", None), name, args, self.workdir):
+            return None  # nothing asks, the user said yes for the turn, or an [brain].allow_tools exception covers it
         settled = gate(self, name, args, rule)  # a scout's approvals (projects.py)
         if settled is not None:
             return None if settled[0] else "Error: " + settled[1]

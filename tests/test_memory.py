@@ -110,6 +110,35 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(client.post("/memory/forget", json={"line": added["line"], "topic": "iphone-app"}, headers=auth).status_code, 404)
         self.assertEqual(len(m.facts()), 1)  # the core was never touched
 
+    def test_the_desktop_rewords_a_fact_in_place(self):
+        from types import SimpleNamespace
+
+        from fastapi.testclient import TestClient
+
+        from vision import server
+
+        m = self.memory
+        m.MEMORY_DIR.mkdir(parents=True)
+        m.MEMORY_FILE.write_text("# Vision's memory\n\n- 2025-01-02: likes tea\n- 2025-01-03: uses Fedora\n", encoding="utf-8")
+        m.remember("videos autoplay", "iphone-app", about="The iPhone app")
+        client = TestClient(server.create_app(SimpleNamespace(authorized=lambda t: t == "t", log=lambda _: None)))
+        auth = {"Authorization": "Bearer t"}
+        edit = lambda body: client.post("/memory/edit", json=body, headers=auth)
+        self.assertEqual(client.post("/memory/edit", json={}).status_code, 401)
+        got = edit({"line": "- 2025-01-02: likes tea", "text": "  likes green   tea "})
+        self.assertEqual(got.json(), {"line": "- 2025-01-02: likes green tea", "date": "2025-01-02", "text": "likes green tea"})
+        self.assertEqual(m.read(), "# Vision's memory\n\n- 2025-01-02: likes green tea\n- 2025-01-03: uses Fedora\n")
+        self.assertEqual(edit({"line": "- 2025-01-02: likes tea", "text": "x"}).status_code, 404)  # already reworded
+        self.assertEqual(edit({"line": "# Vision's memory", "text": "x"}).status_code, 404)    # only facts, never the header
+        self.assertEqual(edit({"line": "- 2025-01-03: uses Fedora", "text": "  "}).status_code, 400)
+        line = m.facts("iphone-app")[0]
+        self.assertEqual(edit({"line": line, "text": "videos never autoplay", "topic": "iphone-app"}).status_code, 200)
+        self.assertEqual([ln.split(": ", 1)[1] for ln in m.facts("iphone-app")], ["videos never autoplay"])
+        # A topic name can't reach outside the folder.
+        self.assertEqual(edit({"line": line, "text": "x", "topic": "../../etc/passwd"}).status_code, 404)
+        self.assertEqual(edit({"line": line, "text": "x", "topic": "/"}).status_code, 400)
+        self.assertEqual(sorted(p.name for p in m.MEMORY_DIR.iterdir()), ["MEMORY.md", "iphone-app.md"])
+
     def test_tidy_keeps_a_copy_and_says_what_good_memory_is(self):
         m = self.memory
         m.remember("uses Fedora")

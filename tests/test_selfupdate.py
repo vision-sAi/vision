@@ -203,7 +203,8 @@ class WatchTests(unittest.TestCase):
                 return next(answers)
             except StopIteration:
                 done.set()
-                time.sleep(60)
+                threading.Event().wait()  # parked for good: with every=0 a thread let go would spin on the real check,
+                # and land in later tests' patches (test_suggest's subprocess fakes, a minute on)
 
         with patch.object(selfupdate, "behind", side_effect=behind):
             selfupdate.watch(lambda c: said.append(c.available), every=0, retry=0)

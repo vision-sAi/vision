@@ -153,6 +153,23 @@ def drop(line: str, topic: str = "") -> bool:
     return True
 
 
+def rewrite(line: str, text: str, topic: str = "") -> str | None:
+    """Put new words in one fact, named by its whole line, keeping its date (the desktop's edit in place);
+    returns the line written, None when there is no such line."""
+    text = " ".join(text.split())
+    if not text:
+        raise ValueError("nothing to remember")
+    line = line.rstrip()
+    lines = read(topic).splitlines()
+    at = next((i for i, ln in enumerate(lines) if ln.startswith("- ") and ln.rstrip() == line), None)
+    if at is None:
+        return None
+    m = re.match(r"- (\d{4}-\d{2}-\d{2}): ", line)
+    lines[at] = f"- {m[1] if m else date.today().isoformat()}: {text}"
+    _path(topic).write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
+    return lines[at]
+
+
 def entry(line: str, file: str = "") -> dict:
     """A fact line taken apart for a screen: {line, date, text} (and the file it is in, for search hits)."""
     m = re.match(r"- (\d{4}-\d{2}-\d{2}): (.*)", line)

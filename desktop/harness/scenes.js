@@ -114,6 +114,31 @@
     "GET projects/p1/threads/t-review/diff": (q) => q?.path ? { patch: "@@ -10,3 +10,6 @@\n import { listen }\n+import { sendNotification } from \"@tauri-apps/plugin-notification\";\n+\n-// old\n const x = 1;" }
       : { base: "master", commits: 2, files: [{ path: "desktop/src/main.ts", added: 48, removed: 3 }, { path: "desktop/src-tauri/Cargo.toml", added: 1, removed: 0 }], more: 0 },
   };
+  // Settings › Permissions: the computer's rule lists, changed as the server would (a rule in two lists is refused).
+  const PERMISSIONS_HTTP = () => {
+    const ACTS = [["land", "Land a branch into the project folder", "asks", "asks"], ["publish", "Push or open a pull request", "asks", "does"],
+      ["send", "Send anything outside the computer (email, messages, comments)", "asks", "asks"],
+      ["destructive", "Delete files outside its folder, or install software", "asks", "asks"]];
+    const state = {
+      allow: ["Write(docs/**)"], ask: ["Bash(git push:*)", "Edit(.env)"], deny: ["Bash(sudo:*)", "Bash(rm -rf ~:*)", "Bash(claude:*)", "WebFetch(domain:example.com)"],
+      builtin: ["Bash(sudo:*)", "Bash(rm -rf ~:*)", "Bash(claude:*)"], scoutRules: {},
+      claude: { path: "~/.claude/settings.json", allow: ["Bash(npm test:*)"], ask: [], deny: ["Read(.env.production)"] },
+    };
+    const view = () => ({ allow: state.allow, ask: state.ask, deny: state.deny, builtin: state.builtin, claude: state.claude,
+      scouts: ACTS.map(([action, label, checkins, autonomous]) => ({ action, label, rule: state.scoutRules[action] ?? "", leash: { checkins, autonomous } })) });
+    return {
+      "GET permissions": view,
+      "POST permissions": (_q, body) => {
+        const next = { allow: body.allow ?? state.allow, ask: body.ask ?? state.ask, deny: body.deny ?? state.deny };
+        const all = [...next.allow, ...next.ask, ...next.deny];
+        const bad = all.find((r) => !/^[A-Za-z0-9_*?]+(\(.*\))?$/.test(r));
+        if (bad) throw `\`${bad}\` isn't a rule: write a tool, or a tool and what it's used on, e.g. Bash(git push:*)`;
+        Object.assign(state, next);
+        for (const [a, v] of Object.entries(body.scouts ?? {})) { if (v === "default") delete state.scoutRules[a]; else state.scoutRules[a] = v; }
+        return view();
+      },
+    };
+  };
   let facts = [...FACTS];
   const SCOUT_HTTP = {
     ...AGENT_HTTP,
@@ -194,6 +219,47 @@
       "POST scheduled/s2/run": {},
     };
   };
+  // Vision's own memory (vision/memory.py) behind GET/POST /memory…: the core under "", topics by name.
+  // One copy for the memory scenes: only one scene runs per page. (Pairs, not keys: shots.mjs takes a
+  // four-space `name: {` line for a scene.)
+  const MEMORY = Object.fromEntries([
+    ["", { about: "", facts: ["- 2026-03-14: The user's name is Ishaan; they live in Austin",
+      "- 2026-05-02: Prefers short replies and plain sentences, no exclamation marks",
+      "- 2026-09-30: Runs Fedora on spike, a desktop with an RTX 3070", "- 2025-11-08: Doesn't drink coffee after 2 pm"] }],
+    ["homelab", { about: "Homelab: the servers at home and what runs where", facts: ["- 2026-06-01: tank runs Ollama and Frigate",
+      "- 2026-07-12: Backups go to the NAS nightly at 03:00", "- 2026-08-20: laputa is the Proxmox host"] }],
+    ["iphone-app", { about: "The iPhone app, Vision Remote", facts: ["- 2026-10-01: Videos in chats never autoplay"] }],
+    ["travel", { about: "Travel: trips taken and planned", facts: [] }],
+  ]);
+  const memEntry = (line, topic) => {
+    const m = line.match(/^- (\d{4}-\d{2}-\d{2}): (.*)$/);
+    return { line, date: m?.[1] ?? "", text: m?.[2] ?? line.slice(2), ...(topic === undefined ? {} : { topic }) };
+  };
+  const memFile = (b) => {
+    const f = MEMORY[b?.topic ?? ""];
+    if (!f || !f.facts.includes(b.line)) throw new Error("no such fact");
+    return f;
+  };
+  const MEMORY_HTTP = {
+    "GET memory": (q) => {
+      if (q?.q) {
+        const words = q.q.toLowerCase().split(/\s+/);
+        return { topics: [], facts: Object.entries(MEMORY).flatMap(([name, f]) => f.facts.filter((ln) => words.every((w) => ln.toLowerCase().includes(w))).map((ln) => memEntry(ln, name))) };
+      }
+      const topic = q?.topic ?? "";
+      return { facts: MEMORY[topic].facts.map((ln) => memEntry(ln)), updated: now - 3600, topics: topic ? [] : Object.entries(MEMORY).filter(([n]) => n)
+        .map(([name, f]) => ({ name, about: f.about, count: f.facts.length, updated: now - 2 * D })) };
+    },
+    "POST memory": (q, b) => { const line = `- 2026-11-01: ${b.fact}`; MEMORY[b.topic ?? ""].facts.push(line); return memEntry(line); },
+    "POST memory/edit": (q, b) => { const f = memFile(b); const i = f.facts.indexOf(b.line); f.facts[i] = `- ${memEntry(b.line).date}: ${b.text}`; return memEntry(f.facts[i]); },
+    "POST memory/forget": (q, b) => { const f = memFile(b); f.facts.splice(f.facts.indexOf(b.line), 1); return { ok: true }; },
+  };
+  const memoryPage = [
+    { wait: 300, click: "[data-action=settings]" },
+    { wait: 100, click: ".set-nav-item[data-page=memory]" },
+  ];
+  const memText = () => [...document.querySelectorAll(".mem-fact .mem-text")].map((t) => t.textContent);
+  const memEditor = () => document.querySelector(".mem-edit");
 
   window.SCENES = {
     chat: { ...base, steps: [
@@ -242,6 +308,36 @@
       { wait: 300, click: ".side-row[data-action=new_chat]" },
       { wait: 200, click: "#folder" },
       { wait: 200, check: "the folder menu lists recent folders", fn: () => document.querySelector("#popover .menu-item") !== null },
+    ] },
+
+    newchats: { ...base, steps: [
+      { wait: 300, click: "[data-action=settings]" },
+      { wait: 100, click: ".set-nav-item[data-page=chats]" },
+      { wait: 150, check: "New chats sets the model, folder and mode", fn: () => document.querySelectorAll(".set-body .set-row").length === 3
+        && document.querySelector(".set-folder")?.textContent === "~" && document.querySelector("#settings .segmented button.on")?.textContent === "Auto" },
+      { run: () => [...document.querySelectorAll("#settings .segmented button")].find((b) => b.textContent === "Plan").click() },
+      { wait: 80, check: "picking Plan saves it on the computer", fn: () => window.__http.some((r) => r.method === "POST" && r.path === "defaults" && r.body?.mode === "plan") },
+      { click: ".set-folder" },
+      { wait: 200, check: "the folder button opens the composer's folder menu", fn: () => document.querySelector("#popover .menu-item") !== null },
+      { run: () => [...document.querySelectorAll("#popover .menu-item")].find((b) => b.textContent === "~/code/vision").click() },
+      { wait: 100, check: "picking a folder saves it and shows it", fn: () => window.__http.some((r) => r.method === "POST" && r.body?.workdir === "/home/me/code/vision")
+        && document.querySelector(".set-folder").textContent === "~/code/vision" },
+      { run: () => document.querySelector(".set-close").click() },
+      { wait: 50, click: ".side-row[data-action=new_chat]" },
+      { wait: 200, check: "a new chat then starts in that folder, in Plan", fn: () => document.querySelector("#folder-text").textContent === "~/code/vision"
+        && document.querySelector("#mode-text").textContent === "Plan" },
+      { type: ["#input", "Look over the docs"] },
+      { key: ["#input", "Enter"] },
+      { wait: 100, check: "the first message opens it there", fn: () => sentOf("new")[0]?.workdir === "/home/me/code/vision" },
+      { check: "and a Vision that opened it in Auto is switched to Plan", fn: () => sentOf("mode")[0]?.mode === "plan" && sentOf("mode")[0]?.chat === "n1" },
+      { wait: 100, click: "[data-action=settings]" },
+    ], onSend: (f, emit) => { if (f.type === "new") emit({ type: "chat", ...CHATS[0], chat: "n1", title: "", mode: "auto", opened: true }); } },
+
+    newchatsold: { ...base, http: { "GET defaults": () => ({ tabs: [{ tab: "Claude", models: [{ id: "opus", label: "Opus 5.5" }] }], efforts: [], current: "opus", effort: "" }) }, steps: [
+      { wait: 300, click: "[data-action=settings]" },
+      { wait: 100, click: ".set-nav-item[data-page=chats]" },
+      { wait: 150, check: "an older Vision keeps only the model, so only the model shows", fn: () => document.querySelectorAll(".set-body .set-row").length === 1
+        && document.querySelector(".set-body .chip-btn").textContent.includes("Opus 5.5") },
     ] },
 
     models: { ...base, steps: [
@@ -353,9 +449,217 @@
 
     settings: { ...base, voiceOn: true, steps: [
       { wait: 300, click: "[data-action=settings]" },
-      { wait: 200, check: "Settings opens", fn: () => !document.querySelector("#settings").hidden },
-      { check: "the default model shows", fn: () => document.querySelector(".set-section .chip-btn")?.textContent.includes("Opus 5.5") },
-      { check: "the voice picker lists voices", fn: () => document.querySelectorAll("#settings select option").length === 2 },
+      { wait: 200, check: "Settings opens on General, its pages down the left", fn: () => !document.querySelector("#settings").hidden
+        && document.querySelector(".set-nav-item.on")?.dataset.page === "general" && document.querySelectorAll(".set-nav-item").length >= 8
+        && document.querySelector("#settings-card .set-head h2").textContent === "General" },
+      { click: ".set-nav-item[data-page=chats]" },
+      { wait: 150, check: "the default model shows", fn: () => document.querySelector(".set-section .chip-btn")?.textContent.includes("Opus 5.5") },
+      { click: ".set-nav-item[data-page=voice]" },
+      { wait: 150, check: "the voice picker lists voices", fn: () => document.querySelectorAll("#settings select option").length === 2
+        && document.querySelector(".set-nav-item.on")?.dataset.page === "voice" },
+      { run: () => document.querySelector(".set-close").click() },
+      { wait: 50, click: "[data-action=settings]" },
+      { wait: 150, check: "it opens again where it was left", fn: () => document.querySelector(".set-nav-item.on")?.dataset.page === "voice" },
+    ] },
+
+    // Settings › Notifications: a muted kind and quiet hours hold notifications back; the board still moves.
+    // Thread frames notify whether or not the window is focused, so they stand in for every kind.
+    notifications: { ...base, http: AGENT_HTTP, steps: [
+      { wait: 300, click: ".side-row[data-action=agents]" },
+      { wait: 200, click: "[data-action=settings]" },
+      { wait: 100, click: ".set-nav-item[data-page=notifications]" },
+      { wait: 200, check: "a switch for each kind, all on", fn: () => [...document.querySelectorAll(".set-row[data-kind]")].map((r) => r.dataset.kind).join() === "replies,asks,approvals,review,reports"
+        && [...document.querySelectorAll(".set-row[data-kind] .toggle")].every((t) => t.classList.contains("on")) },
+      { check: "the system's permission shows as allowed", fn: () => document.querySelector(".set-permission")?.textContent === "Allowed" },
+      { check: "quiet hours start off, their times greyed", fn: () => document.querySelector(".quiet-from").disabled && document.querySelector(".quiet-to").value === "08:00" },
+      { run: () => document.querySelector(".set-row[data-kind=review] .toggle").click() },
+      { frame: { type: "thread", project: "p1", thread: { ...THREADS.p1[2], state: "ready_for_review" } } },
+      { wait: 300, check: "a muted kind doesn't notify", fn: () => !window.__notified.length },
+      { check: "but the board still moves the card", fn: () => document.querySelectorAll(".lane")[1].querySelectorAll(".thread-card").length === 2 },
+      { frame: { type: "thread", project: "p1", thread: { ...THREADS.p1[0], state: "working" } } },
+      { frame: { type: "thread", project: "p1", thread: { ...THREADS.p1[0], state: "waiting_on_you" } } },
+      { wait: 100, check: "a kind left on notifies, with the system's sound", fn: () => window.__notified.length === 1
+        && window.__notified[0].title === "Vision desktop app: needs you" && window.__notified[0].sound === "message-new-instant" },
+      { run: () => {
+        const hhmm = (d) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+        const set = (sel, d) => { const i = document.querySelector(sel); i.value = hhmm(d); i.dispatchEvent(new Event("change")); };
+        document.querySelector(".quiet-on").click();
+        set(".quiet-from", new Date(Date.now() - 3600e3));
+        set(".quiet-to", new Date(Date.now() + 3600e3));
+      } },
+      { frame: { type: "thread", project: "p1", thread: { ...THREADS.p1[0], state: "working" } } },
+      { frame: { type: "thread", project: "p1", thread: { ...THREADS.p1[0], state: "waiting_on_you" } } },
+      { wait: 300, check: "quiet hours hold one back", fn: () => window.__notified.length === 1 && !document.querySelector(".quiet-from").disabled },
+      { check: "while the badge still counts it", fn: () => document.querySelector("#agents-badge").textContent !== "" && !document.querySelector("#agents-badge").hidden },
+      { run: () => { document.querySelector(".quiet-on").click(); [...document.querySelectorAll(".set-row")].find((r) => r.textContent.includes("Play a sound")).querySelector(".toggle").click(); } },
+      { frame: { type: "thread", project: "p1", thread: { ...THREADS.p1[0], state: "working" } } },
+      { frame: { type: "thread", project: "p1", thread: { ...THREADS.p1[0], state: "waiting_on_you" } } },
+      { wait: 100, check: "out of quiet hours it notifies again, silently with the sound off", fn: () => window.__notified.length === 2 && !window.__notified[1].sound },
+      { click: ".set-test" },
+      { wait: 100, check: "Send shows a test notification", fn: () => window.__notified.at(-1)?.body === "Notifications are working." },
+      { check: "the choices are kept", fn: () => { const p = JSON.parse(localStorage.getItem("notifications")); return p.off.join() === "review" && p.sound === false && p.quiet.on === false; } },
+      { run: () => { document.querySelector(".quiet-on").click(); document.querySelector(".set-body").scrollTop = 1e4; } },  // for the picture: quiet hours on, the bottom of the page
+    ] },
+    notifypermission: { ...base, notifyPermission: "default", steps: [
+      { wait: 300, click: "[data-action=settings]" },
+      { wait: 100, click: ".set-nav-item[data-page=notifications]" },
+      { wait: 200, check: "without the system's permission there's a button to ask", fn: () => document.querySelector(".set-permission")?.tagName === "BUTTON" },
+      { click: ".set-permission" },
+      { wait: 200, check: "which asks, and then it shows as allowed", fn: () => document.querySelector(".set-permission")?.textContent === "Allowed" },
+    ] },
+
+    // Settings › Shortcuts: every key as caps; the dictation keys take a new combination and mic.ts follows.
+    shortcuts: { ...base, voiceOn: true, transcribe: true, mic: {}, heard: "hello", steps: [
+      { wait: 300, click: "[data-action=settings]" },
+      { wait: 100, click: ".set-nav-item[data-page=shortcuts]" },
+      { wait: 150, check: "shortcuts are grouped", fn: () => [...document.querySelectorAll(".set-section h3")].map((h) => h.textContent).join() === "Dictation,Window,Chat,Find in chat,Scouts,Editing" },
+      { check: "drawn as Linux key caps", fn: () => capsOf("New chat") === "Ctrl N" && capsOf("Send") === "Enter" && capsOf("Stop the reply") === "Ctrl . Esc"
+        && [...document.querySelectorAll(".keys-btn .keycap")].map((k) => k.textContent).join(" ") === "Ctrl Shift Space" },
+      { check: "the dictation keys aren't changed yet", fn: () => document.querySelector(".keys-reset").hidden },
+      { click: ".keys-btn" },
+      { wait: 50, check: "a click waits for the new keys", fn: () => document.querySelector(".keys-btn").classList.contains("listening") },
+      { run: () => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true })) },
+      { wait: 50, check: "Esc keeps the old ones, and leaves Settings open", fn: () => !document.querySelector(".keys-btn").classList.contains("listening") && !document.querySelector("#settings").hidden },
+      { click: ".keys-btn" },
+      { run: () => press({ key: "k", code: "KeyK", ctrlKey: true }) },
+      { wait: 50, check: "keys already taken are refused", fn: () => document.querySelector(".keys-dictation .set-text .dim").textContent.includes("“Search chats”")
+        && document.querySelector(".keys-btn").classList.contains("listening") },
+      { run: () => press({ key: "d", code: "KeyD" }) },
+      { wait: 50, check: "so is a key without a modifier", fn: () => document.querySelector(".keys-dictation .set-text .dim").textContent.startsWith("Hold Ctrl") },
+      { run: () => { press({ key: "Control", code: "ControlLeft", ctrlKey: true }); press({ key: "Alt", code: "AltLeft", ctrlKey: true, altKey: true }); press({ key: "d", code: "KeyD", ctrlKey: true, altKey: true }); } },
+      { wait: 50, check: "a free combination is taken and kept", fn: () => localStorage.getItem("dictation-keys") === "Mod+Alt+KeyD"
+        && [...document.querySelectorAll(".keys-btn .keycap")].map((k) => k.textContent).join(" ") === "Ctrl Alt D" && !document.querySelector(".keys-reset").hidden },
+      { run: () => document.querySelector(".set-close").click() },
+      { wait: 50, check: "the mic's tooltip names the new keys", fn: () => mic().title.includes("(Ctrl+Alt+D)") },
+      { run: () => press({ key: " ", code: "Space", ctrlKey: true, shiftKey: true }) },
+      { wait: 300, check: "the old keys no longer dictate", fn: () => !mic().classList.contains("recording") },
+      { run: () => press({ key: "d", code: "KeyD", ctrlKey: true, altKey: true }) },
+      { wait: 600, check: "the new ones do", fn: () => mic().classList.contains("recording") },
+      { run: () => window.dispatchEvent(new KeyboardEvent("keyup", { key: "d", code: "KeyD", ctrlKey: true, altKey: true, bubbles: true })) },
+      { wait: 500, check: "and letting go of them transcribes", fn: () => window.__transcribed.length === 1 && !mic().classList.contains("recording") },
+      { click: "[data-action=settings]" },
+      { wait: 150, click: ".keys-reset" },
+      { wait: 50, check: "Reset puts the keys back", fn: () => localStorage.getItem("dictation-keys") === null && document.querySelector(".keys-reset").hidden
+        && mic().title.includes("(Ctrl+Shift+Space)") },
+    ] },
+    shortcutsmac: { ...base, os: "macos", steps: [
+      { wait: 300, click: "[data-action=settings]" },
+      { wait: 100, click: ".set-nav-item[data-page=shortcuts]" },
+      { wait: 150, check: "on a Mac the caps say ⌘ and ⇧, and Return", fn: () => capsOf("New scout") === "⌘ ⇧ N" && capsOf("Send") === "Return"
+        && [...document.querySelectorAll(".keys-btn .keycap")].map((k) => k.textContent).join(" ") === "⌘ ⇧ Space" },
+    ] },
+
+    permissions: { ...base, http: PERMISSIONS_HTTP(), steps: [
+      { wait: 300, click: "[data-action=settings]" },
+      { wait: 100, click: ".set-nav-item[data-page=permissions]" },
+      { wait: 200, check: "the rules show in words over the rule itself, in their lists", fn: () => {
+        const row = document.querySelector("[data-kind=ask] .perm-row[data-rule='Bash(git push:*)']");
+        return row?.querySelector(".perm-label").textContent === "Run commands starting with git push"
+          && row.querySelector(".segmented .on")?.textContent === "Ask"
+          && document.querySelectorAll("[data-kind=deny] .perm-row").length === 4;
+      } },
+      { check: "Vision's own defaults are marked", fn: () => !!document.querySelector("[data-kind=deny] .perm-row[data-rule='Bash(sudo:*)'] .perm-tag") },
+      { check: "a file rule reads as one", fn: () => document.querySelector(".perm-row[data-rule='Write(docs/**)'] .perm-label")?.textContent === "Create or overwrite files matching docs/**" },
+      { check: "Claude Code's own rules are shown read only, with where they live", fn: () => document.querySelectorAll(".perm-claude .perm-row.readonly").length === 2
+        && !document.querySelector(".perm-claude .segmented") && document.querySelector(".perm-claude .perm-hint code")?.textContent === "~/.claude/settings.json" },
+      { check: "it says which brains only get them as instructions", fn: () => [...document.querySelectorAll(".perm-who")].some((r) => r.textContent.startsWith("Codex")) },
+      { check: "scouts' defaults follow the leash until set, and say what that means", fn: () => document.querySelector(".perm-scouts [data-action=publish] .segmented .on")?.textContent === "Leash"
+        && document.querySelector(".perm-scouts [data-action=publish] .dim")?.textContent === "Leash: asks on Check-ins, does it on Autonomous." },
+    ] },
+
+    permissionsedit: { ...base, http: PERMISSIONS_HTTP(), steps: [
+      { wait: 300, click: "[data-action=settings]" },
+      { wait: 100, click: ".set-nav-item[data-page=permissions]" },
+      { wait: 200, type: [".perm-input", "npm publish"] },
+      { wait: 50, check: "a typed command becomes a rule, previewed", fn: () => document.querySelector(".perm-preview code")?.textContent === "Bash(npm publish:*)" },
+      { run: () => document.querySelector(".perm-add .segmented button:nth-child(3)").click() },
+      { run: () => document.querySelector(".perm-add-btn").click() },
+      { wait: 150, check: "Add sends the whole list with it", fn: () => window.__http.some((r) => r.method === "POST" && r.path === "permissions"
+        && r.body?.deny?.at(-1) === "Bash(npm publish:*)") && !!document.querySelector("[data-kind=deny] .perm-row[data-rule='Bash(npm publish:*)']") },
+      { run: () => [...document.querySelector(".perm-row[data-rule='Edit(.env)'] .segmented").children].find((b) => b.textContent === "Never").click() },
+      { wait: 150, check: "the picker moves a rule to another list", fn: () => !!document.querySelector("[data-kind=deny] .perm-row[data-rule='Edit(.env)']")
+        && !document.querySelector("[data-kind=ask] .perm-row[data-rule='Edit(.env)']") },
+      { run: () => document.querySelector(".perm-row[data-rule='Write(docs/**)'] .perm-remove").click() },
+      { wait: 150, check: "and the cross takes one away", fn: () => !document.querySelector(".perm-row[data-rule='Write(docs/**)']")
+        && document.querySelector("[data-kind=allow] .perm-empty")?.textContent === "No exceptions." },
+      { run: () => [...document.querySelector(".perm-scouts [data-action=publish] .segmented").children].find((b) => b.textContent === "Asks").click() },
+      { wait: 150, check: "a scouts' default can be set for every scout", fn: () => window.__http.some((r) => r.body?.scouts?.publish === "asks")
+        && document.querySelector(".perm-scouts [data-action=publish] .segmented .on")?.textContent === "Asks" },
+      { type: [".perm-input", "Bash(git push:*)"] },
+      { run: () => document.querySelector(".perm-add .segmented button:nth-child(1)").click() },
+      { run: () => document.querySelector(".perm-add-btn").click() },
+      { wait: 150, check: "adding a rule that's in another list moves it", fn: () => !!document.querySelector("[data-kind=allow] .perm-row[data-rule='Bash(git push:*)']")
+        && !document.querySelector("[data-kind=ask] .perm-row[data-rule='Bash(git push:*)']") },
+      { type: [".perm-input", "Edit(.env"] },
+      { run: () => document.querySelector(".perm-add-btn").click() },
+      { wait: 150, check: "a rule the computer refuses says why and nothing changes", fn: () => document.querySelector("#toast").textContent.includes("isn't a rule")
+        && !document.querySelector(".perm-row[data-rule='Edit(.env']") },
+      { run: () => { document.querySelector("#toast").hidden = true; document.querySelector(".perm-add").scrollIntoView({ block: "start" }); } },
+    ] },
+
+    memory: { ...base, http: MEMORY_HTTP, steps: [
+      ...memoryPage,
+      { wait: 200, check: "Memory lists the profile's facts with their dates", fn: () => memText().length === 4 && memText()[0].startsWith("The user's name is Ishaan")
+        && document.querySelector(".mem-fact .mem-date")?.textContent.length > 0 },
+      { check: "and the areas, each with what it covers and how many facts", fn: () => [...document.querySelectorAll(".mem-topic")].map((r) => r.querySelector(".mem-topic-title").textContent + "/" + r.querySelector(":scope > .dim").textContent).join()
+        === "Homelab/3 facts,iPhone app/1 fact,Travel/0 facts" && document.querySelector(".mem-topic .dim")?.textContent === "The servers at home and what runs where" },
+      { click: ".mem-fact:nth-child(2) .mem-text" },
+      { wait: 80, check: "clicking a fact opens it for editing, holding its words", fn: () => memEditor()?.value === "Prefers short replies and plain sentences, no exclamation marks" },
+      { run: () => { memEditor().value = "Prefers short replies"; } },
+      { key: [".mem-edit", "Enter"] },
+      { wait: 150, check: "Return rewords it in place", fn: () => window.__http.some((r) => r.path === "memory/edit" && r.body.line === "- 2026-05-02: Prefers short replies and plain sentences, no exclamation marks"
+        && r.body.text === "Prefers short replies" && r.body.topic === "") && memText()[1] === "Prefers short replies" && !memEditor() },
+      { click: ".mem-fact:nth-child(3) .mem-act[title=Edit]" },
+      { wait: 80, run: () => { memEditor().value = "something else"; } },
+      { key: [".mem-edit", "Escape"] },
+      { wait: 80, check: "Escape puts it back without saving, and leaves Settings open", fn: () => !memEditor() && memText()[2] === "Runs Fedora on spike, a desktop with an RTX 3070"
+        && window.__http.filter((r) => r.path === "memory/edit").length === 1 && !document.querySelector("#settings").hidden },
+      { click: ".mem-fact:nth-child(4) .mem-forget" },
+      { wait: 150, check: "the bin forgets a fact", fn: () => window.__http.some((r) => r.path === "memory/forget" && r.body.line === "- 2025-11-08: Doesn't drink coffee after 2 pm") && memText().length === 3 },
+      { click: ".mem-add" },
+      { wait: 80, run: () => { memEditor().value = "Has a cat called Miso"; } },
+      { key: [".mem-edit", "Enter"] },
+      { wait: 200, check: "Add a fact saves to the profile and opens a box for the next", fn: () => window.__http.some((r) => r.method === "POST" && r.path === "memory" && r.body.fact === "Has a cat called Miso" && r.body.topic === "")
+        && memText().includes("Has a cat called Miso") && memEditor()?.value === "" },
+      { run: () => memEditor().blur() },
+      { wait: 100, check: "an empty box closes when left", fn: () => !memEditor() && !!document.querySelector(".mem-add") },
+      { click: ".mem-fact:nth-child(1) .mem-text" },
+    ] },
+    memorytopic: { ...base, http: MEMORY_HTTP, steps: [
+      ...memoryPage,
+      { wait: 200, click: ".mem-topic[data-topic=homelab]" },
+      { wait: 150, check: "an area opens on its own facts, under its name and what it covers", fn: () => document.querySelector(".mem-head h3")?.textContent === "Homelab"
+        && memText().join() === "tank runs Ollama and Frigate,Backups go to the NAS nightly at 03:00,laputa is the Proxmox host" },
+      { click: ".mem-fact:nth-child(1) .mem-text" },
+      { wait: 80, run: () => { memEditor().value = "tank runs Ollama, Frigate and Home Assistant"; memEditor().blur(); } },
+      { wait: 150, check: "clicking away saves an edit, in that area's file", fn: () => window.__http.some((r) => r.path === "memory/edit" && r.body.topic === "homelab") && memText()[0] === "tank runs Ollama, Frigate and Home Assistant" },
+      { click: ".mem-add" },
+      { wait: 80, run: () => { memEditor().value = "kanade is a Raspberry Pi"; } },
+      { key: [".mem-edit", "Enter"] },
+      { wait: 200, check: "a new fact goes into the open area", fn: () => window.__http.some((r) => r.path === "memory" && r.body?.topic === "homelab") && MEMORY.homelab.facts.length === 4 },
+      { key: [".mem-edit", "Escape"] },
+      { wait: 100, click: ".mem-back" },
+      { wait: 150, check: "Back returns to the list, its count up to date", fn: () => document.querySelector(".mem-topic[data-topic=homelab] > .dim")?.textContent === "4 facts" },
+      { click: ".mem-topic[data-topic=travel]" },
+      { wait: 150, check: "an empty area says so", fn: () => document.querySelector(".mem-none")?.textContent === "Nothing here yet." },
+      { click: ".mem-back" },
+      { wait: 150, click: ".mem-topic[data-topic=homelab]" },
+    ] },
+    memorysearch: { ...base, http: MEMORY_HTTP, steps: [
+      ...memoryPage,
+      { wait: 200, type: [".mem-search input", "the"] },
+      { wait: 350, check: "the search looks through every file, saying where each fact is", fn: () => [...document.querySelectorAll(".mem-fact .mem-file")].map((b) => b.textContent).join() === "Profile,Homelab,Homelab"
+        && window.__http.some((r) => r.path === "memory" && r.query?.q === "the") },
+      { type: [".mem-search input", "zebra"] },
+      { wait: 350, check: "and says when nothing matches", fn: () => document.querySelector(".mem-empty")?.textContent === "Nothing in memory mentions “zebra”." },
+      { type: [".mem-search input", "nas"] },
+      { wait: 350, click: ".mem-fact .mem-text" },
+      { wait: 80, run: () => { memEditor().value = "Backups go to the NAS nightly at 02:00"; } },
+      { key: [".mem-edit", "Enter"] },
+      { wait: 200, check: "a hit can be edited where it is found", fn: () => MEMORY.homelab.facts[1] === "- 2026-07-12: Backups go to the NAS nightly at 02:00" && memText()[0] === "Backups go to the NAS nightly at 02:00" },
+      { click: ".mem-file" },
+      { wait: 200, check: "and its file opened, which clears the search", fn: () => document.querySelector(".mem-head h3")?.textContent === "Homelab" && document.querySelector(".mem-search input").value === "" },
+      { type: [".mem-search input", "o"] },
     ] },
 
     agents: { ...base, http: AGENT_HTTP, asleep: [{ from: now - 9 * 3600, to: now - 2 * 3600 }], steps: [
@@ -418,6 +722,38 @@
 
     oldserver: { ...base, protocol: 0, steps: [
       { wait: 300, check: "an older Vision is called out", fn: () => document.querySelector("#notice.urgent") !== null },
+    ] },
+
+    about: { ...base, update: "vision upgrade", appUpdate: "0.2.0", steps: [
+      { wait: 300, click: "[data-action=settings]" },
+      { wait: 100, click: ".set-nav-item[data-page=about]" },
+      { wait: 150, check: "About shows both versions and the computer", fn: () => document.querySelector(".set-body").textContent.includes("Vision desktop 0.1.0")
+        && document.querySelector(".set-body").textContent.includes("Vision 0.9.3")
+        && [...document.querySelectorAll(".set-section h3")].map((h) => h.textContent).join("|") === "This app|Vision on this computer|Links" },
+      { run: () => buttonIn("Vision desktop", "Check for updates").click() },
+      { wait: 150, check: "Check for updates finds the new app", fn: () => rowOf("Vision desktop").textContent.includes("Vision desktop 0.2.0 is out.") && buttonIn("Vision desktop", "Restart to update") },
+      { check: "a newer Vision here can be upgraded from the app", fn: () => buttonIn("Vision 0.9.3", "Upgrade Vision") !== undefined },
+      { run: () => buttonIn("Vision 0.9.3", "Upgrade Vision").click() },
+      { wait: 400, check: "which runs vision upgrade and says what happens next", fn: () => rowOf("Vision 0.9.3").textContent.includes("Vision restarts once every reply has finished")
+        && document.querySelector("#notice").hidden },
+      { check: "and the links open GitHub", fn: () => rowOf("Release notes").querySelector("button")?.textContent === "Open" && rowOf("Guide") !== undefined },
+    ] },
+
+    aboutcheckout: { ...base, update: "cd ~/code/vision && git pull", installKind: "dev", steps: [
+      { wait: 300, click: "[data-action=settings]" },
+      { wait: 100, click: ".set-nav-item[data-page=about]" },
+      { wait: 150, check: "a development build says updates come with releases", fn: () => rowOf("Vision desktop").textContent.includes("Updates come with releases")
+        && !rowOf("Vision desktop").querySelector("button") },
+      { check: "a Vision run from a checkout shows the command instead of a button", fn: () => document.querySelector(".set-command code")?.textContent === "cd ~/code/vision && git pull"
+        && !buttonIn("Vision 0.9.3", "Upgrade Vision") },
+    ] },
+
+    aboutcurrent: { ...base, steps: [
+      { wait: 300, click: "[data-action=settings]" },
+      { wait: 100, click: ".set-nav-item[data-page=about]" },
+      { wait: 150, run: () => buttonIn("Vision desktop", "Check for updates").click() },
+      { wait: 150, check: "with nothing newer it says so", fn: () => rowOf("Vision desktop").textContent.includes("This is the newest version.")
+        && rowOf("Vision 0.9.3").textContent.includes("Up to date.") && !document.querySelector(".set-command") },
     ] },
 
     connect: { ...base, steps: [{ wait: 300, click: "#computer" }] },
@@ -791,6 +1127,7 @@
       { check: "banked resets get a row each", fn: () => document.querySelectorAll(".usage-reset").length === 2 },
       { run: () => document.querySelector("#settings-card .set-head .icon-btn:last-child").click() },
       { wait: 80, click: "[data-action=settings]" },
+      { wait: 100, click: ".set-nav-item[data-page=accounts]" },
       { wait: 150, check: "Settings has a way into Usage", fn: () => [...document.querySelectorAll(".set-section h3")].some((h) => h.textContent === "Usage") },
       { run: () => [...document.querySelectorAll(".set-row")].find((r) => r.textContent.includes("Subscription usage")).querySelector("button").click() },
       { wait: 150, check: "which opens it again, refreshed", fn: () => document.querySelector("#settings-card h2")?.textContent === "Usage" && window.__http.filter((r) => r.path === "usage").length === 2 },
@@ -900,7 +1237,15 @@
     ] },
   };
 
+  function rowOf(label) { return [...document.querySelectorAll(".set-row")].find((r) => r.querySelector(".set-text > div")?.textContent.startsWith(label)); }
+  function buttonIn(label, text) { return [...rowOf(label)?.querySelectorAll("button") ?? []].find((b) => b.textContent === text); }
   function mic() { return document.querySelector("#mic"); }
+  function press(init) { window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); }
+  /** The key caps on the Shortcuts row for `what`, space-separated (an "or" between two combos shows too). */
+  function capsOf(what) {
+    const row = [...document.querySelectorAll(".set-row")].find((r) => r.querySelector(".set-text div")?.textContent === what);
+    return row ? [...row.querySelectorAll(".keycap")].map((k) => k.textContent).join(" ") : "";
+  }
   function micPress() { mic().dispatchEvent(new PointerEvent("pointerdown", { button: 0, pointerId: 1, bubbles: true, cancelable: true })); }
   function micRelease() { mic().dispatchEvent(new PointerEvent("pointerup", { button: 0, pointerId: 1, bubbles: true })); }
 })();

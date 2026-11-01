@@ -119,6 +119,14 @@ ends, No tells the model you declined and it carries on without it. Claude Code 
 servers it runs tools for (`[local]` and `[providers.*]`); Codex, Grok and ACP agents are only asked in
 their prompt to check with you first, so for them it is advisory. Nothing asks in plan mode (there is
 nothing to write), and a worker thread that hits a rule comes back with a question instead.
+`allow_tools` under `[brain]` lists exceptions: a call an ask rule caught that one of them also covers runs
+without asking (`ask_tools = ["Bash(git push:*)"]` with `allow_tools = ["Bash(git push origin dev:*)"]`);
+`denied_tools` still wins, and a scout's chat and threads ignore the exceptions. The desktop app's
+**Settings › Permissions** shows the three lists as rows in words (asks first, always allowed, never
+allowed), adds a rule (a plain command like `git push` becomes `Bash(git push:*)`), moves one between lists
+and removes it, saving to config.toml (`GET/POST /permissions`); open chats take a change from their next
+step. It also shows, read only, the rules in Claude Code's own `~/.claude/settings.json`, which Claude Code
+applies to Claude chats itself.
 Codex and Grok have no Vision-wired plan-approval
 UI, so plan mode gives them a read-only sandbox and asks them to present the plan for you to approve by switching to auto.
 The phone has the same switch: the mode icon in a chat's composer (a bolt for auto, a clipboard for plan) sends `mode {chat, mode}`, which
@@ -253,6 +261,10 @@ memory folder under `~/.claude/projects/`; the index files are skipped), has one
 durable facts Vision's memory doesn't hold yet, and offers them as the same tick list, a page of eight at
 a time. `vision memory import FILE` (or `-` for stdin) reads anything else instead, such as a claude.ai
 memory export or what ChatGPT says it knows about you.
+The phone's Memory screen (Settings › Memory) and the desktop app's Settings › Memory show the same
+files: the profile, then each area with what it covers. On the desktop every fact can be reworded in
+place (click it; Return or clicking away saves, Escape puts it back, the date stays) or forgotten,
+"Add a fact" adds one to the file open, and the search box looks through every file at once.
 Changing between Claude, Codex and Grok with `/model` starts a fresh conversation because their native
 thread stores are separate; changing models within one provider keeps that provider's conversation.
 `--continue` resumes the most recent thread for whichever provider owns the selected model.
@@ -687,11 +699,19 @@ in its own voice: the best one installed for its language (the enhanced and prem
 Settings › Accessibility › Spoken Content).
 
 The desktop app's mic button, by the paperclip, dictates through the same Whisper: hold it (or Ctrl+Shift+Space,
-⌘⇧Space on a Mac) and talk, and when you let go the words land in the composer to read over before Return sends
+⌘⇧Space on a Mac, or the keys picked in Settings › Shortcuts) and talk, and when you let go the words land in the composer to read over before Return sends
 them. A click starts it and the next click stops it; Esc throws the recording away. The app records the
 microphone itself (macOS asks once) and sends a 16 kHz mono WAV to `POST /transcribe`. The button shows only
 when the computer has a voice extra installed (hello `transcribe`) and is greyed while the voice is off, when
 `/transcribe` answers 503.
+
+The desktop app notifies when a reply finishes or a chat asks something while its window isn't in front, when
+an agent's thread needs you or is ready for review, when a scout asks before running a command, and when a
+scout sends its status report. Settings › Notifications has a switch for each, the system's message sound,
+and quiet hours: every day between two times nothing notifies, while the sidebar and the tray still keep
+count. It also says whether the system lets Vision notify (with a button to ask) and sends a test. Reminders
+are notified by the computer Vision runs on (and a paired phone), not the app. Settings › Shortcuts lists
+every key the app answers to; the menu's are fixed, the dictation keys can be changed there.
 
 The app has Home Screen and Lock Screen widgets. **Projects** shows how many project threads are working, need
 you or are ready, and (medium size) the first few by name, each a tap away from its project; on the Lock Screen
@@ -725,6 +745,14 @@ to change or type straight over. The terminal does the same in its empty input b
 puts the guess in the box, Enter sends it. A terminal's own chat makes its guess itself (and passes it to
 the phone when the chat is listed there); one joined to a phone chat shows the server's. Calls get none, and
 `[remote] suggestions = false` turns it off everywhere.
+
+A chat started from the phone or the desktop app begins on the saved default model (`/default`), in
+`[remote] new_chat_folder` (empty: `[brain] workdir`, else the folder `vision serve` started in) and in
+`[remote] new_chat_mode` (empty: `[brain] mode`), so the terminal's own start is left alone. The desktop
+app's Settings › New chats sets all three (`GET`/`POST /defaults`, `{model?, effort?, workdir?, mode?}`); the
+folder button by the message box still picks another folder for one chat. Its Settings › About shows the
+app's version and the computer's, looks for a newer app, and when the computer's Vision is out of date runs
+`vision upgrade` from there (on this computer) or shows what to run (on another, or for a checkout).
 
 `vision service install` keeps `vision serve` running in the background, now and at every login, so
 the phone finds Vision whenever the computer is on: a systemd user unit on Linux
@@ -849,7 +877,9 @@ rules, and a call that asks first becomes an **approval request** in the scout's
 command and why it asks. Approve, edit the command and approve it, or deny; the thread carries on with
 other work meanwhile and is told to run it once you approve (that one call, once). Never is refused
 outright. An `rm -r` inside the thread's own worktree doesn't ask. Codex, Grok and ACP agents get the
-rules in their prompt only. Requests are kept in `approvals.json` beside the project.
+rules in their prompt only. Requests are kept in `approvals.json` beside the project. `scout_rules` under
+`[brain]` (Settings › Permissions › Scouts) sets an action for every scout that hasn't set its own, in
+place of the leash's default: `scout_rules = { publish = "asks" }`.
 
 ```bash
 vision project set <id> leash=autonomous rule.publish=never rule.send=default

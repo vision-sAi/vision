@@ -1,5 +1,6 @@
-// Dictation: hold the mic button (or Ctrl+Shift+Space, ⌘⇧Space on a Mac) and talk; let go and the words
-// land in the composer to read over before sending. A click starts it and the next click stops it.
+// Dictation: hold the mic button (or Ctrl+Shift+Space, ⌘⇧Space on a Mac, unless Settings › Shortcuts
+// changed it) and talk; let go and the words land in the composer to read over before sending. A click
+// starts it and the next click stops it.
 //
 // The page records the microphone itself (getUserMedia; lib.rs grants the web view's request) and makes a
 // 16 kHz mono WAV, what the phone sends and what the server's Whisper reads; the computer's Whisper does
@@ -8,6 +9,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { Mic, createElement } from "lucide";
+import * as shortcuts from "./settings/shortcuts";
 
 type State = "idle" | "starting" | "recording" | "transcribing";
 
@@ -37,7 +39,7 @@ let chunks: Float32Array[] = [];
 
 const button = () => document.getElementById("mic") as HTMLButtonElement;
 const isMac = () => document.documentElement.dataset.os === "macos" || /Mac/.test(navigator.platform);
-const keys = () => (isMac() ? "⌘⇧Space" : "Ctrl+Shift+Space");
+const keys = () => shortcuts.label(shortcuts.dictationKeys());  // Settings › Shortcuts can change them
 
 /** What the server says it can do: hello's `transcribe` and `voice_on`, then `voice_power` frames. */
 export function server(on: boolean, canTranscribe?: boolean | null) {
@@ -239,21 +241,23 @@ export function setup(h: typeof host) {
   b.addEventListener("click", (e) => { if (e.detail === 0) { press(); holding = false; } });
 
   window.addEventListener("keydown", (e) => {
+    if (shortcuts.capturing()) return; // Settings is taking these keys down as a new shortcut
     if (e.key === "Escape" && (state === "recording" || state === "starting")) {
       e.preventDefault(); // main.ts's Escape (stop the reply) leaves a handled one alone
       holding = false;
       stop(true);
       return;
     }
-    const mod = isMac() ? e.metaKey : e.ctrlKey;
-    if (e.code !== "Space" || !mod || !e.shiftKey || e.altKey) return;
+    if (shortcuts.comboOf(e) !== shortcuts.dictationKeys()) return;
     if (b.hidden || b.offsetParent === null) return; // no composer on screen
     e.preventDefault();
     if (!e.repeat) press();
   }, true);
   window.addEventListener("keyup", (e) => {
-    if (holding && (e.code === "Space" || e.key === "Shift" || e.key === "Control" || e.key === "Meta")) letGo();
+    const key = shortcuts.dictationKeys().split("+").pop();
+    if (holding && (e.code === key || e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta")) letGo();
   }, true);
+  window.addEventListener("dictation-keys", draw);  // the tooltip names the keys
   window.addEventListener("blur", () => { if (holding) letGo(); });
   draw();
 }
