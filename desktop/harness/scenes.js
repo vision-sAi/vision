@@ -353,9 +353,17 @@
 
     settings: { ...base, voiceOn: true, steps: [
       { wait: 300, click: "[data-action=settings]" },
-      { wait: 200, check: "Settings opens", fn: () => !document.querySelector("#settings").hidden },
-      { check: "the default model shows", fn: () => document.querySelector(".set-section .chip-btn")?.textContent.includes("Opus 5.5") },
-      { check: "the voice picker lists voices", fn: () => document.querySelectorAll("#settings select option").length === 2 },
+      { wait: 200, check: "Settings opens on General, its pages down the left", fn: () => !document.querySelector("#settings").hidden
+        && document.querySelector(".set-nav-item.on")?.dataset.page === "general" && document.querySelectorAll(".set-nav-item").length >= 8
+        && document.querySelector("#settings-card .set-head h2").textContent === "General" },
+      { click: ".set-nav-item[data-page=chats]" },
+      { wait: 150, check: "the default model shows", fn: () => document.querySelector(".set-section .chip-btn")?.textContent.includes("Opus 5.5") },
+      { click: ".set-nav-item[data-page=voice]" },
+      { wait: 150, check: "the voice picker lists voices", fn: () => document.querySelectorAll("#settings select option").length === 2
+        && document.querySelector(".set-nav-item.on")?.dataset.page === "voice" },
+      { run: () => document.querySelector(".set-close").click() },
+      { wait: 50, click: "[data-action=settings]" },
+      { wait: 150, check: "it opens again where it was left", fn: () => document.querySelector(".set-nav-item.on")?.dataset.page === "voice" },
     ] },
 
     agents: { ...base, http: AGENT_HTTP, asleep: [{ from: now - 9 * 3600, to: now - 2 * 3600 }], steps: [
@@ -791,6 +799,7 @@
       { check: "banked resets get a row each", fn: () => document.querySelectorAll(".usage-reset").length === 2 },
       { run: () => document.querySelector("#settings-card .set-head .icon-btn:last-child").click() },
       { wait: 80, click: "[data-action=settings]" },
+      { wait: 100, click: ".set-nav-item[data-page=accounts]" },
       { wait: 150, check: "Settings has a way into Usage", fn: () => [...document.querySelectorAll(".set-section h3")].some((h) => h.textContent === "Usage") },
       { run: () => [...document.querySelectorAll(".set-row")].find((r) => r.textContent.includes("Subscription usage")).querySelector("button").click() },
       { wait: 150, check: "which opens it again, refreshed", fn: () => document.querySelector("#settings-card h2")?.textContent === "Usage" && window.__http.filter((r) => r.path === "usage").length === 2 },

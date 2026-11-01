@@ -752,6 +752,21 @@ mark.find-hit.current { background: var(--warn); color: #1a1400; box-shadow: 0 0
 .set-about { margin: 18px 0 0; text-align: center; }
 .settings-card .segmented { margin: 0; flex: none; }
 .settings-card .segmented button { font-size: 12.5px; padding: 3px 12px; }
+/* Settings with its pages down the left: a fixed size, so moving between pages doesn't resize the sheet. */
+.settings-card.set-paged { width: min(780px, calc(100 * var(--vw) - 40px)); height: min(600px, calc(86 * var(--vh))); flex-direction: row; }
+.set-nav { width: 196px; flex: none; display: flex; flex-direction: column; gap: 1px; padding: 14px 10px; overflow-y: auto;
+  background: color-mix(in srgb, var(--text) 3.5%, transparent); border-right: 1px solid var(--line); }
+.set-nav-title { font-size: 11.5px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em; padding: 4px 10px 8px; }
+.set-nav-item { display: flex; align-items: center; gap: 9px; padding: 6px 10px; border: 0; border-radius: 7px; background: none;
+  color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.set-nav-item .icon { color: var(--dim); flex: none; }
+.set-nav-item:hover { background: var(--hover); }
+.set-nav-item.on { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.set-nav-item.on .icon { color: var(--accent); }
+.set-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.set-paged .set-head { padding-left: 24px; }
+.set-paged .set-body { flex: 1; padding: 4px 24px 20px; }
+.set-paged .set-section:first-child h3 { margin-top: 12px; }
 
 /* ---------------------------------------------------------------- agents board */
 .main.is-agents #transcript, .main.is-agents #welcome, .main.is-agents #dock { display: none !important; }

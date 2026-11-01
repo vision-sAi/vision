@@ -2,7 +2,6 @@
 // live in the Rust side (src-tauri/src/lib.rs); this page keeps the chats and draws them (render.ts).
 
 import { invoke } from "@tauri-apps/api/core";
-import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -12,10 +11,11 @@ import * as agents from "./agents";
 import * as scouts from "./scouts";
 import * as schedules from "./schedules";
 import * as usage from "./usage";
+import * as settings from "./settings";
 import * as mic from "./mic";
 import { buddy } from "./buddy";
 import { IconName, icon, placeIcons } from "./icons";
-import { closeSetup, firstRun, setupInit, step, subscriptions } from "./setup";
+import { closeSetup, firstRun, setupInit, step } from "./setup";
 import { initFind, openFind, refreshFind } from "./find";
 import { initCompact, setCompactAvailable } from "./compact";
 import {
@@ -293,7 +293,7 @@ function handle(ev: Json) {
     case "voice_power":
       voiceOn = !!ev.on;
       mic.server(voiceOn);
-      if (!$("settings").hidden) openSettings();
+      settings.refresh();
       return;
     case "error":
       branching = null;  // an edit that couldn't open its chat: the next chat that opens isn't it
@@ -1624,7 +1624,7 @@ function act(action: string) {
       else send({ type: "open_terminal", chat: c.chat });  // the server says how it went, as a toast
       break;
     }
-    case "settings": openSettings(); break;
+    case "settings": settings.open(); break;
     case "agents": view = "agents"; scouts.setCurrent(null); drawAll(); agents.loadAll(); break;
     case "new_scout": scouts.openNew(); break;
     case "scheduled": view = "scheduled"; scouts.setCurrent(null); drawAll(); schedules.load(); break;
@@ -1634,140 +1634,34 @@ function act(action: string) {
 
 // ---------------------------------------------------------------- settings
 
-function section(title: string, ...rows: HTMLElement[]): HTMLElement {
-  const box = el("section", "set-section");
-  box.append(el("h3", "", title), ...rows);
-  return box;
-}
-
-function setRow(label: string, hint: string, control: HTMLElement): HTMLElement {
-  const row = el("div", "set-row");
-  const text = el("div", "set-text");
-  text.append(el("div", "", label));
-  if (hint) text.append(el("div", "dim small", hint));
-  row.append(text, control);
-  return row;
-}
-
-function segmented(options: [string, string][], current: string, pick: (v: string) => void): HTMLElement {
-  const box = el("div", "segmented");
-  for (const [value, label] of options) {
-    const b = el("button", value === current ? "on" : "", label);
-    b.onclick = () => { box.querySelectorAll("button").forEach((x) => x.classList.remove("on")); b.classList.add("on"); pick(value); };
-    box.append(b);
-  }
-  return box;
-}
-
-function toggle(on: boolean, flip: (on: boolean) => void): HTMLElement {
-  const b = el("button", "toggle" + (on ? " on" : ""));
-  b.setAttribute("role", "switch");
-  b.onclick = () => { b.classList.toggle("on"); flip(b.classList.contains("on")); };
-  return b;
-}
-
-/** Settings: how the window looks, what a new chat starts on, the voice, and which computer this is. */
-async function openSettings() {
-  const card = $("settings-card");
-  card.classList.remove("scout-sheet");
-  const head = el("div", "set-head");
-  const close = el("button", "icon-btn");
-  close.append(icon("X", 16));
-  close.onclick = () => ($("settings").hidden = true);
-  head.append(el("h2", "", "Settings"), close);
-  const body = el("div", "set-body");
-  card.replaceChildren(head, body);
-  $("settings").hidden = false;
-
-  body.append(section("Appearance", setRow("Theme", "System follows your desktop's light or dark setting.",
-    segmented([["system", "System"], ["light", "Light"], ["dark", "Dark"]], localStorage.getItem("appearance") ?? "system", (v) => {
-      if (v === "system") localStorage.removeItem("appearance"); else localStorage.setItem("appearance", v);
-      applyAppearance();
-    }))));
-
-  const defaultsBtn = el("button", "chip-btn bordered", "…");
-  body.append(section("New chats", setRow("Model", "What a new chat starts on. Open chats keep their own.", defaultsBtn)));
-  http("GET", "defaults").then((data: Json) => {
-    defaultsBtn.textContent = modelLabel(data, data.current, data.effort);
-    defaultsBtn.append(icon("ChevronDown", 14));
-    defaultsBtn.onclick = (e) => {
-      e.stopPropagation();
-      modelMenu(defaultsBtn, data, (model) => http("GET", "models", { model }), async (model, effort, label) => {
-        try {
-          data = await http("POST", "defaults", undefined, { model, effort });
-          defaultsBtn.replaceChildren(document.createTextNode(label), icon("ChevronDown", 14));
-          if (draft && !draft.model) startDraft();
-        } catch (err) { toast(String(err)); }
-      });
-    };
-  }).catch(() => defaultsBtn.closest(".set-section")?.remove());
-
-  const voice = section("Voice", setRow("Vision's voice", "Speaks replies and reads them aloud. It runs on the computer's GPU.",
-    toggle(voiceOn, async (on) => {
-      try { voiceOn = (await http("POST", "voice/power", undefined, { on })).on; } catch (err) { toast(String(err)); }
-      openSettings();
-    })));
-  body.append(voice);
-  if (voiceOn) {
-    http("GET", "voice").then((data: Json) => {
-      const select = el("select", "select") as HTMLSelectElement;
-      for (const v of data.voices ?? []) {
-        const o = el("option", "", v.note ? `${v.id} · ${v.note}` : v.id) as HTMLOptionElement;
-        o.value = v.id;
-        o.selected = v.id === data.voice;
-        select.append(o);
-      }
-      select.onchange = () => http("POST", "voice", undefined, { voice: select.value }).catch((err) => toast(String(err)));
-      voice.append(setRow("Voice", "", select));
-    }).catch(() => {});
-    http("GET", "voice/rate").then((data: Json) => {
-      const wrap = el("div", "rate");
-      const range = el("input") as HTMLInputElement;
-      Object.assign(range, { type: "range", min: "0.5", max: "2", step: "0.05", value: String(data.rate ?? 1) });
-      const shown = el("span", "dim small", `${Number(range.value).toFixed(2)}×`);
-      range.oninput = () => (shown.textContent = `${Number(range.value).toFixed(2)}×`);
-      range.onchange = () => http("POST", "voice/rate", undefined, { rate: Number(range.value) }).catch((err) => toast(String(err)));
-      wrap.append(range, shown);
-      voice.append(setRow("Speed", "", wrap));
-    }).catch(() => {});
-  }
-
-  const showUsage = el("button", "chip-btn bordered", "Show…");
-  showUsage.onclick = () => usage.open();
-  body.append(section("Usage", setRow("Subscription usage", "How much of each plan's session and week is used, and when they reset.", showUsage)));
-
-  if (isLocal(paired?.url)) {
-    const manage = el("button", "chip-btn bordered", "Manage…");
-    manage.onclick = () => { $("settings").hidden = true; subscriptions(false); };
-    body.append(section("Subscriptions", setRow("Claude, ChatGPT, Grok", "Install and sign in to the subscriptions Vision works through.", manage)));
-  }
-
-  if (hasTray) {
-    body.append(section("Window", setRow("Keep running in the tray", "Closing the window leaves Vision running, so replies and agents can still notify you.",
-      toggle(localStorage.getItem("keep-in-tray") !== "off", (on) => {
-        localStorage.setItem("keep-in-tray", on ? "on" : "off");
-        invoke("set_keep_in_tray", { on });
-      }))));
-  }
-
-  const where = isLocal(paired?.url) ? "This computer" : paired?.url ?? "";
-  const change = el("button", "chip-btn bordered", "Change…");
-  change.onclick = () => { $("settings").hidden = true; showPairing(); };
-  const disconnect = el("button", "chip-btn bordered danger", "Disconnect");
-  disconnect.onclick = async () => {
+settings.setHost({
+  http, toast, modelMenu, modelLabel, showPairing, applyAppearance: () => applyAppearance(),
+  paired: () => paired,
+  local: () => isLocal(paired?.url),
+  machine: () => machine || hostOf(paired?.url),
+  serverVersion: () => serverVersion,
+  voiceOn: () => voiceOn,
+  setVoiceOn: (on) => { voiceOn = on; mic.server(voiceOn); },
+  hasTray: () => hasTray,
+  defaultsChanged: () => { if (draft && !draft.model) startDraft(); },
+  disconnect: async () => {
     await invoke("forget");
     chats.clear(); transcripts.clear(); questions.clear(); projects = []; active = null; draft = null; paired = null;
-    $("settings").hidden = true;
     $("app").hidden = true;
     showPairing();
-  };
-  const buttons = el("div", "set-buttons");
-  buttons.append(change, disconnect);
-  body.append(section("Computer", setRow(machine || hostOf(paired?.url) || "Vision", where, buttons)));
-
-  const version = await getVersion().catch(() => "");
-  body.append(el("p", "set-about dim small", `Vision desktop ${version}${serverVersion ? ` · Vision ${serverVersion} on ${machine || "the computer"}` : ""}`));
-}
+  },
+  checkAppUpdate: async () => {
+    if (installKind === "dev") return null;
+    appUpdate = await check();
+    drawAppUpdate();
+    return appUpdate ? { version: appUpdate.version, notes: appUpdate.body ?? "" } : null;
+  },
+  installAppUpdate: async () => {
+    if (!appUpdate || !(installKind === "app" || installKind === "appimage")) { openUrl(RELEASES); return; }
+    await appUpdate.downloadAndInstall();
+    await relaunch();
+  },
+});
 
 function setMode(mode: string) {
   if (draft) { draft.mode = mode; drawDock(); return; }
