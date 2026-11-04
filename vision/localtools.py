@@ -25,6 +25,8 @@ import urllib.request
 from html.parser import HTMLParser
 from pathlib import Path
 
+from vision import procs
+
 MAX_OUTPUT = 8_000  # characters of one tool result the model gets back (head and tail of anything longer)
 HISTORY_OUTPUT = 1_500  # what a result shrinks to once the turn is over and it sits in the transcript
 READ_LINES = 400  # default lines per Read
@@ -207,7 +209,10 @@ def _bash(args: dict, workdir: str, rules: list[str] | None, holder: dict, lock:
     with lock:
         if holder.get("cancelled"):
             return "Error: cancelled.", True
-        proc = subprocess.Popen(["bash", "-c", command], cwd=workdir, env=brain_env("local"), stdin=subprocess.DEVNULL,
+        exe = procs.bash()
+        if not exe:
+            return "Error: bash was not found. On Windows it comes with Git for Windows (git-scm.com).", True
+        proc = subprocess.Popen([exe, "-c", command], cwd=workdir, env=brain_env("local"), stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", encoding="utf-8")
         holder["proc"] = proc
     try:

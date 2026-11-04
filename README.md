@@ -37,6 +37,13 @@ curl -fsSL https://raw.githubusercontent.com/vision-sAi/vision/master/install.sh
 vision
 ```
 
+On Windows, in PowerShell (voice isn't available there yet; Git for Windows is needed for Claude Code and the shell tool):
+
+```powershell
+irm https://raw.githubusercontent.com/vision-sAi/vision/master/install.ps1 | iex
+vision
+```
+
 That is the whole install: it puts Vision in `~/.local/share/vision/app` with its own Python (through
 [uv](https://docs.astral.sh/uv/), fetched if you don't have it), links `vision` into `~/.local/bin`, and
 needs no sudo. Run it again to update. The first `vision` is a short guided setup. It asks which
@@ -108,7 +115,7 @@ Both are clients of `vision serve` on your machine; the conversations run there.
 
 - **iPhone.** Vision Remote, in `ios/`: chat, dictation, live voice calls and notifications. It isn't on the
   App Store; build it onto your phone under your own Apple team, as [ios/README.md](ios/README.md) explains.
-- **Desktop.** For macOS and Linux, from the [Releases](https://github.com/vision-sAi/vision/releases) page
+- **Desktop.** For macOS, Linux and Windows, from the [Releases](https://github.com/vision-sAi/vision/releases) page
   (or build it from `desktop/`, see [desktop/README.md](desktop/README.md)). The Mac app isn't signed with
   an Apple Developer ID, so allow it once in System Settings › Privacy & Security; it updates itself after that.
 

@@ -113,10 +113,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from vision import __version__
 from vision import agentlog
 from vision import selfupdate
+from vision import service
 from vision.brain import agent_frame, context_figure, tool_frame, warm_soon
 from vision.config import CONFIG_DIR, MODES, STATE_DIR, Config, save_brain_defaults, save_config_value, saved_brain_defaults
 from vision.sessions import claude_history
 from vision.planvoice import plan_answer, plan_question, plan_summary
+from vision.procs import WINDOWS
 from vision.projects import APPROVAL_PREFIX, CHECKIN_PREFIX, REPORT_PREFIX
 from vision.reply import status_label
 from vision.tts import SAMPLE_RATE, Speaker, StreamingSpeaker, log_voice_line
@@ -158,6 +160,8 @@ def open_terminal(chat_id: str, workdir: str) -> str:
     vision = shutil.which("vision") or "vision"
     cmd = f"{vision} --join {chat_id}"
     cwd = workdir if workdir and os.path.isdir(workdir) else os.path.expanduser("~")
+    if WINDOWS:
+        return _open_windows_terminal(vision, chat_id, cwd)
     if sys.platform == "darwin":
         return _open_mac_terminal(f"cd {shlex.quote(cwd)} && {cmd}")
     env = desktop_env()
@@ -180,6 +184,18 @@ def open_terminal(chat_id: str, workdir: str) -> str:
         subprocess.Popen(argv(path), cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         return os.path.basename(name)
     raise RuntimeError("no terminal emulator found (set $TERMINAL)")
+
+
+def _open_windows_terminal(vision: str, chat_id: str, cwd: str) -> str:
+    """Windows Terminal when it is here, a console window otherwise. `vision` is a batch file, so the id
+    has to be something cmd.exe has no opinion on."""
+    if not re.fullmatch(r"[\w-]+", chat_id):
+        raise RuntimeError(f"not a chat id: {chat_id!r}")
+    if wt := shutil.which("wt"):
+        subprocess.Popen([wt, "-d", cwd, vision, "--join", chat_id], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "Windows Terminal"
+    subprocess.Popen([vision, "--join", chat_id], cwd=cwd, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    return "a console window"
 
 
 # The command comes in as argv, so nothing in it needs AppleScript quoting.
@@ -4925,6 +4941,11 @@ def serve(cfg: Config, brain, info: dict, log=print, follow_defaults: bool = Tru
         remove_serve_descriptor()
         sys.stdout.flush()
         sys.stderr.flush()
+        if WINDOWS:  # exec would leave this process's port open under the new one
+            if os.environ.get(service.ENV):
+                os._exit(service.RESTART)  # the supervisor starts it again
+            subprocess.Popen(restart_argv(sys.argv))
+            os._exit(0)
         os.execv(sys.executable, restart_argv(sys.argv))
 
     hub.exec_restart = exec_restart

@@ -541,18 +541,37 @@ fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 // subscription. The page asks for an action by name; the commands come from here or from Vision itself
 // (`vision provider status --json`), never from the page.
 
+#[cfg(not(windows))]
 const INSTALL: &str = "curl -fsSL https://raw.githubusercontent.com/vision-sAi/vision/master/install.sh | sh";
+#[cfg(windows)]
+const INSTALL: &str = "irm https://raw.githubusercontent.com/vision-sAi/vision/master/install.ps1 | iex";
+
+/// What goes before a quoted program: PowerShell takes a quoted string for a value unless `&` calls it.
+const CALL: &str = if cfg!(windows) { "& " } else { "" };
+const PATH_SEPARATOR: char = if cfg!(windows) { ';' } else { ':' };
 
 fn vision_bin() -> Option<PathBuf> {
-    let bin = dirs::home_dir()?.join(".local/bin/vision");
+    let bin = dirs::home_dir()?.join(if cfg!(windows) { ".local/bin/vision.cmd" } else { ".local/bin/vision" });
     bin.exists().then_some(bin)
 }
 
 /// A command through the user's login shell, so it finds what their terminal would (npm, a CLI just installed).
 fn shell(command: &str) -> std::process::Command {
-    let sh = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
-    let mut cmd = std::process::Command::new(sh);
-    cmd.arg("-l").arg("-c").arg(command);
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let sh = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
+        let mut cmd = std::process::Command::new(sh);
+        cmd.arg("-l").arg("-c").arg(command);
+        cmd
+    };
+    #[cfg(windows)]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command]);
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: its output comes to the app
+        cmd
+    };
     // From home, not the app's own folder: inside an AppImage that is its mount, gone once it updates.
     if let Some(home) = dirs::home_dir() {
         cmd.current_dir(home);
@@ -604,17 +623,21 @@ fn child_env(vars: impl Iterator<Item = (String, String)>, home: Option<&std::pa
     }
     let path = get("PATH").unwrap_or_default();
     let mut entries: Vec<String> = home.map(|h| h.join(".local/bin").display().to_string()).into_iter().collect();
-    for e in path.split(':') {
-        if e.is_empty() || inside(e) || e.trim_end_matches('/').ends_with("vision/shims") || entries.iter().any(|x| x == e) {
+    for e in path.split(PATH_SEPARATOR) {
+        let shims = e.replace('\\', "/").trim_end_matches('/').ends_with("vision/shims");
+        if e.is_empty() || inside(e) || shims || entries.iter().any(|x| x == e) {
             continue;
         }
         entries.push(e.to_string());
     }
-    out.push(("PATH".into(), Some(entries.join(":"))));
+    out.push(("PATH".into(), Some(entries.join(&PATH_SEPARATOR.to_string()))));
     out
 }
 
 fn quote(arg: &str) -> String {
+    if cfg!(windows) {
+        return format!("'{}'", arg.replace('\'', "''"));
+    }
     format!("'{}'", arg.replace('\'', "'\\''"))
 }
 
@@ -628,7 +651,7 @@ fn vision_here() -> Value {
 #[tauri::command]
 async fn provider_status() -> Result<Value, String> {
     let bin = vision_bin().ok_or("Vision isn't installed here.")?;
-    let out = tauri::async_runtime::spawn_blocking(move || shell(&format!("{} provider status --json", quote(&bin.display().to_string()))).output())
+    let out = tauri::async_runtime::spawn_blocking(move || shell(&format!("{CALL}{} provider status --json", quote(&bin.display().to_string()))).output())
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
@@ -646,7 +669,7 @@ async fn provider_status() -> Result<Value, String> {
 /// / `provider_login` (`name` says which).
 #[tauri::command]
 async fn setup_run(app: AppHandle, action: String, name: Option<String>) -> Result<u64, String> {
-    let bin = || vision_bin().map(|b| quote(&b.display().to_string())).ok_or("Vision isn't installed here.".to_string());
+    let bin = || vision_bin().map(|b| format!("{CALL}{}", quote(&b.display().to_string()))).ok_or("Vision isn't installed here.".to_string());
     let command = match action.as_str() {
         "install" => INSTALL.to_string(),
         "service" => format!("{} service install", bin()?),
@@ -659,7 +682,7 @@ async fn setup_run(app: AppHandle, action: String, name: Option<String>) -> Resu
                 row["install_cmd"].as_str().filter(|c| !c.is_empty()).ok_or("It has no installer to run.")?.to_string()
             } else {
                 let parts: Vec<String> = row["login_cmd"].as_array().ok_or("It has no sign-in.")?.iter().filter_map(|v| v.as_str()).map(quote).collect();
-                parts.join(" ")
+                format!("{CALL}{}", parts.join(" "))
             }
         }
         _ => return Err(format!("unknown step {action}")),

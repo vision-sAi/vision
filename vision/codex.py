@@ -31,6 +31,7 @@ from rich.text import Text
 
 from vision import usage as usage_ui
 from vision.config import STATE_DIR, BrainConfig, weather_ready
+from vision.procs import native_cli, wrapper_note
 from vision.persona import system_prompt
 from vision.reply import READING, THINKING, WRITING, ReplyText, dedupe_status, retry_label
 
@@ -52,7 +53,9 @@ class CodexError(RuntimeError):
 def find_codex() -> str:
     exe = shutil.which("codex")
     if exe:
-        return exe
+        if native := native_cli(exe):
+            return native
+        raise CodexError(wrapper_note(exe))
     for cand in (os.path.expanduser("~/.local/bin/codex"), "/usr/local/bin/codex", "/usr/bin/codex"):
         if os.path.exists(cand):
             return cand

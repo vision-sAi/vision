@@ -25,6 +25,7 @@ from vision.config import DATA_DIR, STATE_DIR, WORKSPACE_DIR, BrainConfig, weath
 from vision import clis, models
 from vision.checklist import TODO_TOOLS, checklist_of
 from vision.persona import system_prompt
+from vision.procs import WINDOWS, native_cli, wrapper_note
 from vision.providers import REGISTRY as _REGISTRY
 from vision.reply import READING, THINKING, dedupe_status, retry_label
 
@@ -198,6 +199,13 @@ exit 1
 """
 
 
+_SHIM_CMD = (
+    "@echo off\r\nrem Installed by Vision. The same block as the sh shim, for PowerShell and cmd.\r\n"
+    "echo blocked by Vision: this CLI cannot be run from inside a Vision turn (it would spend a subscription "
+    "behind the user's back). Ask the user to switch with /model instead. 1>&2\r\nexit /b 1\r\n"
+)
+
+
 def _vision_shim() -> str:
     """`vision` for the model's shell: the Python running this turn, so a dev serve's turns run the dev
     checkout's `vision remind`/`schedule` rather than whichever install comes first on PATH."""
@@ -212,10 +220,14 @@ def _shim_dir() -> str:
         d.mkdir(parents=True, exist_ok=True)
         shims = {p.cli: _SHIM for p in _REGISTRY.values() if p.cli}  # every provider CLI, blocked inside a turn
         shims["vision"] = _vision_shim()
+        if WINDOWS:  # the sh ones serve Git Bash; PowerShell and cmd only run what has an extension
+            shims |= {f"{p.cli}.cmd": _SHIM_CMD for p in _REGISTRY.values() if p.cli}
+            shims["vision.cmd"] = f'@echo off\r\nrem Installed by Vision.\r\n"{sys.executable}" -m vision %*\r\n'
         for name, text in shims.items():
             f = d / name
-            if not f.exists() or f.read_text(encoding="utf-8") != text:
-                f.write_text(text, encoding="utf-8")
+            data = text.encode()  # bytes: Windows' text mode would put a carriage return in the sh shims' #! line
+            if not f.exists() or f.read_bytes() != data:
+                f.write_bytes(data)
             f.chmod(0o755)
     except OSError:
         return ""
@@ -276,7 +288,9 @@ def brain_env(provider: str, chat: str = "") -> dict[str, str]:
 def find_claude() -> str:
     exe = shutil.which("claude")
     if exe:
-        return exe
+        if native := native_cli(exe):
+            return native
+        raise BrainError(wrapper_note(exe))
     for cand in (os.path.expanduser("~/.local/bin/claude"), "/usr/local/bin/claude", "/usr/bin/claude"):
         if os.path.exists(cand):
             return cand
