@@ -846,6 +846,7 @@ mod tests {
         child_env(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())), Some(std::path::Path::new("/home/me")))
     }
 
+    #[cfg(not(windows))] // Unix PATHs and sh quoting
     #[test]
     fn commands_from_an_appimage_get_none_of_its_environment() {
         let m = "/tmp/.mount_VisionAB12";
@@ -869,6 +870,7 @@ mod tests {
         assert_eq!(of("PATH"), Some(Some("/home/me/.local/bin:/usr/bin".into())), "no mount, no shims, ~/.local/bin first");
     }
 
+    #[cfg(not(windows))] // Unix PATHs and sh quoting
     #[test]
     fn an_earlier_copys_mount_goes_too() {
         let (now, old) = ("/tmp/.mount_VisionNOW1", "/tmp/.mount_VisionOLD2");
@@ -888,6 +890,7 @@ mod tests {
         assert_eq!(of("PATH"), Some(Some("/home/me/.local/bin:/usr/bin".into())));
     }
 
+    #[cfg(not(windows))] // Unix PATHs and sh quoting
     #[test]
     fn outside_an_appimage_only_path_changes() {
         let got = env(&[("PYTHONHOME", "/opt/py"), ("PATH", "/usr/bin")]);
@@ -901,6 +904,14 @@ mod tests {
         assert_eq!(normalize("  "), None);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn powershell_arguments_are_quoted() {
+        assert_eq!(quote(r"C:\Users\me\vision.cmd"), r"'C:\Users\me\vision.cmd'");
+        assert_eq!(quote("it's"), "'it''s'");
+    }
+
+    #[cfg(not(windows))] // Unix PATHs and sh quoting
     #[test]
     fn shell_arguments_are_quoted() {
         assert_eq!(quote("/home/a b/vision"), "'/home/a b/vision'");

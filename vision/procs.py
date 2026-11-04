@@ -20,6 +20,7 @@ WINDOWS = sys.platform == "win32"
 _STILL_ACTIVE = 259
 _QUERY_LIMITED = 0x1000  # PROCESS_QUERY_LIMITED_INFORMATION
 _ACCESS_DENIED = 5
+_LOCK_BYTE = 1 << 40
 
 
 def windows_pid_alive(pid: int) -> bool:
@@ -62,6 +63,32 @@ def windows_image(pid: int) -> str:
         return name.value if kernel32.QueryFullProcessImageNameW(handle, 0, name, ctypes.byref(size)) else ""
     finally:
         kernel32.CloseHandle(handle)
+
+
+def try_lock(fd: int, shared: bool = False) -> bool:
+    """An advisory lock on an open file, False when another holder has it. The system drops it when
+    the descriptor closes or the process dies. Windows' locks are mandatory, and would stop others
+    reading what they cover, so there it sits on one byte far past the end of any real file. Windows
+    has no shared lock: a reader's probe takes this one for the moment it holds it."""
+    if not WINDOWS:
+        import fcntl
+
+        try:
+            fcntl.flock(fd, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+    import msvcrt
+
+    here = os.lseek(fd, 0, os.SEEK_CUR)
+    os.lseek(fd, _LOCK_BYTE, os.SEEK_SET)
+    try:
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    except OSError:
+        return False
+    finally:
+        os.lseek(fd, here, os.SEEK_SET)
+    return True
 
 
 def group_kwargs() -> dict:

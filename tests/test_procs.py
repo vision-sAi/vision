@@ -99,6 +99,39 @@ class Shells(unittest.TestCase):
             self.assertIsNone(procs.bash())
 
 
+class Locks(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = Path(tmp.name) / "held"
+        self.path.write_text("1234\n", encoding="utf-8")
+
+    def open(self):
+        fd = os.open(self.path, os.O_RDWR)
+        self.addCleanup(lambda: _close(fd))
+        return fd
+
+    def test_one_holder_at_a_time_until_it_closes(self):
+        first, second = self.open(), self.open()
+        self.assertTrue(procs.try_lock(first))
+        self.assertFalse(procs.try_lock(second))
+        os.close(first)
+        self.assertTrue(procs.try_lock(second))
+
+    def test_the_holders_words_can_still_be_read(self):
+        first, second = self.open(), self.open()
+        procs.try_lock(first)
+        self.assertFalse(procs.try_lock(second))
+        self.assertEqual(os.read(second, 32).strip(), b"1234")
+
+
+def _close(fd: int) -> None:
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
 @unittest.skipIf(procs.WINDOWS, "os.killpg's side")
 class UnixTree(unittest.TestCase):
     def test_kill_tree_ends_the_group(self):

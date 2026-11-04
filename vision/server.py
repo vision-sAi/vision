@@ -4887,23 +4887,36 @@ def watch_keys(hub: "Hub", on_clear, on_pair=lambda: None):
     puts the terminal back as it was (a no-op when stdin is not a terminal)."""
     if not sys.stdin.isatty():
         return lambda: None
-    import termios
-    import tty
+    if WINDOWS:
+        import msvcrt
 
-    fd = sys.stdin.fileno()
-    saved = termios.tcgetattr(fd)
-    tty.setcbreak(fd)  # keys arrive one at a time and are not echoed; Ctrl-C still stops the server
+        def read_key() -> str:
+            while not msvcrt.kbhit():  # first: Ctrl-C reaches getwch as a key instead of stopping the server
+                time.sleep(0.1)
+            return msvcrt.getwch().lower()
 
-    def restore() -> None:
-        try:
-            termios.tcsetattr(fd, termios.TCSADRAIN, saved)
-        except termios.error:
-            pass
+        restore = lambda: None  # noqa: E731 - getwch leaves the console as it found it
+    else:
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+        tty.setcbreak(fd)  # keys arrive one at a time and are not echoed; Ctrl-C still stops the server
+
+        def read_key() -> str:
+            return os.read(fd, 1).decode(errors="ignore").lower()
+
+        def restore() -> None:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+            except termios.error:
+                pass
 
     def loop() -> None:
         while True:
             try:
-                key = os.read(fd, 1).decode(errors="ignore").lower()
+                key = read_key()
             except OSError:
                 return
             if not key:

@@ -21,6 +21,7 @@ dependencies = [
   "typer>=0.12",
   "rich>=13",
   "prompt_toolkit>=3.0",
+  "tzdata; sys_platform == 'win32'",  # zoneinfo's time zones: Windows has no system database
 ]
 
 [project.optional-dependencies]
