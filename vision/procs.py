@@ -107,6 +107,18 @@ def kill_tree(pid: int, force: bool = False) -> None:
         raise ProcessLookupError(done.stderr.strip() or f"taskkill could not end {pid}")
 
 
+def kill(proc: subprocess.Popen) -> None:
+    """Popen.kill for a shell. On Windows that ends only the shell: what it started lives on, holding
+    the output pipe open, so the command isn't stopped and whoever reads the pipe waits for it."""
+    if WINDOWS:
+        try:
+            kill_tree(proc.pid)
+            return
+        except OSError:
+            pass
+    proc.kill()
+
+
 def replace_process(argv: list[str]) -> None:
     """Become `argv`. Windows' exec starts it and exits, handing the console back to the shell mid-chat,
     so there this stays and waits instead."""
@@ -141,9 +153,10 @@ def user_shell(command: str) -> list[str]:
     if not WINDOWS:
         return [os.environ.get("SHELL") or "/bin/sh", "-c", command]
     exe = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
-    # Windows PowerShell prints in the console's code page otherwise; what reads this expects UTF-8.
-    utf8 = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-    return [exe, "-NoProfile", "-NonInteractive", "-Command", utf8 + command]
+    # Windows PowerShell prints in the console's code page otherwise, what reads this expects UTF-8, and
+    # PowerShell 7 colours its tables and errors even into a pipe.
+    setup = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; if ($PSStyle) { $PSStyle.OutputRendering = 'PlainText' }; "
+    return [exe, "-NoProfile", "-NonInteractive", "-Command", setup + command]
 
 
 def bash() -> str | None:

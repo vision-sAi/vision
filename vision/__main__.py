@@ -26,6 +26,10 @@ _EXTRAS = {
 
 def run() -> None:
     """Run the CLI; a missing optional dependency becomes an install hint instead of a traceback."""
+    if sys.platform == "win32":  # a pipe or a log file gets the code page otherwise, and "◆" stops the program
+        for stream in (sys.stdout, sys.stderr):
+            if stream is not None:
+                stream.reconfigure(encoding="utf-8", errors="replace")
     try:
         from vision.cli import main
 

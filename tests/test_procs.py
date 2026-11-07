@@ -132,6 +132,18 @@ def _close(fd: int) -> None:
         pass
 
 
+class Kill(unittest.TestCase):
+    def test_on_windows_the_tree_goes_and_the_shell_alone_is_the_fallback(self):
+        proc = mock.Mock(pid=42)
+        with mock.patch.object(procs, "WINDOWS", True), mock.patch.object(procs, "kill_tree") as tree:
+            procs.kill(proc)
+            tree.assert_called_once_with(42)
+            proc.kill.assert_not_called()
+            tree.side_effect = ProcessLookupError("gone")
+            procs.kill(proc)
+        proc.kill.assert_called_once_with()
+
+
 @unittest.skipIf(procs.WINDOWS, "os.killpg's side")
 class UnixTree(unittest.TestCase):
     def test_kill_tree_ends_the_group(self):

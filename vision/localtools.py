@@ -218,7 +218,7 @@ def _bash(args: dict, workdir: str, rules: list[str] | None, holder: dict, lock:
     try:
         out, _ = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        procs.kill(proc)
         out, _ = proc.communicate()
         return clip((out or "") + f"\nError: the command did not finish within {timeout:.0f} s and was killed."), True
     finally:

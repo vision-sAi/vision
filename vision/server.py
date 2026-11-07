@@ -2619,7 +2619,7 @@ class Hub:
         load = memory = uptime = None
         try:
             load = round(100 * os.getloadavg()[0] / (os.cpu_count() or 1))
-        except OSError:
+        except (OSError, AttributeError):  # Windows has no load average
             pass
         try:
             info = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines() if ":" in line)
