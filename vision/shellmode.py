@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import codecs
 import os
-import signal
 import subprocess
 import threading
 import time
 from collections.abc import Callable
+
+from vision.procs import group_kwargs, kill_tree, user_shell
 
 TIMEOUT_S = 600  # a command still going after this long is stopped
 DRAIN_S = 5  # after the command exits, how long to wait for output from what it left running (`cmd &`)
@@ -25,10 +26,10 @@ def run(command: str, cwd: str | None, started: Callable[[subprocess.Popen], Non
     gets what it prints as it prints it (from a reader thread), so a command that prints and then waits
     (a login's one-time code) shows that straight away rather than once it ends."""
     try:
-        proc = subprocess.Popen([os.environ.get("SHELL") or "/bin/sh", "-c", command], cwd=cwd or None,
+        proc = subprocess.Popen(user_shell(command), cwd=cwd or None,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 env={**os.environ, "PYTHONUNBUFFERED": "1"},  # a Python script's prints as they happen
-                                start_new_session=True)
+                                **group_kwargs())
     except OSError as e:
         return str(e), 127
     started(proc)
@@ -111,7 +112,7 @@ def stop(proc: subprocess.Popen | None) -> bool:
     if proc is None or proc.poll() is not None:
         return False
     try:
-        os.killpg(proc.pid, signal.SIGTERM)
+        kill_tree(proc.pid)
     except OSError:
         return False
     return True

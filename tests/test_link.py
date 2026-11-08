@@ -90,8 +90,7 @@ class LinkTests(unittest.TestCase):
                 post({"type": "delta", "text": " On it."})
                 post({"type": "tool", "id": "t1", "name": "Bash", "done": True, "at": 24})
                 info = link.list_links()[0]
-                c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                c.connect(info["sock"])
+                c = link.dial(info)
                 c.sendall((json.dumps({"type": "hello"}) + "\n").encode())
                 buf = b""
                 c.settimeout(2)

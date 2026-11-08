@@ -18,13 +18,15 @@ jobs:
     # (requires-python in pyproject.toml): syntax only a newer Python accepts, such as 3.12's f-string
     # rules, fails the oldest job. The 3.12 job keeps the plain name `test` for anything that expects it.
     name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         include:
           - { python: "3.12", name: "test" }
           - { python: "3.11", name: "test (Python 3.11)" }
+          - { python: "3.12", name: "test (Windows)", os: windows-latest }
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0  # setup-uv publishes full versions only, no major-version tag
@@ -36,4 +38,4 @@ jobs:
       # Test-only packages: numpy and soundfile for the audio fakes, soxr for the resampler, pillow for library thumbnails, httpx2
       # for starlette's TestClient, pytest for test_int8's markers.
       - run: uv pip install numpy soundfile soxr pillow pytest httpx2
-      - run: uv run --frozen --no-sync python -m unittest discover -s tests
+      - run: uv run --frozen --no-sync python -m tests._ci

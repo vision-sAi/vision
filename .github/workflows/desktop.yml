@@ -28,9 +28,11 @@ jobs:
         include:
           - { os: ubuntu-24.04, name: linux }
           - { os: macos-latest, name: macos }
+          - { os: windows-latest, name: windows }
     defaults:
       run:
         working-directory: desktop
+        shell: bash
     steps:
       - uses: actions/checkout@v7
       - if: runner.os == 'Linux'

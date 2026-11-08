@@ -1,6 +1,6 @@
 # Vision for the desktop
 
-A window onto `vision serve`, for Linux and macOS (Windows may follow; the code keeps clear of anything that would rule it out): the same chats the phone sees, with replies
+A window onto `vision serve`, for Linux, macOS and Windows: the same chats the phone sees, with replies
 streaming in, Vision's questions to answer and the model to switch. Like the iPhone app it is only a client;
 the conversations run on the computer with `vision serve`.
 

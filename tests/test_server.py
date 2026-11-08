@@ -752,8 +752,9 @@ class MultiChatTests(unittest.TestCase):
                 ws.send_json({"type": "new"})
                 saved = self._drain(ws, lambda ev, _: ev["type"] == "chat" and ev.get("opened"))[-1]
                 self.assertEqual((saved["workdir"], saved["mode"]), (project, "plan"))
-                ws.send_json({"type": "new", "workdir": "/tmp"})  # a folder picked for the chat wins
-                self.assertEqual(self._drain(ws, lambda ev, _: ev["type"] == "chat" and ev.get("opened"))[-1]["workdir"], "/tmp")
+                picked = os.path.realpath(tempfile.gettempdir())  # a folder picked for the chat wins
+                ws.send_json({"type": "new", "workdir": picked})
+                self.assertEqual(self._drain(ws, lambda ev, _: ev["type"] == "chat" and ev.get("opened"))[-1]["workdir"], picked)
                 hub.cfg.remote.new_chat_folder = os.path.join(project, "gone")
                 ws.send_json({"type": "new"})  # the saved one is gone: the server's own, not an error
                 self.assertEqual(self._drain(ws, lambda ev, _: ev["type"] == "chat" and ev.get("opened"))[-1]["workdir"], os.getcwd())

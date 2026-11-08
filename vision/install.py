@@ -6,12 +6,16 @@ import shlex
 import sys
 from pathlib import Path
 
+from vision.procs import WINDOWS, quote
+
 ROOT = Path(__file__).resolve().parents[1]  # the checkout, when Vision runs from one
 SETUP = ROOT / "scripts" / "setup.sh"
 
 
 def _path(p: Path) -> str:
     """A path to paste into a shell: ~ for the home directory, quoted when it has to be."""
+    if WINDOWS:  # cmd.exe doesn't expand ~
+        return quote(str(p))
     home = Path.home()
     try:
         rel = p.relative_to(home)
@@ -104,7 +108,7 @@ def sync_command(extra: str) -> str:
         local = Path.home() / ".local" / "bin" / "uv"  # where uv's installer puts it, on PATH or not
         uv = "uv" if shutil.which("uv") or not local.exists() else _path(local)
         return f"{uv} sync --project {_path(ROOT)} --frozen --inexact --extra {extra}"
-    return f"{shlex.quote(sys.executable)} -m pip install 'vision[{extra}]'"
+    return f"{quote(sys.executable)} -m pip install {quote(f'vision[{extra}]')}"
 
 
 def extra_hint(extra: str) -> str:
@@ -112,7 +116,7 @@ def extra_hint(extra: str) -> str:
     if extra == "voice":
         return "vision voice setup" if SETUP.exists() else setup_hint()
     if SETUP.exists():
-        if extra == "serve":
+        if extra == "serve" and not WINDOWS:
             return f"{_path(SETUP)} --serve"
         return f"uv sync --project {_path(ROOT)} --frozen --inexact --extra {extra}"
     return f"pip install 'vision[{extra}]'"

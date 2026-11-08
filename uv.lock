@@ -5533,6 +5533,7 @@ dependencies = [
     { name = "prompt-toolkit" },
     { name = "rich" },
     { name = "typer" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
 
 [package.optional-dependencies]
@@ -5700,6 +5701,7 @@ requires-dist = [
     { name = "torchaudio", marker = "extra == 'all-cpu'", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "vision", extra = "all-cpu" } },
     { name = "torchaudio", marker = "extra == 'voice-cpu'", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "vision", extra = "voice-cpu" } },
     { name = "typer", specifier = ">=0.12" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'serve'", specifier = ">=0.29" },
     { name = "vision", extras = ["voice-common"], marker = "extra == 'voice-cpu'" },
     { name = "vision", extras = ["voice-common"], marker = "extra == 'voice-nvidia'" },

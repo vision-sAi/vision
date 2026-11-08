@@ -55,7 +55,12 @@ def find_cli(provider: str) -> str:
         exe = shutil.which(p.acp.command[0])
         if not exe:
             raise FileNotFoundError(f"{p.acp.command[0]} (the {p.label} agent) is not on PATH")
-        return exe
+        from vision.procs import native_cli, wrapper_note
+
+        native = native_cli(exe)
+        if not native:
+            raise FileNotFoundError(wrapper_note(exe))
+        return native
     find = p.hook("find_cli") if p else None
     if find is None:
         raise ValueError(f"unknown provider {provider!r}" if p is None else f"{p.label} has no CLI")

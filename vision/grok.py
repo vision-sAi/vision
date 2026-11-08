@@ -37,6 +37,7 @@ from vision import usage as usage_ui
 from vision.brain import context_read
 from vision.config import STATE_DIR, BrainConfig, weather_ready
 from vision.persona import system_prompt
+from vision.procs import native_cli, wrapper_note
 from vision.reply import READING, THINKING, ReplyText, dedupe_status
 
 if TYPE_CHECKING:
@@ -86,7 +87,9 @@ class GrokError(RuntimeError):
 def find_grok() -> str:
     exe = shutil.which("grok")
     if exe:
-        return exe
+        if native := native_cli(exe):
+            return native
+        raise GrokError(wrapper_note(exe))
     home = os.path.expanduser(os.environ.get("GROK_HOME", "~/.grok"))
     for cand in (os.path.join(home, "bin", "grok"), os.path.expanduser("~/.local/bin/grok"), "/usr/local/bin/grok", "/usr/bin/grok"):
         if os.path.exists(cand):
