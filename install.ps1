@@ -19,7 +19,8 @@ $bin = Join-Path $HOME '.local\bin'
 
 function Step($text) { Write-Host "* $text" -ForegroundColor Cyan }
 function Ok($text) { Write-Host "  ok  $text" -ForegroundColor Green }
-function Die($text) { Write-Host "  x  $text" -ForegroundColor Red; exit 1 }
+# throw, not exit: under `irm | iex` an exit closes the user's PowerShell window, and the reason with it
+function Die($text) { throw "Vision's install stopped: $text" }
 function Have($name) { [bool](Get-Command $name -ErrorAction SilentlyContinue) }
 
 Step 'Installing Vision'
@@ -28,8 +29,9 @@ Step 'Installing Vision'
 $env:PATH = "$bin;$env:PATH"
 if (-not (Have 'uv')) {
     Write-Host '  Getting uv (the Python package manager Vision uses)...'
-    try { Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression | Out-Null }
-    catch { Die "Couldn't install uv. See https://docs.astral.sh/uv/ and run this again." }
+    # In its own PowerShell, as uv's docs say: its installer refuses Windows' default script policy
+    powershell -NoProfile -ExecutionPolicy ByPass -Command "irm https://astral.sh/uv/install.ps1 | iex" | Out-Null
+    if ($LASTEXITCODE) { Die "Couldn't install uv. See https://docs.astral.sh/uv/ and run this again." }
     if (-not (Have 'uv')) { Die "uv installed, but it isn't in $bin. Open a new terminal and run this again." }
 }
 Ok (uv --version)

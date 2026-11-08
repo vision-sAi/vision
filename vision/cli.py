@@ -4957,7 +4957,7 @@ def _next_checkin(checkin: dict) -> Text:
     at = time.localtime(schedule["next_run"])
     days = (datetime.date(*at[:3]) - datetime.date.today()).days
     clock = time.strftime("%I:%M %p", at).lstrip("0")
-    day = "today" if days == 0 else "tomorrow" if days == 1 else time.strftime("%a" if days < 7 else "%b %-d", at)
+    day = "today" if days == 0 else "tomorrow" if days == 1 else (time.strftime("%a", at) if days < 7 else f"{time.strftime('%b', at)} {at.tm_mday}")
     return Text(f"{day} {clock}", style="dim")
 
 

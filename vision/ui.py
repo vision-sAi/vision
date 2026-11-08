@@ -3853,7 +3853,7 @@ class ChatScreen:
         sent meanwhile lands below the reply without changing it."""
         self.holding = True
         self.end_reply(e)
-        self._held = (e, e.done_at or datetime.now().strftime("%-I:%M %p"))
+        self._held = (e, e.done_at or datetime.now().strftime("%I:%M %p").lstrip("0"))
         self.set_background(label)
 
     def set_background(self, label: str) -> None:
@@ -3884,7 +3884,7 @@ class ChatScreen:
         e.cancelled = e.cancelled or cancelled
         if e.ended is None:
             e.ended = time.monotonic()
-        e.done_at = e.done_at or datetime.now().strftime("%-I:%M %p")
+        e.done_at = e.done_at or datetime.now().strftime("%I:%M %p").lstrip("0")
         e.footer = " · ".join(p for p in (f"Worked for {took(e.elapsed)}", "cancelled" if e.cancelled else f"done {e.done_at}", stats) if p)
         e.finished = True
 
