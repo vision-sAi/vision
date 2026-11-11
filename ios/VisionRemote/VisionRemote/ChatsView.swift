@@ -482,17 +482,20 @@ struct ChatsView: View, Equatable {
                     if chat.isTerminal {
                         Image(systemName: "terminal").imageScale(.small)
                     }
+                    // The model is what gives way when the line is too long: the time and the folder stay whole.
                     if !chat.model.isEmpty {
                         Text(chat.model + (chat.effort.isEmpty ? "" : " \(chat.effort)"))
+                            .layoutPriority(-1)
                         Text("·")
                     }
                     Text(status(chat))
-                    // Where it works on the machine, home written as ~; a long path gives way in the middle.
+                    // Where it works on the machine, by the folder's own name: the whole path never fits here
+                    // (VoiceOver still reads it).
                     if !chat.folder.isEmpty {
                         Text("·")
-                        Text(chat.folder)
+                        Text(folderName(chat.folder))
                             .truncationMode(.middle)
-                            .layoutPriority(-1)
+                            .accessibilityLabel(chat.folder)
                     }
                 }
                 .themeFont(.footnote)
@@ -503,6 +506,11 @@ struct ChatsView: View, Equatable {
         }
         .frame(height: 52)
         .contentShape(Rectangle())
+    }
+
+    /// The last part of a folder's path ("~/code/vision" → "vision"); home itself stays "~".
+    private func folderName(_ path: String) -> String {
+        path.split(separator: "/").last.map(String.init) ?? path
     }
 
     private func status(_ chat: ChatInfo) -> String {
