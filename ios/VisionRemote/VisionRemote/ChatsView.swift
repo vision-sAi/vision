@@ -482,11 +482,16 @@ struct ChatsView: View, Equatable {
                     if chat.isTerminal {
                         Image(systemName: "terminal").imageScale(.small)
                     }
-                    if !chat.model.isEmpty {
-                        Text(chat.model + (chat.effort.isEmpty ? "" : " \(chat.effort)"))
-                        Text("·")
+                    // The folder it works in, by name: the whole path wouldn't fit beside the model and the time.
+                    if !folderName(chat).isEmpty {
+                        Text(folderName(chat)).truncationMode(.middle)
+                        Text("·").layoutPriority(1)
                     }
-                    Text(status(chat))
+                    if !chat.model.isEmpty {
+                        Text(chat.model + (chat.effort.isEmpty ? "" : " \(chat.effort)")).layoutPriority(1)
+                        Text("·").layoutPriority(1)
+                    }
+                    Text(status(chat)).layoutPriority(1)
                 }
                 .themeFont(.footnote)
                 .foregroundStyle(.secondary)
@@ -496,6 +501,11 @@ struct ChatsView: View, Equatable {
         }
         .frame(height: 52)
         .contentShape(Rectangle())
+    }
+
+    /// The last part of a chat's folder ("~/code/vision" → "vision"); home itself stays "~".
+    private func folderName(_ chat: ChatInfo) -> String {
+        chat.folder.split(separator: "/").last.map(String.init) ?? chat.folder
     }
 
     private func status(_ chat: ChatInfo) -> String {
