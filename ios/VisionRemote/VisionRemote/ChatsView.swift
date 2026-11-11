@@ -487,6 +487,13 @@ struct ChatsView: View, Equatable {
                         Text("·")
                     }
                     Text(status(chat))
+                    // Where it works on the machine, home written as ~; a long path gives way in the middle.
+                    if !chat.folder.isEmpty {
+                        Text("·")
+                        Text(chat.folder)
+                            .truncationMode(.middle)
+                            .layoutPriority(-1)
+                    }
                 }
                 .themeFont(.footnote)
                 .foregroundStyle(.secondary)

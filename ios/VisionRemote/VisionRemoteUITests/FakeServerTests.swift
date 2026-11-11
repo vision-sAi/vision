@@ -345,10 +345,12 @@ final class FakeServerTests: XCTestCase {
         XCTAssertTrue(text(app, containing: "Second answer, so far").waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons.matching(identifier: "Copy reply").count, 1, "nothing to copy on a reply that is still coming")
 
-        app.buttons["Copy reply"].firstMatch.tap()
+        // The new turn's question went to the top, taking the first reply up under the bar: pull it back down.
+        app.swipeDown()
+        onScreen(app.buttons.matching(identifier: "Copy reply")).tap()
         XCTAssertTrue(text(app, containing: "Copied").waitForExistence(timeout: 3))
 
-        app.buttons["Share reply"].firstMatch.tap()
+        onScreen(app.buttons.matching(identifier: "Share reply")).tap()
         let sheet = app.otherElements["ActivityListView"]
         let bar = app.navigationBars["UIActivityContentView"]
         XCTAssertTrue(sheet.waitForExistence(timeout: 6) || bar.exists, "the system share sheet")
@@ -650,9 +652,9 @@ final class FakeServerTests: XCTestCase {
         XCTAssertTrue(text(app, containing: "Copied").waitForExistence(timeout: 3))
     }
 
-    /// The drawer's folder button opens the machine's folders: the recent ones, and the rest to walk
-    /// through. Starting a chat from it asks the machine for a new chat in that folder, and an empty
-    /// chat says where it works.
+    /// A new chat is a draft until its first message, and says where it will work. That line opens the
+    /// machine's folders: the recent ones, and the rest to walk through. The draft takes the one picked,
+    /// and the first message asks the machine for a new chat there.
     func testANewChatCanBeStartedInAChosenFolder() throws {
         let home: [String: Any] = ["path": "/home/me", "label": "~", "parent": "/home",
                                    "folders": [["name": "code", "path": "/home/me/code"], ["name": "notes", "path": "/home/me/notes"]],
@@ -665,15 +667,27 @@ final class FakeServerTests: XCTestCase {
         XCTAssertTrue(element(app, label: "Working in ~/code/vision").waitForExistence(timeout: 10), "an empty chat says where it works")
 
         app.buttons["Chats"].tap()
-        let folderButton = app.buttons["New chat in a folder"]
-        XCTAssertTrue(folderButton.waitForExistence(timeout: 5))
-        folderButton.tap()
+        let newChat = app.buttons["New chat"]
+        XCTAssertTrue(newChat.waitForExistence(timeout: 5))
+        newChat.tap()
+        // The draft starts in the folder last picked on this phone, whatever that was: its line opens the picker.
+        let line = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Working in")).firstMatch
+        XCTAssertTrue(line.waitForExistence(timeout: 5), "a draft says where it will work")
+        line.tap()
         XCTAssertTrue(app.buttons["~/code/vision"].waitForExistence(timeout: 5), "the recent folder")
         app.buttons["code"].tap()
         XCTAssertTrue(app.buttons["vision"].waitForExistence(timeout: 5), "inside the folder that was tapped")
         app.buttons["Start chat here"].tap()
-        let sent = try frame { $0["type"] as? String == "new" }
-        XCTAssertEqual(sent?["workdir"] as? String, "/home/me/code")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@", "Working in", "code")).firstMatch
+            .waitForExistence(timeout: 5), "the draft takes the folder")
+        XCTAssertTrue(try sent("new").isEmpty, "nothing is opened on the machine until there is a message")
+
+        let input = app.textViews["messageInput"]
+        input.tap()
+        input.typeText("hello")
+        app.buttons["Send"].tap()
+        let opened = try frame { $0["type"] as? String == "new" }
+        XCTAssertEqual(opened?["workdir"] as? String, "/home/me/code")
     }
 
     /// Scouts (every project is one) is a screen of its own, picked in the drawer, and a scout's chat isn't listed
@@ -1018,8 +1032,9 @@ final class FakeServerTests: XCTestCase {
         XCTAssertTrue(text(app, containing: "Paused").waitForExistence(timeout: 5))
     }
 
-    /// The folder line on an empty chat opens the same picker. The chat picked there replaces the empty
-    /// one, which is closed rather than left behind in the list.
+    /// The folder line on an empty chat opens the same picker. An open chat's folder is fixed, so a draft
+    /// in the one picked takes its place: the empty chat is closed rather than left behind in the list, and
+    /// the first message opens the new one there.
     func testTheFolderOfAnEmptyChatCanBeChangedFromTheChatItself() throws {
         let home: [String: Any] = ["path": "/home/me", "label": "~", "parent": "/home",
                                    "folders": [["name": "code", "path": "/home/me/code"]],
@@ -1032,10 +1047,17 @@ final class FakeServerTests: XCTestCase {
         line.tap()
         XCTAssertTrue(app.buttons["~/notes"].waitForExistence(timeout: 5))
         app.buttons["~/notes"].tap()
-        let opened = try frame { $0["type"] as? String == "new" }
-        XCTAssertEqual(opened?["workdir"] as? String, "/home/me/notes")
         let closed = try frame { $0["type"] as? String == "close" }
         XCTAssertEqual(closed?["chat"] as? String, "e1", "the empty chat it replaces is closed")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@", "Working in", "notes")).firstMatch
+            .waitForExistence(timeout: 5), "the draft says where it will work")
+
+        let input = app.textViews["messageInput"]
+        input.tap()
+        input.typeText("hello")
+        app.buttons["Send"].tap()
+        let opened = try frame { $0["type"] as? String == "new" }
+        XCTAssertEqual(opened?["workdir"] as? String, "/home/me/notes")
     }
 
     /// Plan mode is switched on and off from the "+" menu, follows what the machine then says, and shows as
