@@ -91,7 +91,7 @@ class PasteTests(unittest.TestCase):
     def test_a_pasted_picture_path_attaches_it(self):
         shot = Path(self.dir.name) / "Screenshot From 2026-10-21 18-06-40.png"
         shot.write_bytes(PNG)
-        for pasted in (f"'{shot}'", str(shot), f"file://{str(shot).replace(' ', '%20')}\n", str(shot).replace(" ", "\\ ")):
+        for pasted in (f"'{shot}'", str(shot), f"{shot.as_uri()}\n", str(shot).replace(" ", "\\ ")):
             self.screen.area.buffer.reset()
             self.screen.paste_text(pasted)
             self.assertEqual(self.screen.area.text, "[Image #1] ", pasted)

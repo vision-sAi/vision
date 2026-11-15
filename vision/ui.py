@@ -335,7 +335,7 @@ def user_grid(text: str) -> MarkedLines:
         if m:
             path = m[1]
             body.append(f"[Image #{image_number(path)}]",
-                        RichStyle(link="file://" + path if path.startswith("/") else None, color=CHIP_INK, bgcolor=CHIP_BG))
+                        RichStyle(link=file_link(path), color=CHIP_INK, bgcolor=CHIP_BG))
         else:
             body.append(line)
         joined = bool(m)
@@ -771,7 +771,7 @@ class _Image(ImageItem):
 
     def __rich_console__(self, console, options):
         path = self.destination
-        link = RichStyle(link=("file://" + path) if path.startswith("/") else path or None)
+        link = RichStyle(link=file_link(path) or path or None)
         caption = self.text.plain.strip() or path.rsplit("/", 1)[-1]
         yield Text.assemble(("🖼 ", "none"), (caption, link + RichStyle(bold=True)), ("  ", "none"), (path, link + RichStyle(color=FAINT)), end="")
 
@@ -1625,7 +1625,7 @@ def render_ansi(renderable, width: int) -> str:
     # TERM left out: rich draws a "dumb" terminal 80 wide whatever width it is given, and this is no terminal.
     env = {k: v for k, v in os.environ.items() if k != "TERM"}
     c = Console(file=buf, width=max(20, width), force_terminal=True, color_system="truecolor", highlight=False, soft_wrap=False,
-                theme=UI_THEME, _environ=env)
+                theme=UI_THEME, _environ=env, legacy_windows=False)  # a string for prompt_toolkit, not the old console
     c.print(renderable)
     return buf.getvalue()
 
@@ -2305,12 +2305,22 @@ def expand_images(text: str) -> str:
     return re.sub(r"(?:\n*\0\n*)+", "\n", out).strip("\n") if "\0" in out else out
 
 
+def file_link(path: str) -> str | None:
+    """A file:// link to an absolute path (`/x` anywhere, `C:\\x` on Windows), None for anything else."""
+    if path.startswith("/"):
+        return "file://" + path
+    if os.name == "nt" and os.path.isabs(path):
+        return Path(path).as_uri()
+    return None
+
+
 def pasted_picture_paths(text: str) -> list[str]:
     """The pictures a paste names when it is nothing but paths to them (a file dragged onto the
     terminal, or a path copied from the file manager: quoted, backslash-escaped or file:// URIs);
     [] for any other text."""
     import shlex
-    from urllib.parse import unquote, urlparse
+    from urllib.parse import urlparse
+    from urllib.request import url2pathname
 
     text = text.strip()
     if not text or len(text) > 4096:
@@ -2318,7 +2328,7 @@ def pasted_picture_paths(text: str) -> list[str]:
 
     def path(word: str) -> str:
         if word.startswith("file://"):
-            word = unquote(urlparse(word).path)
+            word = url2pathname(urlparse(word).path)  # file:///C:/x on Windows, file:///x elsewhere
         return os.path.expanduser(word)
 
     def picture(p: str) -> bool:
