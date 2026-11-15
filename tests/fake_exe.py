@@ -31,7 +31,10 @@ def _windows_exe(exe: Path, source: str) -> Path:
     launcher = (Path(distlib.__file__).parent / ("t64-arm.exe" if arm else "t64.exe")).read_bytes()
     body = io.BytesIO()
     with zipfile.ZipFile(body, "w") as zf:
-        zf.writestr("__main__.py", source)
+        # Real CLIs write UTF-8; Python into a pipe on Windows would write the ANSI code page.
+        zf.writestr("_fake.py", source)
+        zf.writestr("__main__.py", "import runpy, sys\nsys.stdout.reconfigure(encoding='utf-8')\n"
+                                   "sys.stderr.reconfigure(encoding='utf-8')\nrunpy.run_module('_fake', run_name='__main__')\n")
     shebang = b'#!"' + sys.executable.encode("utf-8") + b'"\n'
     exe.write_bytes(launcher + shebang + body.getvalue())
     return exe

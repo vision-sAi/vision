@@ -143,7 +143,7 @@ def desktop_env() -> dict[str, str]:
     if not exe:
         return env
     try:
-        r = subprocess.run([exe, "--user", "show-environment"], capture_output=True, text=True, timeout=3, encoding="utf-8")
+        r = subprocess.run([exe, "--user", "show-environment"], capture_output=True, text=True, timeout=3, encoding="utf-8", errors="replace")
     except (OSError, subprocess.TimeoutExpired):
         return env
     for line in r.stdout.splitlines() if r.returncode == 0 else []:
@@ -240,7 +240,7 @@ def focus_terminal(pid: int) -> bool:
     if not exe or not env.get("HYPRLAND_INSTANCE_SIGNATURE"):
         return False
     try:
-        r = subprocess.run([exe, "clients", "-j"], capture_output=True, text=True, timeout=3, encoding="utf-8", env=env)
+        r = subprocess.run([exe, "clients", "-j"], capture_output=True, text=True, timeout=3, encoding="utf-8", errors="replace", env=env)
         clients = json.loads(r.stdout)
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return False
@@ -4746,9 +4746,9 @@ def tailscale_url(port: int) -> str | None:
     if not exe:
         return None
     try:
-        r = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=5, encoding="utf-8")
+        r = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
         name = json.loads(r.stdout).get("Self", {}).get("DNSName", "").rstrip(".")
-        r = subprocess.run([exe, "serve", "status", "--json"], capture_output=True, text=True, timeout=5, encoding="utf-8")
+        r = subprocess.run([exe, "serve", "status", "--json"], capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
         published = f":{port}" in r.stdout  # a proxy handler like "http://127.0.0.1:8765"
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return None

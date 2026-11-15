@@ -5531,7 +5531,7 @@ def doctor(
     else:
         console.print("[dim]  no voice enrolled (optional: vision voice enrol, then only_me = true under \\[listen])[/dim]")
     try:
-        r = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.used,memory.total", "--format=csv,noheader"], capture_output=True, text=True, encoding="utf-8")
+        r = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.used,memory.total", "--format=csv,noheader"], capture_output=True, text=True, encoding="utf-8", errors="replace")
         gpu = r.returncode == 0
         console.print(f"{ok} GPU: {r.stdout.strip()}" if gpu else f"{warn} no NVIDIA GPU; Whisper will use CPU")
     except FileNotFoundError:

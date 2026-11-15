@@ -20,7 +20,7 @@ SID = "acp-session-0001"
 
 class AcpProviderTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)  # Windows: a kept fake agent may still hold its .exe
         tmp = Path(self.tmp.name)
         self.log = tmp / "log.jsonl"
         bindir = tmp / "bin"

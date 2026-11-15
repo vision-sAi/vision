@@ -1914,7 +1914,7 @@ class Brain:
         env.pop("CLAUDECODE", None)
         cmd = [self.claude, "-p", "/usage", "--output-format", "json", "--no-session-persistence", "--tools", ""]
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, cwd=self.workdir, env=env, timeout=60, encoding="utf-8")
+            r = subprocess.run(cmd, capture_output=True, text=True, cwd=self.workdir, env=env, timeout=60, encoding="utf-8", errors="replace")
             data = json.loads(r.stdout.strip().splitlines()[-1])
         except (subprocess.TimeoutExpired, OSError, ValueError, IndexError):
             return None
@@ -1935,7 +1935,7 @@ class Brain:
         cmd = [self.claude, "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
                "--model", "haiku", "--tools", "", "--max-turns", "1"]
         try:
-            r = subprocess.run(cmd, input="Reply with OK.", capture_output=True, text=True, cwd=self.workdir, env=env, timeout=120, encoding="utf-8")
+            r = subprocess.run(cmd, input="Reply with OK.", capture_output=True, text=True, cwd=self.workdir, env=env, timeout=120, encoding="utf-8", errors="replace")
         except (subprocess.TimeoutExpired, OSError):
             return None
         for line in r.stdout.splitlines():

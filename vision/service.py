@@ -181,7 +181,7 @@ def wait_while(busy: Callable[[], bool], poll: float = 2.0, sleep: Callable[[flo
 
 def _run(*cmd: str, check: bool = True) -> subprocess.CompletedProcess:
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, encoding="utf-8")
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace")
     except (OSError, subprocess.TimeoutExpired) as e:
         raise ServiceError(f"`{' '.join(cmd)}` could not run: {e}") from e
     if check and r.returncode != 0:

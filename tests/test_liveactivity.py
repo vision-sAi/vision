@@ -79,7 +79,8 @@ class TokenTests(unittest.TestCase):
         data = la.tokens(self.path)
         self.assertEqual([(t["token"], t["sandbox"]) for t in data["start"]], [("ab12", True)])
         self.assertEqual([t["token"] for t in data["cards"]], ["cd34"])
-        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":  # Windows has no mode bits
+            self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
 
     def test_a_token_keeps_its_phones_key(self):
         key = base64.b64encode(os.urandom(32)).decode()

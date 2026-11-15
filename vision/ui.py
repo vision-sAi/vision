@@ -2478,8 +2478,17 @@ def _private_output():
 
     if os.name == "nt":
         # Windows has no voice to borrow the fds, and its console output writes to the console's own
-        # handle, not to a descriptor; without a console (tests, CI) creating one only raises.
-        return None
+        # handle, not to a descriptor. Without a console (tests, CI, a pipe) prompt_toolkit's own only
+        # raises, so the screen draws into nothing there.
+        from prompt_toolkit.application.current import get_app_session
+        from prompt_toolkit.output import DummyOutput
+        from prompt_toolkit.output.win32 import NoConsoleScreenBufferError
+
+        try:
+            get_app_session().output  # made on first use, the same one the Application would take
+            return None
+        except NoConsoleScreenBufferError:
+            return DummyOutput()
     try:
         tty = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding=sys.stdout.encoding or "utf-8", errors="replace")
         return _close_links(create_output(stdout=tty))
