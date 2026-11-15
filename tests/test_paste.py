@@ -91,10 +91,20 @@ class PasteTests(unittest.TestCase):
     def test_a_pasted_picture_path_attaches_it(self):
         shot = Path(self.dir.name) / "Screenshot From 2026-10-21 18-06-40.png"
         shot.write_bytes(PNG)
-        for pasted in (f"'{shot}'", str(shot), f"{shot.as_uri()}\n", str(shot).replace(" ", "\\ ")):
+        forms = [f"'{shot}'", str(shot), f"{shot.as_uri()}\n"]
+        if os.name != "nt":  # a POSIX terminal's escaped spaces; a Windows path's backslashes are separators
+            forms.append(str(shot).replace(" ", "\\ "))
+        for pasted in forms:
             self.screen.area.buffer.reset()
             self.screen.paste_text(pasted)
             self.assertEqual(self.screen.area.text, "[Image #1] ", pasted)
+        two = Path(self.dir.name) / "b.png"
+        two.write_bytes(PNG)
+        self.screen.area.buffer.reset()
+        self.screen.paste_text(f'"{shot}" "{two}"')  # several dragged at once
+        self.assertEqual(self.screen.area.text, "[Image #1] [Image #2] ")
+        self.screen.area.buffer.reset()
+        self.screen.paste_text(str(shot))
         self.screen.paste_text("look at it")
         self.assertEqual(ui.expand_images(self.screen.area.text), f"[Attached image: {shot}]\nlook at it")
 

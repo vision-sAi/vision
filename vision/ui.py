@@ -2338,7 +2338,10 @@ def pasted_picture_paths(text: str) -> list[str]:
     if picture(whole):  # one path, spaces and all
         return [os.path.abspath(whole)]
     try:
-        words = [path(w) for w in shlex.split(text)]
+        if os.name == "nt":  # backslashes are the separator there, not escapes; quotes still group
+            words = [path(w.strip('"')) for w in shlex.split(text, posix=False)]
+        else:
+            words = [path(w) for w in shlex.split(text)]
     except ValueError:
         return []
     return [os.path.abspath(w) for w in words] if words and all(picture(w) for w in words) else []
