@@ -6,5 +6,8 @@ import unittest
 
 HANG_S = 600  # the whole suite takes about two minutes
 
+if sys.platform == "win32":  # as vision/__main__.py does: a pipe gets the code page otherwise, and "✓" fails to print
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
 faulthandler.dump_traceback_later(HANG_S, exit=True, file=sys.stderr)
 unittest.main(module=None, argv=["unittest", "discover", "-s", "tests", "-v"])

@@ -91,6 +91,24 @@ def try_lock(fd: int, shared: bool = False) -> bool:
     return True
 
 
+def unlock(fd: int) -> None:
+    """Let go of try_lock's lock before closing `fd`. Closing drops it too, but Windows only promises to
+    do that eventually, so a probe that closes still holding it can make the next claim fail."""
+    if not WINDOWS:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return
+    import msvcrt
+
+    here = os.lseek(fd, 0, os.SEEK_CUR)
+    os.lseek(fd, _LOCK_BYTE, os.SEEK_SET)
+    try:
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    finally:
+        os.lseek(fd, here, os.SEEK_SET)
+
+
 def group_kwargs() -> dict:
     """Popen arguments that start a process apart from ours, so kill_tree can end it and its children."""
     return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {"start_new_session": True}
@@ -141,6 +159,22 @@ def native_cli(exe: str) -> str | None:
 
 def wrapper_note(exe: str) -> str:
     return f"{exe} is a batch wrapper, which can't safely carry Vision's prompts. Install the CLI's native Windows build."
+
+
+def hidden(entry: os.DirEntry) -> bool:
+    """A folder entry the user doesn't normally see: a dot name, or on Windows one marked hidden or
+    system (AppData, and the old "My Documents"-style links in every home folder)."""
+    if entry.name.startswith("."):
+        return True
+    if not WINDOWS:
+        return False
+    import stat
+
+    try:
+        attrs = entry.stat(follow_symlinks=False).st_file_attributes
+    except (OSError, AttributeError):
+        return False
+    return bool(attrs & (stat.FILE_ATTRIBUTE_HIDDEN | stat.FILE_ATTRIBUTE_SYSTEM))
 
 
 def quote(arg: str) -> str:

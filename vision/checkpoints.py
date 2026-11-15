@@ -70,7 +70,7 @@ def repo_root(workdir: str) -> str | None:
     if not shutil.which("git") or not os.path.isdir(workdir):
         return None
     try:
-        return _git(workdir, "rev-parse", "--show-toplevel")
+        return os.path.normpath(_git(workdir, "rev-parse", "--show-toplevel"))  # git on Windows writes C:/...
     except CheckpointError:
         return None
 

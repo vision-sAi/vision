@@ -194,7 +194,8 @@ class CdTargetTests(unittest.TestCase):
 
     def test_home_and_previous(self):
         self.assertEqual(_cd_target("~", self.root, None), os.path.expanduser("~"))
-        self.assertEqual(_cd_target("-", self.root, "/"), "/")
+        root = os.path.abspath(os.sep)  # the top of this system's tree: / or D:\
+        self.assertEqual(_cd_target("-", self.root, root), root)
         with self.assertRaisesRegex(ValueError, "no previous directory"):
             _cd_target("-", self.root, None)
 
@@ -217,7 +218,7 @@ class CdTargetTests(unittest.TestCase):
         self.assertEqual(rows("/cd .hi"), ["/cd .hidden/"])
         self.assertEqual(rows(f"/cd {self.root}/s"), [f"/cd {self.root}/sub/"])
         self.assertEqual(rows("/cd nope/"), [])
-        with patch.dict(os.environ, {"HOME": self.root}):
+        with patch.dict(os.environ, {"HOME": self.root, "USERPROFILE": self.root}):  # Windows reads the second
             self.assertEqual(rows("/cd ~"), ["/cd ~/", "/cd ~/sub/"])
 
 
@@ -416,7 +417,9 @@ class InstallHintTests(unittest.TestCase):
         from vision import install
 
         with patch.object(install.Path, "home", return_value=install.ROOT.parent):
-            self.assertEqual(install.setup_hint("cpu"), f"~/{install.ROOT.name}/scripts/setup.sh --voice --cpu")
+            # Windows' shells don't expand ~, so there the hint carries the whole path
+            home_form = install.quote(str(install.SETUP)) if install.WINDOWS else f"~/{install.ROOT.name}/scripts/setup.sh"
+            self.assertEqual(install.setup_hint("cpu"), f"{home_form} --voice --cpu")
         with patch.object(install.Path, "home", return_value=Path("/nowhere")):
             self.assertEqual(install.setup_hint("nvidia"), f"{install.SETUP} --voice --nvidia")
             self.assertEqual(install.setup_hint("mac"), f"{install.SETUP} --voice --mac")
@@ -434,7 +437,8 @@ class InstallHintTests(unittest.TestCase):
 
         for extra in ("serve", "weather"):
             self.assertNotIn("all", install.extra_hint(extra))
-        self.assertTrue(install.extra_hint("serve").endswith("setup.sh --serve"))
+        # setup.sh is a POSIX script: on Windows the serve extra goes in with uv sync like the others
+        self.assertTrue(install.extra_hint("serve").endswith("--extra serve" if install.WINDOWS else "setup.sh --serve"))
         self.assertIn("--extra weather", install.extra_hint("weather"))
 
 

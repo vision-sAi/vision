@@ -2476,11 +2476,22 @@ def _private_output():
     load, on the first spoken reply) does not blank the screen and leave it stale when they return."""
     from prompt_toolkit.output import create_output
 
+    if os.name == "nt":
+        # Windows has no voice to borrow the fds, and its console output writes to the console's own
+        # handle, not to a descriptor; without a console (tests, CI) creating one only raises.
+        return None
     try:
         tty = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding=sys.stdout.encoding or "utf-8", errors="replace")
         return _close_links(create_output(stdout=tty))
     except (OSError, ValueError, AttributeError):
         return None  # not a real terminal (tests, pipes): prompt_toolkit's default output
+
+
+def _output_kw() -> dict:
+    """`output=` for the Application only when there is a private one: left out, prompt_toolkit (or a
+    test's stand-in) picks its own, where an explicit None would still mean its default."""
+    out = _private_output()
+    return {} if out is None else {"output": out}
 
 
 class CornerFrame:
@@ -3063,7 +3074,7 @@ class ChatScreen:
             # result. The terminal's own drag-to-select then needs Shift held (VTE/Ptyxis convention).
             key_bindings=kb, style=PT_STYLE, full_screen=True, mouse_support=True,
             refresh_interval=0.10, min_redraw_interval=1 / 60,
-            max_render_postpone_time=0, output=_private_output(),
+            max_render_postpone_time=0, **_output_kw(),
         ))
         _grab_mouse(self.app, self._grab)
         self.app._handle_exception = self._loop_error
@@ -3080,7 +3091,7 @@ class ChatScreen:
         text = "".join(traceback.format_exception(exc)) if exc else str(context.get("message", context))
         path = STATE_DIR / "errors.log"
         try:
-            with open(path, "a") as f:
+            with open(path, "a", encoding="utf-8") as f:
                 f.write(f"--- {datetime.now().isoformat(timespec='seconds')}\n{text}\n")
         except OSError:
             pass

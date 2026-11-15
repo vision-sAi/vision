@@ -131,15 +131,18 @@ def _load(target: str):
     return getattr(__import__(module, fromlist=[attr]), attr)
 
 
+# Claude Code's own installer: what to type (in PowerShell on Windows), and the line setup runs for it.
+_CLAUDE_INSTALL = "irm https://claude.ai/install.ps1 | iex" if WINDOWS else "curl -fsSL https://claude.ai/install.sh | bash"
+
 REGISTRY: dict[str, Provider] = {p.name: p for p in (
     Provider(
         "claude", "Claude", "Claude Code", "via Claude Code · Claude Subscription",
-        "install Claude Code (curl -fsSL https://claude.ai/install.sh | bash), then run `claude` to log in",
+        f"install Claude Code ({_CLAUDE_INSTALL}), then run `claude` to log in",
         "vision.brain:Brain", "Claude",
         cli="claude", home_env="CLAUDE_CONFIG_DIR", npm_package="@anthropic-ai/claude-code",
-        install_hint="curl -fsSL https://claude.ai/install.sh | bash, then run `claude` to log in",
-        install_cmd=('powershell -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"' if WINDOWS else
-                     "curl -fsSL https://claude.ai/install.sh | bash"), login_cmd=("claude", "auth", "login"),
+        install_hint=f"{_CLAUDE_INSTALL}, then run `claude` to log in",
+        install_cmd=f'powershell -NoProfile -Command "{_CLAUDE_INSTALL}"' if WINDOWS else _CLAUDE_INSTALL,
+        login_cmd=("claude", "auth", "login"),
         has_usage=True, banked_resets=True, usage_from_text=True, conversation="vision.conversation:ClaudeConversation",
         plan_tool=True, fast_model="opus", default_model="opus", title_scanner="_scan_claude",
         session_in_directory=True,  # ~/.claude/projects/<directory>/<id>.jsonl; --resume looks only there (2.1.289)

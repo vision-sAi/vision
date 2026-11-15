@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
 import tempfile
 import threading
 import time
@@ -347,7 +348,8 @@ class LocalToolTests(unittest.TestCase):
         out, err = localtools.run("Bash", {"command": "sleep 5", "timeout_s": 1}, self.dir, [])
         self.assertTrue(err)
         self.assertIn("killed", out)
-        out, err = localtools.run("Bash", {"command": "pwd"}, self.dir, [])
+        # Git Bash's plain pwd is its own /tmp/... view of the folder; -W gives the Windows path
+        out, err = localtools.run("Bash", {"command": "pwd -W" if os.name == "nt" else "pwd"}, self.dir, [])
         self.assertEqual(Path(out.strip()).resolve(), Path(self.dir).resolve())
 
     def test_shell_cannot_start_another_brain(self):

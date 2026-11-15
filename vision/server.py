@@ -118,7 +118,7 @@ from vision.brain import agent_frame, context_figure, tool_frame, warm_soon
 from vision.config import CONFIG_DIR, MODES, STATE_DIR, Config, save_brain_defaults, save_config_value, saved_brain_defaults
 from vision.sessions import claude_history
 from vision.planvoice import plan_answer, plan_question, plan_summary
-from vision.procs import WINDOWS
+from vision.procs import WINDOWS, hidden
 from vision.projects import APPROVAL_PREFIX, CHECKIN_PREFIX, REPORT_PREFIX
 from vision.reply import status_label
 from vision.tts import SAMPLE_RATE, Speaker, StreamingSpeaker, log_voice_line
@@ -507,7 +507,7 @@ def list_folder(path: str) -> dict:
         with os.scandir(target) as entries:
             for entry in entries:
                 try:
-                    if not entry.name.startswith(".") and entry.is_dir():
+                    if not hidden(entry) and entry.is_dir():
                         names.append(entry.name)
                 except OSError:  # a dangling link, a mount that went away
                     continue

@@ -26,7 +26,7 @@ from vision.buddy import Buddy
 from vision.warmup import WarmupProgress, warm_voice
 from vision import usage as usage_ui
 from vision import clis
-from vision.procs import WINDOWS, replace_process
+from vision.procs import WINDOWS, hidden, replace_process
 from vision.config import (
     CONFIG_PATH,
     LLAMA_DIR,
@@ -310,7 +310,7 @@ def _cd_choices(arg: str, current: str) -> list[tuple[str, str]]:
         rows = [(base, "this folder")]
     try:
         names = sorted(
-            (e.name for e in os.scandir(folder) if e.is_dir() and (stem.startswith(".") or not e.name.startswith("."))),
+            (e.name for e in os.scandir(folder) if e.is_dir() and (stem.startswith(".") or not hidden(e))),
             key=str.lower,
         )
     except OSError:

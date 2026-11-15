@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import _nopush  # noqa: F401  (keeps the suite off the real phones)
+from held_journals import released_journals
 
 from vision import server
 from vision.brain import COMPACTED, inject_handoff
@@ -188,7 +189,7 @@ class CompactTests(unittest.TestCase):
         self.assertEqual(brain.session_id, "s2")
 
     def test_a_restart_before_the_next_turn_carries_on_from_the_summary(self):
-        with tempfile.TemporaryDirectory() as tmp, patch("vision.turnjournal.JOURNAL_DIR", Path(tmp)):
+        with tempfile.TemporaryDirectory() as tmp, released_journals(), patch("vision.turnjournal.JOURNAL_DIR", Path(tmp)):
             hub, chat, _ = self._chat(journal_dir=tmp)
             self._compact(hub, chat)
             state = recover(ChatJournal(chat.id, Path(tmp)).read())

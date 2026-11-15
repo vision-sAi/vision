@@ -2490,7 +2490,9 @@ class BrainEnvTests(unittest.TestCase):
                 self.assertNotEqual(env.get(kept), empty)
             self.assertEqual(env["GROK_MEMORY"], "0")  # last env is grok
             for name in ("claude", "codex", "grok"):
-                r = subprocess.run([name, "-p", "hi"], env=env, capture_output=True, text=True)
+                # Windows starts a bare name from our own PATH, not env's: a shell (cmd.exe, finding the .cmd shim) looks in env's
+                r = (subprocess.run(f"{name} -p hi", shell=True, env=env, capture_output=True, text=True) if os.name == "nt" else
+                     subprocess.run([name, "-p", "hi"], env=env, capture_output=True, text=True))
                 self.assertEqual(r.returncode, 1)
                 self.assertIn("blocked by Vision", r.stderr)
                 self.assertIn("/model", r.stderr)

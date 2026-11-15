@@ -6,7 +6,7 @@ from rich.console import Console
 
 
 def _print(renderable, width: int = 60) -> str:
-    console = Console(width=width, force_terminal=False, file=io.StringIO())
+    console = Console(width=width, force_terminal=False, file=io.StringIO(), legacy_windows=False)  # else the CI console swaps in square corners
     console.print(renderable)
     return console.file.getvalue()
 

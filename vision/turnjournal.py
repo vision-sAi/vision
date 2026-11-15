@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 from vision.config import DATA_DIR
-from vision.procs import try_lock
+from vision.procs import try_lock, unlock
 
 JOURNAL_DIR = DATA_DIR / "chat-journals"
 SCHEDULED_RESTORE_DAYS = 30
@@ -118,7 +118,10 @@ def in_use(path: Path) -> bool:
     except OSError:
         return False
     try:
-        return not try_lock(fd, shared=True)
+        if not try_lock(fd, shared=True):
+            return True
+        unlock(fd)  # Windows has only the exclusive lock: give it straight back
+        return False
     finally:
         os.close(fd)
 

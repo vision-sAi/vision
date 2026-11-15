@@ -37,5 +37,5 @@ jobs:
       - run: uv sync --frozen --extra serve --extra weather
       # Test-only packages: numpy and soundfile for the audio fakes, soxr for the resampler, pillow for library thumbnails, httpx2
       # for starlette's TestClient, pytest for test_int8's markers.
-      - run: uv pip install numpy soundfile soxr pillow pytest httpx2
+      - run: uv pip install numpy soundfile soxr pillow pytest httpx2 distlib
       - run: uv run --frozen --no-sync python -m tests._ci

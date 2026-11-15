@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import _nopush  # noqa: F401  (keeps the suite off the real phones)
+from held_journals import released_journals
 
 from vision import server
 
@@ -24,7 +25,7 @@ class _Brain:
     """Answers "echo: <text>", and keeps the handoff it was given when its first turn ran."""
 
     provider = "claude"
-    workdir = "/tmp"
+    workdir = tempfile.gettempdir()  # a folder that exists on every system (no /tmp on Windows)
 
     def __init__(self, cfg, session_id=None):
         self.cfg, self.session_id, self.handoff = cfg, session_id, None
@@ -78,7 +79,7 @@ ROWS = [
 
 class RenameTests(unittest.TestCase):
     def test_a_rename_is_shared_kept_over_a_restart_and_never_replaced_by_an_automatic_title(self):
-        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+        with tempfile.TemporaryDirectory() as tmp, released_journals(), ExitStack() as stack:
             _quiet(stack, tmp)
             hub = _hub()
             chat = hub.open_chat()
@@ -132,7 +133,7 @@ class BranchRowTests(unittest.TestCase):
 
 class BranchTests(unittest.TestCase):
     def test_a_branch_holds_the_earlier_rows_hands_them_over_and_comes_back_after_a_restart(self):
-        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+        with tempfile.TemporaryDirectory() as tmp, released_journals(), ExitStack() as stack:
             _quiet(stack, tmp)
             hub = _hub()
             chat = hub.open_chat()
@@ -161,7 +162,7 @@ class BranchTests(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         auth = {"Authorization": "Bearer tok"}
-        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+        with tempfile.TemporaryDirectory() as tmp, released_journals(), ExitStack() as stack:
             _quiet(stack, tmp)
             stack.enter_context(patch("vision.link.LIVE_DIR", Path(tmp)))
             stack.enter_context(patch.object(server.Hub, "warm_up", lambda self: None))

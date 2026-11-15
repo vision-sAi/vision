@@ -90,7 +90,7 @@ class CheckTests(unittest.TestCase):
     def test_how_to_update_is_upgrade_for_an_installed_vision_and_a_pull_there_for_a_checkout(self):
         with patch.object(selfupdate, "ROOT", Path("/nowhere/vision/app")):
             # a working checkout, not the installed one
-            self.assertEqual(selfupdate.how(), "git -C /nowhere/vision/app pull && vision restart")
+            self.assertEqual(selfupdate.how(), f"git -C {Path('/nowhere/vision/app')} pull && vision restart")
         with patch.object(selfupdate, "installed", return_value=True):
             self.assertEqual(selfupdate.how(), "vision upgrade")
 
@@ -149,7 +149,11 @@ class UpgradeTests(unittest.TestCase):
     def test_it_runs_the_installer_then_restarts_the_server(self):
         result, run, forget, restart = self.run_upgrade()
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertEqual(run.call_args.args[0][0], "sh")
+        from vision import cli
+
+        # install.ps1 on Windows, which has no sh; install.sh everywhere else
+        argv = run.call_args.args[0]
+        self.assertEqual((argv[0], Path(argv[-1]).name), ("powershell", "install.ps1") if cli.WINDOWS else ("sh", "install.sh"))
         forget.assert_called_once()
         restart.assert_called_once()
 

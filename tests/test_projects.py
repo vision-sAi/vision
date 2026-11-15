@@ -6,11 +6,14 @@ import tempfile
 import unittest
 
 import _nopush  # noqa: F401  (keeps the suite off the real phones)
+from held_journals import released_journals
 from pathlib import Path
 from unittest.mock import patch
 
 from vision import projects
 from vision.projects import SETTINGS, ProjectStore, clean, prompt_section
+
+A, B = os.path.abspath("/a"), os.path.abspath("/b")  # what a stored folder becomes: D:\a on Windows
 
 
 class CleanTest(unittest.TestCase):
@@ -19,7 +22,7 @@ class CleanTest(unittest.TestCase):
             clean({"goal": "  "})
         p = clean({"goal": "Ship the iPhone widget.\nWith tests.", "workdir": "~/x"})
         self.assertEqual(p["title"], "Ship the iPhone widget")
-        self.assertEqual(p["workdirs"], [os.path.expanduser("~/x")])
+        self.assertEqual(p["workdirs"], [os.path.abspath(os.path.expanduser("~/x"))])
         self.assertEqual((p["status"], p["chat"], p["instructions"]), ("active", "", ""))
         self.assertEqual(p["settings"], SETTINGS)
         long = clean({"goal": "word " * 40})
@@ -28,7 +31,7 @@ class CleanTest(unittest.TestCase):
 
     def test_an_edit_keeps_what_it_leaves_out(self):
         p = clean({"goal": "g", "title": "T", "instructions": "be brief", "workdirs": ["/a", "/a", "/b"]})
-        self.assertEqual(p["workdirs"], ["/a", "/b"])
+        self.assertEqual(p["workdirs"], [A, B])
         edited = clean({"instructions": "", "settings": {"max_threads": "5"}}, p)
         self.assertEqual((edited["id"], edited["title"], edited["goal"], edited["instructions"]), (p["id"], "T", "g", ""))
         self.assertEqual(edited["settings"]["max_threads"], 5)
@@ -50,7 +53,7 @@ class PromptSectionTest(unittest.TestCase):
         self.assertIn('project "Build"', text)
         self.assertIn("Goal: Fix the build", text)
         self.assertIn("Never push.", text)
-        self.assertIn("/a, /b", text)
+        self.assertIn(f"{A}, {B}", text)
 
     def test_every_provider_puts_it_in_the_system_prompt(self):
         from vision.persona import system_prompt
@@ -183,7 +186,7 @@ class StoreTest(unittest.TestCase):
         self.assertFalse(list(self.root.rglob("*.tmp")))
         again = ProjectStore(self.root)
         self.assertEqual({p["id"] for p in again.list()}, {a["id"], b["id"]})
-        self.assertEqual(again.get(a["id"])["workdirs"], ["/a"])
+        self.assertEqual(again.get(a["id"])["workdirs"], [A])
         with self.assertRaises(KeyError):
             s.upsert({"id": "nope", "goal": "x"})
 
@@ -450,7 +453,7 @@ class RestoreTest(unittest.TestCase):
         from vision.server import Hub
         from vision.turnjournal import ChatJournal
 
-        with tempfile.TemporaryDirectory() as tmp, patch("vision.turnjournal.JOURNAL_DIR", Path(tmp)), \
+        with tempfile.TemporaryDirectory() as tmp, released_journals(), patch("vision.turnjournal.JOURNAL_DIR", Path(tmp)), \
                 patch.object(projects, "STORE_DIR", Path(tmp) / "projects"), \
                 patch("vision.brain.create_brain", side_effect=lambda cfg, **kw: _Brain(cfg, **kw)):
             store = ProjectStore()

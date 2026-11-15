@@ -1,9 +1,11 @@
+import json
 import os
 import unittest
 
 import _nopush  # noqa: F401  (keeps the suite off the real phones)
+from held_journals import released_journals
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, gettempdir
 from unittest.mock import patch
 
 from vision.turnjournal import (
@@ -157,7 +159,7 @@ class TurnJournalTests(unittest.TestCase):
 
         class Brain:
             provider = "claude"
-            workdir = "/tmp"
+            workdir = gettempdir()  # a folder that exists on every system (no /tmp on Windows)
 
             def __init__(self, cfg, session_id=None):
                 self.cfg, self.session_id, self.handoff = cfg, session_id, None
@@ -165,7 +167,7 @@ class TurnJournalTests(unittest.TestCase):
             def resolved_model(self):
                 return self.cfg.model
 
-        with TemporaryDirectory() as tmp, patch("vision.turnjournal.JOURNAL_DIR", Path(tmp)):
+        with TemporaryDirectory() as tmp, released_journals(), patch("vision.turnjournal.JOURNAL_DIR", Path(tmp)):
             journal = ChatJournal("chat3", Path(tmp))
             journal.append("chat", model="opus", effort="high", session_id=None)
             journal.append("base", history=[])
@@ -192,7 +194,7 @@ class GracefulRestartTests(unittest.TestCase):
 
         class Brain:
             provider = "claude"
-            workdir = "/tmp"
+            workdir = gettempdir()  # a folder that exists on every system (no /tmp on Windows)
 
             def __init__(self, cfg, session_id=None):
                 self.cfg, self.session_id, self.handoff = cfg, session_id, None
@@ -208,7 +210,7 @@ class GracefulRestartTests(unittest.TestCase):
         return Hub(cfg, Brain(cfg.brain), "token", log=lambda *_: None, open_initial=False, journal_enabled=True)
 
     def test_restart_waits_for_busy_chats_then_holds_new_messages(self):
-        with TemporaryDirectory() as tmp, patch("vision.turnjournal.JOURNAL_DIR", Path(tmp)), \
+        with TemporaryDirectory() as tmp, released_journals(), patch("vision.turnjournal.JOURNAL_DIR", Path(tmp)), \
                 patch("vision.server.RESTART_MARKER", Path(tmp) / "restart.json"):
             hub = self._hub(tmp)
             chat = hub.open_chat()
@@ -228,7 +230,7 @@ class GracefulRestartTests(unittest.TestCase):
             self.assertEqual([p[0] for p in chat._pending], ["one more thing"])
 
     def test_after_a_graceful_restart_queued_messages_run_instead_of_showing_lost(self):
-        with TemporaryDirectory() as tmp, patch("vision.turnjournal.JOURNAL_DIR", Path(tmp)), \
+        with TemporaryDirectory() as tmp, released_journals(), patch("vision.turnjournal.JOURNAL_DIR", Path(tmp)), \
                 patch("vision.server.RESTART_MARKER", Path(tmp) / "restart.json"):
             journal = ChatJournal("chat4", Path(tmp))
             journal.append("chat", model="opus", effort="high", session_id="s1")
@@ -282,6 +284,7 @@ class RestoredFolderTests(unittest.TestCase):
         from contextlib import ExitStack
 
         stack = ExitStack()
+        stack.enter_context(released_journals())  # exits first, before the folder is deleted
         stack.enter_context(patch("vision.turnjournal.JOURNAL_DIR", Path(tmp) / "journals"))
         stack.enter_context(patch("vision.server.RESTART_MARKER", Path(tmp) / "restart.json"))
         stack.enter_context(patch("vision.sessions.CLAUDE_PROJECTS", str(Path(tmp) / "claude-projects")))
@@ -309,7 +312,7 @@ class RestoredFolderTests(unittest.TestCase):
             journal.append("base", history=[])
             session = Path(tmp) / "claude-projects" / "-picked" / "sess-1.jsonl"
             session.parent.mkdir(parents=True)
-            session.write_text('{"type":"queue-operation"}\n{"type":"user","cwd":"%s"}\n' % picked)
+            session.write_text('{"type":"queue-operation"}\n' + json.dumps({"type": "user", "cwd": str(picked)}) + "\n")
             self.assertEqual(self._hub(tmp).chats["old1"].workdir, str(picked))
 
     def test_a_folder_that_is_gone_falls_back_to_the_servers_own(self):

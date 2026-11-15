@@ -299,7 +299,7 @@ class ServiceUnitTests(unittest.TestCase):
             plist = Path(tmp, "agent.plist")
             with patch.dict(os.environ, {"PATH": path}), patch.object(service, "kind", return_value="launchd"), \
                     patch.object(service, "unit_path", return_value=plist), patch.object(service, "_run"), \
-                    patch.object(service, "STATE_DIR", Path(tmp, "state")):
+                    patch.object(service, "_domain", return_value="gui/501"), patch.object(service, "STATE_DIR", Path(tmp, "state")):
                 service.install()
             import plistlib
 

@@ -572,6 +572,8 @@ class WorktreeTest(ThreadsTestBase):
         self.assertTrue(os.path.isdir(t["worktree"]))
 
     def test_a_folder_outside_git_falls_back_to_the_project_folder(self):
+        for f in (self.tmp / "work" / ".git").rglob("*"):
+            f.chmod(0o700 if f.is_dir() else 0o600)  # git's objects are read-only, and Windows won't delete those
         shutil.rmtree(self.tmp / "work" / ".git")
         pt = self.threads(isolation="worktree")
         t = pt.start("Edit things")

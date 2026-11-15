@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 import _nopush  # noqa: F401  (keeps the suite off the real phones)
 from unittest.mock import patch
@@ -89,14 +90,15 @@ class UploadTests(unittest.TestCase):
         hub = SimpleNamespace(authorized=lambda token: token == "image-test", log=lambda _: None)
         client = TestClient(server.create_app(hub))
         auth = {"Authorization": "Bearer image-test"}
-        with tempfile.NamedTemporaryFile(suffix=".png", dir="/tmp") as f:
-            f.write(b"png bytes")
-            f.flush()
-            ok = client.get("/image", params={"path": f.name}, headers=auth)
+        # Windows has no /tmp, and won't let the server open a file a NamedTemporaryFile still holds
+        with tempfile.TemporaryDirectory(dir=tempfile.gettempdir() if os.name == "nt" else "/tmp") as d:
+            png, txt = Path(d, "shot.png"), Path(d, "notes.txt")
+            png.write_bytes(b"png bytes")
+            txt.write_text("text")
+            ok = client.get("/image", params={"path": str(png)}, headers=auth)
             self.assertEqual((ok.status_code, ok.content, ok.headers["content-type"]), (200, b"png bytes", "image/png"))
-            self.assertEqual(client.get("/image", params={"path": f.name}).status_code, 401)
-        with tempfile.NamedTemporaryFile(suffix=".txt", dir="/tmp") as f:
-            self.assertEqual(client.get("/image", params={"path": f.name}, headers=auth).status_code, 404)
+            self.assertEqual(client.get("/image", params={"path": str(png)}).status_code, 401)
+            self.assertEqual(client.get("/image", params={"path": str(txt)}, headers=auth).status_code, 404)
         self.assertEqual(client.get("/image", params={"path": "/tmp/../etc/passwd"}, headers=auth).status_code, 404)
         self.assertFalse(server.image_path_allowed(__import__("pathlib").Path("/usr/share/pixmaps/x.png")))
         # The user's own temp folder counts too: on macOS that is /private/var/folders/…, not /tmp.
@@ -199,7 +201,8 @@ class TokenTests(unittest.TestCase):
             with patch.object(server, "TOKEN_FILE", server.TOKEN_FILE.__class__(path)), patch.object(server, "CONFIG_DIR", server.CONFIG_DIR.__class__(d)):
                 first = server.load_token()
                 self.assertGreaterEqual(len(first), 30)
-                self.assertEqual(oct(os.stat(path).st_mode & 0o777), "0o600")
+                if os.name != "nt":  # Windows has no mode bits; the profile folder's ACL keeps it private there
+                    self.assertEqual(oct(os.stat(path).st_mode & 0o777), "0o600")
                 self.assertEqual(server.load_token(), first)
                 self.assertNotEqual(server.load_token(regenerate=True), first)
 
@@ -483,7 +486,8 @@ class OpenTerminalTests(unittest.TestCase):
             return None if name == "systemctl" and systemd is None else f"/usr/bin/{name}" if name in ("systemctl", "konsole") else None
 
         with patch.dict(os.environ, own, clear=True), patch.object(server.shutil, "which", which), \
-                patch.object(server.sys, "platform", "linux"), patch.object(server.subprocess, "run", run), \
+                patch.object(server.sys, "platform", "linux"), patch.object(server, "WINDOWS", False), \
+                patch.object(server.subprocess, "run", run), \
                 patch.object(server.subprocess, "Popen", lambda argv, **kw: opened.append(kw["env"])):
             term = server.open_terminal("c1", "")
         self.assertEqual(term, "konsole")
@@ -517,7 +521,8 @@ class MacOpenTerminalTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, result[0], "", result[1])
 
         isdir = os.path.isdir
-        with patch.object(server.sys, "platform", "darwin"), patch.object(server.subprocess, "run", run), \
+        with patch.object(server.sys, "platform", "darwin"), patch.object(server, "WINDOWS", False), \
+                patch.object(server.subprocess, "run", run), \
                 patch.object(server.shutil, "which", lambda name: "/opt/bin/vision" if name == "vision" else None), \
                 patch.object(server.os.path, "isdir", lambda p: iterm if p.endswith("iTerm.app") else isdir(p)):
             term = server.open_terminal("c1", workdir)
@@ -799,7 +804,7 @@ class MultiChatTests(unittest.TestCase):
     def test_a_folder_is_shown_with_a_tilde_for_home(self):
         home = os.path.expanduser("~")
         self.assertEqual(server.tilde(home), "~")
-        self.assertEqual(server.tilde(os.path.join(home, "code", "vision")), "~/code/vision")
+        self.assertEqual(server.tilde(os.path.join(home, "code", "vision")), os.path.join("~", "code", "vision"))
         self.assertEqual(server.tilde(home + "-other/x"), home + "-other/x")  # a sibling of home is not under it
         self.assertEqual(server.tilde("/srv/www"), "/srv/www")
 
