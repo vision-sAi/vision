@@ -479,3 +479,31 @@ class ServiceStatusTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("not answering", result.output)
 
+    def test_the_services_own_server_is_running_whatever_pid_was_saved(self):
+        # Windows: the supervisor saves the venv launcher's pid (999); the server is its child (4242)
+        result = self.status(999, {**self.SERVER, "service": True})
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("running", result.output)
+        self.assertNotIn("waiting", result.output)
+
+    def test_a_server_the_service_didnt_start_is_waited_behind(self):
+        result = self.status(4242, {**self.SERVER, "service": False})
+        self.assertIn("waiting", result.output)
+        self.assertNotIn("✓", result.output)
+
+    def test_the_descriptor_says_whether_the_service_started_it(self):
+        import json
+        import tempfile
+
+        from vision import remote, service
+
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            with patch.object(remote, "STATE_DIR", state), patch.object(remote, "SERVE_FILE", state / "serve.json"):
+                for env, expected in (({service.ENV: "1"}, True), ({}, False)):
+                    with patch.dict(os.environ, env, clear=False):
+                        if not env:
+                            os.environ.pop(service.ENV, None)
+                        remote.write_serve_descriptor("127.0.0.1", 8765)
+                    self.assertIs(json.loads((state / "serve.json").read_text(encoding="utf-8"))["service"], expected)
+

@@ -227,9 +227,16 @@ def pid() -> int | None:
 
 def waiting(server: dict | None) -> bool:
     """Whether the service is up but only waiting: another `vision serve` (one in a terminal) holds the
-    port, and the service takes over when that one stops. `server` is remote.running_server()."""
+    port, and the service takes over when that one stops. `server` is remote.running_server().
+
+    The server says whether the service started it. Comparing pids can't tell on Windows: the supervisor
+    starts the venv's python.exe, a launcher that runs the real interpreter as its child, so the pid it
+    saves is never the server's. A descriptor from before the flag falls back to the pids."""
     mine = pid()
-    return bool(server) and running() and mine is not None and server.get("pid") != mine
+    if not (server and running() and mine is not None):
+        return False
+    ours = server.get("service")
+    return not ours if ours is not None else server.get("pid") != mine
 
 
 def stop() -> None:
