@@ -35,6 +35,9 @@ jobs:
       # Text chat plus the serve and weather extras. The voice extras (torch; ~6 GB with CUDA) stay out: the
       # tests fake the GPU, the microphone and the speech models, and the torch-only ones skip.
       - run: uv sync --frozen --extra serve --extra weather
+      # What the installers put in (serve, no voice) must be enough to start `vision serve`: checked before the
+      # test-only packages below, which include numpy, can hide a missing one.
+      - run: uv run --frozen --no-sync python -c "import vision.server"
       # Test-only packages: numpy and soundfile for the audio fakes, soxr for the resampler, pillow for library thumbnails, httpx2
       # for starlette's TestClient, pytest for test_int8's markers.
       - run: uv pip install numpy soundfile soxr pillow pytest httpx2 distlib

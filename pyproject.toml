@@ -86,6 +86,9 @@ serve = [
   "cryptography>=42",  # seals push notifications for the phone (vision/push.py)
   "pillow>=10",  # Library thumbnails (vision/library.py)
   "imageio-ffmpeg>=0.5",  # a static ffmpeg, so videos from the phone digest on any machine (vision/server.py)
+  # server.py imports vision.tts (the phone's speech classes) and tts.py needs numpy to import: without it, a
+  # machine with serve but no voice can't start `vision serve` at all, voice off or not.
+  "numpy",
 ]
 # `vision weather`: ES256 signing of Apple WeatherKit tokens (needs an Apple Developer account)
 weather = ["cryptography>=42"]
