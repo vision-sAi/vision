@@ -93,7 +93,8 @@ def running_server() -> dict | None:
         return None
     if not token:
         return None
-    return {"pid": pid, "url": info["url"], "port": info.get("port"), "token": token}
+    # "service" is None in a descriptor from before the flag: service.waiting() then compares pids
+    return {"pid": pid, "url": info["url"], "port": info.get("port"), "token": token, "service": info.get("service")}
 
 
 def _get(server: dict, path: str, timeout: float = CONNECT_TIMEOUT):

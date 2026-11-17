@@ -507,3 +507,24 @@ class ServiceStatusTests(unittest.TestCase):
                         remote.write_serve_descriptor("127.0.0.1", 8765)
                     self.assertIs(json.loads((state / "serve.json").read_text(encoding="utf-8"))["service"], expected)
 
+    def test_the_services_flag_survives_running_server(self):
+        # What `vision service status` really reads: serve.json through running_server, not a dict made up here
+        import json
+        import tempfile
+
+        from vision import remote, server, service
+
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            (state / "token").write_text("t", encoding="utf-8")
+            with patch.object(remote, "STATE_DIR", state), patch.object(remote, "SERVE_FILE", state / "serve.json"), \
+                    patch.object(server, "TOKEN_FILE", state / "token"), patch.object(remote, "boot_time", return_value=None), \
+                    patch("vision.link.pid_alive", return_value=True), patch.dict(os.environ, {service.ENV: "1"}):
+                remote.write_serve_descriptor("127.0.0.1", 8765)
+                found = remote.running_server()
+                self.assertIs(found["service"], True)
+                (state / "serve.json").write_text(json.dumps({"pid": 4242, "url": "http://127.0.0.1:8765"}), encoding="utf-8")
+                self.assertIsNone(remote.running_server()["service"], "a descriptor from before the flag")
+            with patch.object(service, "running", return_value=True), patch.object(service, "pid", return_value=999):
+                self.assertFalse(service.waiting(found), "the service's own server, whatever pid the supervisor saved")
+
