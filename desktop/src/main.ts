@@ -332,6 +332,13 @@ function handle(ev: Json) {
       m.streaming = false; m.status = "";
       list.push(blank("user", ev.text ?? ""));
       list.push({ ...blank("assistant"), streaming: true, status: "Working…" });
+      // It sits in the reply now, so its queued bubble goes (an older server doesn't resend the queue).
+      const c = chats.get(chat);
+      if (c?.queued) {
+        const i = c.queued.indexOf(ev.text);
+        if (i >= 0) c.queued.splice(i, 1);
+        c.sent = (c.sent || []).filter((t: string) => t !== ev.text);
+      }
       break;
     }
     case "status": { const m = streamingMsg(chat); if (m) m.status = ev.label || (ev.tool ? `Using ${ev.tool}…` : "Working…"); break; }
@@ -1062,12 +1069,20 @@ function drawQueued() {
   const queued: string[] = (active && chats.get(active)?.queued) || [];
   if (!queued.length) return;
   const wrap = el("div", "queued-wrap");
+  const sent: string[] = [...((active && chats.get(active)?.sent) || [])];
   for (const text of queued) {
     const m = el("div", "msg user queued");
     m.append(el("div", "bubble", text));
-    const undo = el("button", "link small", "Remove from queue");
-    undo.onclick = () => send({ type: "unqueue", chat: active, text });
-    m.append(undo);
+    const i = sent.indexOf(text);
+    if (i >= 0) {
+      // Already in Claude's hands (it takes it at its next step): there is no taking it back.
+      sent.splice(i, 1);
+      m.append(el("div", "link small", "Sent, goes in at the next step"));
+    } else {
+      const undo = el("button", "link small", "Remove from queue");
+      undo.onclick = () => send({ type: "unqueue", chat: active, text });
+      m.append(undo);
+    }
     wrap.append(m);
   }
   box.append(wrap);

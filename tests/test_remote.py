@@ -403,8 +403,9 @@ class JoinTests(unittest.TestCase):
                 for p in patches:
                     p.stop()
 
-    def _claude_like(self, take: bool):
-        """A brain that, like Claude, takes a steered message at its next step and says so then."""
+    def _claude_like(self, take: bool, hold: threading.Event | None = None):
+        """A brain that, like Claude, takes a steered message at its next step and says so then
+        (after `hold` is set, when given)."""
         from vision.config import BrainConfig
 
         sent, calls = threading.Event(), []
@@ -433,9 +434,13 @@ class JoinTests(unittest.TestCase):
                     if not sent.wait(5):
                         raise AssertionError("Send now did not reach the running turn")
                     time.sleep(0.2)  # the phone gets the summary listing it as waiting
+                    if hold and not hold.wait(5):
+                        raise AssertionError("never released")
                     on_text(" Still on it.")
                     if take:
                         self.on_steer_taken(self.waiting.pop(0))
+                        if hold:
+                            time.sleep(0.3)  # the turn goes on after taking it: the queue must clear now, not at done
                         on_text(" After.")
                     return _Turn("Before. Still on it." + (" After." if take else ""), "s1")
                 on_text("Next reply.")
@@ -490,6 +495,34 @@ class JoinTests(unittest.TestCase):
                     self.assertEqual(calls, ["first"])
                     self.assertEqual([(m["role"], m["text"]) for m in hub.chats[chat_id].history()[-4:]], [
                         ("user", "first"), ("assistant", "Before. Still on it."), ("user", "steer this"), ("assistant", "After.")])
+                    phone.close()
+            finally:
+                for p in patches:
+                    p.stop()
+
+    def test_a_sent_message_cant_be_unqueued_and_leaves_the_queue_when_claude_takes_it(self):
+        release = threading.Event()
+        hub, calls = self._claude_like(take=True, hold=release)
+        chat_id = next(iter(hub.chats))
+        with tempfile.TemporaryDirectory() as d:
+            patches = _quiet(d)
+            for p in patches:
+                p.start()
+            try:
+                with _Live(hub) as info:
+                    phone = _Phone(info)
+                    phone.until(lambda ev: ev["type"] == "hello")
+                    phone.send({"type": "message", "chat": chat_id, "text": "first"})
+                    phone.until(lambda ev: ev["type"] == "delta" and ev["text"] == "Before.")
+                    phone.send({"type": "message", "chat": chat_id, "text": "yes"})
+                    phone.until(lambda ev: ev["type"] == "chat" and ev.get("queued") == ["yes"] and ev.get("sent") == ["yes"])
+                    phone.send({"type": "unqueue", "chat": chat_id, "text": "yes"})
+                    phone.until(lambda ev: ev["type"] == "toast" and "next step" in ev["text"])
+                    release.set()
+                    phone.until(lambda ev: ev["type"] == "steered" and ev["text"] == "yes")
+                    phone.until(lambda ev: ev["type"] == "chat" and ev["busy"] and ev.get("queued") == [] and ev.get("sent") == [])
+                    phone.until(lambda ev: ev["type"] == "done")
+                    self.assertEqual(calls, ["first"])
                     phone.close()
             finally:
                 for p in patches:

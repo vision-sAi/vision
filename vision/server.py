@@ -877,6 +877,7 @@ class Chat:
             # how long the running reply has taken so far, for a phone that opens mid-reply (its timer goes on from here)
             "elapsed_ms": int(((self._asked or time.time()) - self._started) * 1000) if self.busy and self._started else 0,
             "queued": self._sent + [item[0] for item in self._pending],  # a phone opened cold gets its queued bubbles back
+            "sent": list(self._sent),  # of those, already in Claude's hands: it takes them at its next step and they can't be taken back
             "shell_running": self._shell is not None,  # a shell-mode command is running: the phone's stop button stops it
             "suggestion": "" if self.busy else self.suggestion,
             "agents": list(self.agents.values()) if self.busy else [],
@@ -1000,6 +1001,7 @@ class Chat:
         _split_timer(self)
         self.log(f"» {text[:80]}{'…' if len(text) > 80 else ''}")
         self.post({"type": "steered", "text": text})
+        self.hub.post(self.summary())  # out of every client's queue, now that it sits in the reply
 
     def talks_over(self) -> bool:
         """A call's turn is running (the conversation model, often waiting on agents it launched): what
@@ -3304,6 +3306,9 @@ class Hub:
         elif kind == "unqueue":
             # A queued message removed (or taken back to edit) on the phone: it never runs.
             text = with_attachments((msg.get("text") or "").strip(), msg.get("images"))
+            if text and isinstance(chat, Chat) and text in getattr(chat, "_sent", ()):
+                await ws.send_json({"type": "toast", "text": "Already sent into the reply: Claude takes it at its next step."})
+                return
             if text and chat.unqueue(text) and isinstance(chat, Chat) and not msg.get("keep"):
                 # It never ran, so nothing will read what it carried: those uploads go too, rather
                 # than linger in the Library. (A terminal chat decides on its own; its files stay.)
