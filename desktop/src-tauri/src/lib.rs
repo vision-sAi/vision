@@ -714,7 +714,8 @@ async fn setup_run(app: AppHandle, action: String, name: Option<String>) -> Resu
     Ok(run)
 }
 
-/// How this copy was installed, for updating it: "app" (macOS) and "appimage" replace themselves; a
+/// How this copy was installed, for updating it: "app" (macOS), "appimage" and "installer" (Windows: the
+/// updater runs the new setup, which closes this copy and opens the new one) replace themselves; a
 /// "package" (rpm, deb) is updated by downloading the new one; "dev" is a build from source.
 #[tauri::command]
 fn install_kind() -> &'static str {
@@ -722,6 +723,8 @@ fn install_kind() -> &'static str {
         "dev"
     } else if cfg!(target_os = "macos") {
         "app"
+    } else if cfg!(windows) {
+        "installer"
     } else if std::env::var_os("APPIMAGE").is_some() {
         "appimage"
     } else {

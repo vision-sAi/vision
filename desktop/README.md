@@ -21,7 +21,9 @@ The address and key are kept in the app's config folder (`~/.config/com.vision.d
 
 ## Building
 
-Needs Node 22 and Rust (`rustup`); on a Mac, also Xcode's command line tools. On Linux, the WebKitGTK
+Needs Node 22 and Rust (`rustup`); on a Mac, also Xcode's command line tools. On Windows, Visual Studio's
+C++ build tools (the "Desktop development with C++" workload, which brings the Windows SDK) and WebView2,
+which Windows 10 and 11 already have; the bundler fetches WiX and NSIS itself. On Linux, the WebKitGTK
 headers too:
 
     sudo dnf install webkit2gtk4.1-devel gtk3-devel libsoup3-devel librsvg2-devel openssl-devel   # Fedora
@@ -46,7 +48,7 @@ empty. `PORT=` picks another port; Ctrl-C stops both.
 arriving, clicks, typing) and what to check. Pictures land in `harness/out/`; `node harness/shots.mjs plan:light`
 runs one scene in one theme (`:macos` adds the Mac title bar).
 
-CI (`.github/workflows/desktop.yml`) builds Linux and macOS on every change under `desktop/` and keeps
+CI (`.github/workflows/desktop.yml`) builds Linux, macOS and Windows on every change under `desktop/` and keeps
 the installers as artifacts (unsigned; releases are below).
 
 ## Releasing
@@ -54,10 +56,12 @@ the installers as artifacts (unsigned; releases are below).
     node scripts/version.mjs 0.2.0      # tauri.conf.json, package.json and Cargo.toml together
     git commit -am "Desktop app 0.2.0" && git tag desktop-v0.2.0 && git push origin master desktop-v0.2.0
 
-The tag runs `.github/workflows/desktop-release.yml`: a universal macOS app (Apple Silicon and Intel) and
-Linux deb, rpm and AppImage, in a **draft** GitHub Release with the updater's `latest.json`. Look it over and
-publish it; installed apps find it on their next check (at launch and every six hours). The Mac app and an
-AppImage update themselves ("Restart to update"); an rpm or deb install is offered the download.
+The tag runs `.github/workflows/desktop-release.yml`: a universal macOS app (Apple Silicon and Intel),
+Linux deb, rpm and AppImage, and a Windows `-setup.exe` and `.msi` (not code signed: SmartScreen asks before
+the first run), in a **draft** GitHub Release with the updater's `latest.json`. Look it over and
+publish it; installed apps find it on their next check (at launch and every six hours). The Mac app, an
+AppImage and a Windows install update themselves ("Restart to update"; on Windows the new setup runs, closes
+the app and opens the new one); an rpm or deb install is offered the download.
 
 The updater reads `releases/latest/download/latest.json`, so the newest published release of the repo has to
 be a desktop one (it is the only kind there is today).
