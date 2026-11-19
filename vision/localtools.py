@@ -31,6 +31,7 @@ MAX_OUTPUT = 8_000  # characters of one tool result the model gets back (head an
 HISTORY_OUTPUT = 1_500  # what a result shrinks to once the turn is over and it sits in the transcript
 READ_LINES = 400  # default lines per Read
 BASH_TIMEOUT = 120.0  # seconds; the model may ask for less
+KILLED_PIPE_GRACE = 1.0  # seconds a killed command's last output may take to arrive
 WEB_TIMEOUT = 20.0  # seconds per search or fetch
 FETCH_CHARS = 6_000  # default page text per WebFetch (the model may ask for up to MAX_OUTPUT)
 SEARCH_RESULTS = 6
@@ -215,18 +216,25 @@ def _bash(args: dict, workdir: str, rules: list[str] | None, holder: dict, lock:
         proc = subprocess.Popen([exe, "-c", command], cwd=workdir, env=brain_env("local"), stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", encoding="utf-8")
         holder["proc"] = proc
+    # Read beside the wait, not with communicate: once the shell is killed, a process the kill missed
+    # (on Windows, one whose parent had already exited) can hold the pipe open for as long as it runs.
+    lines: list[str] = []
+    reader = threading.Thread(target=lambda: lines.extend(proc.stdout), daemon=True)  # type: ignore[arg-type]
+    reader.start()
     try:
-        out, _ = proc.communicate(timeout=timeout)
+        proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         procs.kill(proc)
-        out, _ = proc.communicate()
-        return clip((out or "") + f"\nError: the command did not finish within {timeout:.0f} s and was killed."), True
+        proc.wait()
+        reader.join(KILLED_PIPE_GRACE)
+        return clip("".join(lines) + f"\nError: the command did not finish within {timeout:.0f} s and was killed."), True
     finally:
         with lock:
             holder.pop("proc", None)
     if holder.get("cancelled"):
         return "Error: cancelled.", True
-    text = out or ""
+    reader.join()  # finished by itself: all it printed, as before
+    text = "".join(lines)
     if proc.returncode:
         text += f"\n[exit code {proc.returncode}]"
     return clip(text.strip() or "(no output)"), proc.returncode != 0
