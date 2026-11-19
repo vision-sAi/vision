@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -84,7 +85,7 @@ class ProjectLibraryTests(unittest.TestCase):
         pic = self.dir / "chart.png"
         pic.write_bytes(b"png")
         log = self.dir / "session.jsonl"
-        log.write_text('{"text": "here ![the chart](' + str(pic) + ')"}\n')
+        log.write_text(json.dumps({"text": f"here ![the chart]({pic})"}) + "\n")  # as logs hold it: a Windows path escaped
         items = library.project_library(self.folder, lambda p: True, [str(log)])
         self.assertEqual([(i["name"], i["source"], i["caption"]) for i in items], [("chart.png", "vision", "the chart")])
         self.assertEqual(library.project_library(self.folder, lambda p: False, [str(log)]), [])

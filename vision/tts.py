@@ -8,7 +8,6 @@ import os
 import queue
 import random
 import re
-import signal
 import sys
 import threading
 import time
@@ -17,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from vision.cuda import GpuBusy, GpuClaim
+from vision.procs import WINDOWS, group_kwargs, kill_tree
 from vision.mlxrun import MlxWorker as _MlxWorker, mlx_available, mlx_fetch
 from vision.config import (
     LLAMA_DIR,
@@ -68,7 +68,7 @@ def model_files() -> tuple[Path, Path]:
 
 
 def llama_server_bin() -> Path:
-    return LLAMA_DIR / "llama-server"
+    return LLAMA_DIR / ("llama-server.exe" if WINDOWS else "llama-server")
 
 
 def orpheus_present() -> bool:
@@ -265,6 +265,26 @@ wait $p
 """
 
 
+_WATCHDOG_WINDOWS = """
+import subprocess, sys, time
+from vision.procs import windows_pid_alive
+p = subprocess.Popen(sys.argv[2:])
+while p.poll() is None:
+    if not windows_pid_alive(int(sys.argv[1])):
+        p.kill()
+        break
+    time.sleep(1)
+sys.exit(p.wait())
+"""
+
+
+def _watched(argv: list[str]) -> list[str]:
+    """`argv` under a watchdog that ends it when this process goes."""
+    if WINDOWS:
+        return [sys.executable, "-P", "-c", _WATCHDOG_WINDOWS, str(os.getpid()), *argv]
+    return ["sh", "-c", _WATCHDOG, "vision-voice", str(os.getpid()), *argv]
+
+
 def _http(url: str, body: dict | None = None, timeout: float = 5.0):
     import json
     import urllib.request
@@ -346,14 +366,14 @@ class OrpheusEngine:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         want = self.cfg.device or "auto"
         for ngl in ([99, 0] if want == "auto" else [99] if want == "cuda" else [0]):
-            cmd = [
-                "sh", "-c", _WATCHDOG, "vision-voice", str(os.getpid()), str(llama_server_bin()),
+            cmd = _watched([
+                str(llama_server_bin()),
                 "-m", str(gguf), "-ngl", str(ngl), "-c", "4096", "-np", "1", "-fa", "on",
                 "--host", "127.0.0.1", "--port", str(self.cfg.port), "--no-webui", "-lv", "4",  # 4 logs the GPU offload
-            ]
+            ])
             with open(log, "w", encoding="utf-8") as f:
                 self._proc = subprocess.Popen(
-                    cmd, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True
+                    cmd, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, **group_kwargs()
                 )
             deadline = time.time() + _LOAD_TIMEOUT_S
             while time.time() < deadline and self._proc.poll() is None:
@@ -376,11 +396,11 @@ class OrpheusEngine:
 
     def _kill_server(self):
         if self._proc is not None and self._proc.poll() is None:
-            os.killpg(self._proc.pid, signal.SIGTERM)  # the watchdog and the server share a group
+            kill_tree(self._proc.pid)  # the watchdog and the server share a group
             try:
                 self._proc.wait(5)
             except Exception:  # noqa: BLE001
-                os.killpg(self._proc.pid, signal.SIGKILL)
+                kill_tree(self._proc.pid, force=True)
         self._proc = None
 
     def close(self):

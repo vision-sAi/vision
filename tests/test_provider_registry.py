@@ -69,7 +69,7 @@ class RegistryTests(unittest.TestCase):
             note = providers.settle(cfg)
         self.assertEqual(cfg.brain.model, "opus")
         self.assertIn("No provider is set up yet", note)
-        self.assertIn("claude.ai/install.sh", note)
+        self.assertIn("claude.ai/install.ps1" if providers.WINDOWS else "claude.ai/install.sh", note)
 
     def test_create_brain_takes_the_class_from_the_registry(self):
         from vision.brain import create_brain

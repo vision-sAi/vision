@@ -27,7 +27,9 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".gif"}
 VIDEO_EXTS = {".mp4", ".mov", ".m4v"}
 THUMB_DIR = Path.home() / ".cache" / "vision" / "thumbs"
 
-_PICTURE = re.compile(rb'!\[([^\]\n"]{0,200})\]\((/[^)\s"\\]+\.(?:png|jpe?g|webp|gif))\)', re.I)
+# In a session log's JSON a Windows path's backslashes come doubled (C:\\Users\\...); a lone one is an
+# escape (\" or \n) and ends the path, so the match can't run on past the reply's own text.
+_PICTURE = re.compile(rb'!\[([^\]\n"]{0,200})\]\(((?:/|[A-Za-z]:(?:/|\\\\))(?:[^)\s"\\]|\\\\)+\.(?:png|jpe?g|webp|gif))\)', re.I)
 _logs: dict[str, tuple[int, float, list[tuple[str, str]]]] = {}
 _lock = threading.Lock()
 
@@ -62,7 +64,7 @@ def _pictures_in(path: str) -> list[tuple[str, str]]:
     if b"![" in data:
         seen = set()
         for m in _PICTURE.finditer(data):
-            pic = m.group(2).decode("utf-8", "replace")
+            pic = m.group(2).replace(b"\\\\", b"\\").decode("utf-8", "replace")
             if pic not in seen:
                 seen.add(pic)
                 found.append((pic, m.group(1).decode("utf-8", "replace").replace("\\n", " ").strip()))
@@ -142,7 +144,7 @@ def delete_many(paths, upload_dir: Path, allowed) -> list[str]:
 # -- a project's Library ------------------------------------------------------------------------
 PROJECT_INDEX = "library.json"
 PROJECT_MAX = 500  # entries kept per project; the oldest drop off
-_TEXT_PICTURE = re.compile(_PICTURE.pattern.decode(), re.I)
+_TEXT_PICTURE = re.compile(r'!\[([^\]\n"]{0,200})\]\(((?:/|[A-Za-z]:[\\/])[^)\s"]+\.(?:png|jpe?g|webp|gif))\)', re.I)
 _index_lock = threading.Lock()
 
 

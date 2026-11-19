@@ -27,7 +27,7 @@ def _files(repo):
         dirs[:] = [d for d in dirs if d != ".git"]
         for n in names:
             p = os.path.join(base, n)
-            out[os.path.relpath(p, repo)] = Path(p).read_text(encoding="utf-8")
+            out[os.path.relpath(p, repo).replace(os.sep, "/")] = Path(p).read_text(encoding="utf-8")
     return out
 
 

@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import codecs
 import os
-import signal
 import subprocess
 import threading
 import time
 from collections.abc import Callable
+
+from vision.procs import WINDOWS, group_kwargs, kill_tree, user_shell
 
 TIMEOUT_S = 600  # a command still going after this long is stopped
 DRAIN_S = 5  # after the command exits, how long to wait for output from what it left running (`cmd &`)
@@ -25,15 +26,15 @@ def run(command: str, cwd: str | None, started: Callable[[subprocess.Popen], Non
     gets what it prints as it prints it (from a reader thread), so a command that prints and then waits
     (a login's one-time code) shows that straight away rather than once it ends."""
     try:
-        proc = subprocess.Popen([os.environ.get("SHELL") or "/bin/sh", "-c", command], cwd=cwd or None,
+        proc = subprocess.Popen(user_shell(command), cwd=cwd or None,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 env={**os.environ, "PYTHONUNBUFFERED": "1"},  # a Python script's prints as they happen
-                                start_new_session=True)
+                                **group_kwargs())
     except OSError as e:
         return str(e), 127
     started(proc)
     parts: list[str] = []
-    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    decoder = _Decoder()
 
     def read() -> None:
         fd = proc.stdout.fileno()
@@ -57,7 +58,29 @@ def run(command: str, cwd: str | None, started: Callable[[subprocess.Popen], Non
     reader.join(timeout=DRAIN_S)  # something it started may hold the pipe open: not waited on for ever
     if not reader.is_alive():
         proc.stdout.close()  # else the reader still holds it, and lets go when what's left running does
-    return "".join(parts), proc.returncode if proc.returncode >= 0 else None
+    stopped = getattr(proc, "stopped", False) or proc.returncode < 0
+    return "".join(parts), None if stopped else proc.returncode
+
+
+class _Decoder:
+    """UTF-8 as it arrives, a character split across reads kept whole. Windows programs end their lines
+    with \\r\\n, which shows as a stray \\r on the phone and the brain: there they become \\n, a pair split
+    across reads included (a lone \\r, a progress bar's, stays)."""
+
+    def __init__(self):
+        self._utf8 = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._cr = False  # the last read ended in a \r that may be half of a \r\n
+
+    def decode(self, chunk: bytes, final: bool = False) -> str:
+        text = self._utf8.decode(chunk, final=final)
+        if not WINDOWS:
+            return text
+        if self._cr:
+            text = "\r" + text
+        self._cr = text.endswith("\r") and not final
+        if self._cr:
+            text = text[:-1]
+        return text.replace("\r\n", "\n")
 
 
 class Live:
@@ -110,9 +133,11 @@ def stop(proc: subprocess.Popen | None) -> bool:
     """Stop a running command and what it started. False when there was none to stop."""
     if proc is None or proc.poll() is not None:
         return False
+    proc.stopped = True  # set first: run() reads it as soon as the process is gone, and Windows' exit code is 1
     try:
-        os.killpg(proc.pid, signal.SIGTERM)
+        kill_tree(proc.pid)
     except OSError:
+        proc.stopped = False
         return False
     return True
 

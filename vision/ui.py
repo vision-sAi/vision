@@ -335,7 +335,7 @@ def user_grid(text: str) -> MarkedLines:
         if m:
             path = m[1]
             body.append(f"[Image #{image_number(path)}]",
-                        RichStyle(link="file://" + path if path.startswith("/") else None, color=CHIP_INK, bgcolor=CHIP_BG))
+                        RichStyle(link=file_link(path), color=CHIP_INK, bgcolor=CHIP_BG))
         else:
             body.append(line)
         joined = bool(m)
@@ -771,7 +771,7 @@ class _Image(ImageItem):
 
     def __rich_console__(self, console, options):
         path = self.destination
-        link = RichStyle(link=("file://" + path) if path.startswith("/") else path or None)
+        link = RichStyle(link=file_link(path) or path or None)
         caption = self.text.plain.strip() or path.rsplit("/", 1)[-1]
         yield Text.assemble(("🖼 ", "none"), (caption, link + RichStyle(bold=True)), ("  ", "none"), (path, link + RichStyle(color=FAINT)), end="")
 
@@ -1625,7 +1625,7 @@ def render_ansi(renderable, width: int) -> str:
     # TERM left out: rich draws a "dumb" terminal 80 wide whatever width it is given, and this is no terminal.
     env = {k: v for k, v in os.environ.items() if k != "TERM"}
     c = Console(file=buf, width=max(20, width), force_terminal=True, color_system="truecolor", highlight=False, soft_wrap=False,
-                theme=UI_THEME, _environ=env)
+                theme=UI_THEME, _environ=env, legacy_windows=False)  # a string for prompt_toolkit, not the old console
     c.print(renderable)
     return buf.getvalue()
 
@@ -2305,12 +2305,22 @@ def expand_images(text: str) -> str:
     return re.sub(r"(?:\n*\0\n*)+", "\n", out).strip("\n") if "\0" in out else out
 
 
+def file_link(path: str) -> str | None:
+    """A file:// link to an absolute path (`/x` anywhere, `C:\\x` on Windows), None for anything else."""
+    if path.startswith("/"):
+        return "file://" + path
+    if os.name == "nt" and os.path.isabs(path):
+        return Path(path).as_uri()
+    return None
+
+
 def pasted_picture_paths(text: str) -> list[str]:
     """The pictures a paste names when it is nothing but paths to them (a file dragged onto the
     terminal, or a path copied from the file manager: quoted, backslash-escaped or file:// URIs);
     [] for any other text."""
     import shlex
-    from urllib.parse import unquote, urlparse
+    from urllib.parse import urlparse
+    from urllib.request import url2pathname
 
     text = text.strip()
     if not text or len(text) > 4096:
@@ -2318,7 +2328,7 @@ def pasted_picture_paths(text: str) -> list[str]:
 
     def path(word: str) -> str:
         if word.startswith("file://"):
-            word = unquote(urlparse(word).path)
+            word = url2pathname(urlparse(word).path)  # file:///C:/x on Windows, file:///x elsewhere
         return os.path.expanduser(word)
 
     def picture(p: str) -> bool:
@@ -2328,7 +2338,10 @@ def pasted_picture_paths(text: str) -> list[str]:
     if picture(whole):  # one path, spaces and all
         return [os.path.abspath(whole)]
     try:
-        words = [path(w) for w in shlex.split(text)]
+        if os.name == "nt":  # backslashes are the separator there, not escapes; quotes still group
+            words = [path(w.strip('"')) for w in shlex.split(text, posix=False)]
+        else:
+            words = [path(w) for w in shlex.split(text)]
     except ValueError:
         return []
     return [os.path.abspath(w) for w in words] if words and all(picture(w) for w in words) else []
@@ -2476,11 +2489,31 @@ def _private_output():
     load, on the first spoken reply) does not blank the screen and leave it stale when they return."""
     from prompt_toolkit.output import create_output
 
+    if os.name == "nt":
+        # Windows has no voice to borrow the fds, and its console output writes to the console's own
+        # handle, not to a descriptor. Without a console (tests, CI, a pipe) prompt_toolkit's own only
+        # raises, so the screen draws into nothing there.
+        from prompt_toolkit.application.current import get_app_session
+        from prompt_toolkit.output import DummyOutput
+        from prompt_toolkit.output.win32 import NoConsoleScreenBufferError
+
+        try:
+            get_app_session().output  # made on first use, the same one the Application would take
+            return None
+        except NoConsoleScreenBufferError:
+            return DummyOutput()
     try:
         tty = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding=sys.stdout.encoding or "utf-8", errors="replace")
         return _close_links(create_output(stdout=tty))
     except (OSError, ValueError, AttributeError):
         return None  # not a real terminal (tests, pipes): prompt_toolkit's default output
+
+
+def _output_kw() -> dict:
+    """`output=` for the Application only when there is a private one: left out, prompt_toolkit (or a
+    test's stand-in) picks its own, where an explicit None would still mean its default."""
+    out = _private_output()
+    return {} if out is None else {"output": out}
 
 
 class CornerFrame:
@@ -3063,7 +3096,7 @@ class ChatScreen:
             # result. The terminal's own drag-to-select then needs Shift held (VTE/Ptyxis convention).
             key_bindings=kb, style=PT_STYLE, full_screen=True, mouse_support=True,
             refresh_interval=0.10, min_redraw_interval=1 / 60,
-            max_render_postpone_time=0, output=_private_output(),
+            max_render_postpone_time=0, **_output_kw(),
         ))
         _grab_mouse(self.app, self._grab)
         self.app._handle_exception = self._loop_error
@@ -3080,7 +3113,7 @@ class ChatScreen:
         text = "".join(traceback.format_exception(exc)) if exc else str(context.get("message", context))
         path = STATE_DIR / "errors.log"
         try:
-            with open(path, "a") as f:
+            with open(path, "a", encoding="utf-8") as f:
                 f.write(f"--- {datetime.now().isoformat(timespec='seconds')}\n{text}\n")
         except OSError:
             pass
@@ -3853,7 +3886,7 @@ class ChatScreen:
         sent meanwhile lands below the reply without changing it."""
         self.holding = True
         self.end_reply(e)
-        self._held = (e, e.done_at or datetime.now().strftime("%-I:%M %p"))
+        self._held = (e, e.done_at or datetime.now().strftime("%I:%M %p").lstrip("0"))
         self.set_background(label)
 
     def set_background(self, label: str) -> None:
@@ -3884,7 +3917,7 @@ class ChatScreen:
         e.cancelled = e.cancelled or cancelled
         if e.ended is None:
             e.ended = time.monotonic()
-        e.done_at = e.done_at or datetime.now().strftime("%-I:%M %p")
+        e.done_at = e.done_at or datetime.now().strftime("%I:%M %p").lstrip("0")
         e.footer = " · ".join(p for p in (f"Worked for {took(e.elapsed)}", "cancelled" if e.cancelled else f"done {e.done_at}", stats) if p)
         e.finished = True
 

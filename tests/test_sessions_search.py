@@ -172,7 +172,7 @@ class ExportTests(SessionStoreCase):
         self.assertTrue(sessions.export_session(info, folder).startswith(folder))
         exact = os.path.join(self.tmp.name, "deep", "notes.md")
         self.assertEqual(sessions.export_session(info, exact, model="Opus 5"), exact)
-        self.assertIn("Claude · Opus 5 · ", Path(exact).read_text())
+        self.assertIn("Claude · Opus 5 · ", Path(exact).read_text(encoding="utf-8"))
         empty = sessions.SessionInfo("none", "claude", "nothing", time.time())
         with self.assertRaises(ValueError):
             sessions.export_session(empty)

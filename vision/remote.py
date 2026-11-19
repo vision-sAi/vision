@@ -33,10 +33,15 @@ CONNECT_TIMEOUT = 5.0
 
 # ---------------------------------------------------------------- finding the server
 def write_serve_descriptor(host: str, port: int) -> None:
-    """Called by `vision serve`: where a terminal on this machine can dial it."""
+    """Called by `vision serve`: where a terminal on this machine can dial it, and whether the background
+    service started it (service.waiting reads that: on Windows the service's saved pid is a venv launcher's,
+    never the server's own)."""
+    from vision.service import ENV
+
     reach = "127.0.0.1" if host in ("0.0.0.0", "", "::") else host
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    info = {"pid": os.getpid(), "url": f"http://{reach}:{port}", "port": port, "started": time.time()}
+    info = {"pid": os.getpid(), "url": f"http://{reach}:{port}", "port": port, "started": time.time(),
+            "service": bool(os.environ.get(ENV))}
     tmp = SERVE_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(info), encoding="utf-8")
     os.replace(tmp, SERVE_FILE)
@@ -88,7 +93,8 @@ def running_server() -> dict | None:
         return None
     if not token:
         return None
-    return {"pid": pid, "url": info["url"], "port": info.get("port"), "token": token}
+    # "service" is None in a descriptor from before the flag: service.waiting() then compares pids
+    return {"pid": pid, "url": info["url"], "port": info.get("port"), "token": token, "service": info.get("service")}
 
 
 def _get(server: dict, path: str, timeout: float = CONNECT_TIMEOUT):

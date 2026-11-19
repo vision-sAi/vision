@@ -55,7 +55,12 @@ def find_cli(provider: str) -> str:
         exe = shutil.which(p.acp.command[0])
         if not exe:
             raise FileNotFoundError(f"{p.acp.command[0]} (the {p.label} agent) is not on PATH")
-        return exe
+        from vision.procs import native_cli, wrapper_note
+
+        native = native_cli(exe)
+        if not native:
+            raise FileNotFoundError(wrapper_note(exe))
+        return native
     find = p.hook("find_cli") if p else None
     if find is None:
         raise ValueError(f"unknown provider {provider!r}" if p is None else f"{p.label} has no CLI")
@@ -88,7 +93,7 @@ def cli_version(provider: str, timeout: float = 20) -> CliInfo:
         info.error = f"not installed ({e})"
         return info
     try:
-        r = subprocess.run([info.path, "--version"], capture_output=True, text=True, timeout=timeout, env=_env(), encoding="utf-8")
+        r = subprocess.run([info.path, "--version"], capture_output=True, text=True, timeout=timeout, env=_env(), encoding="utf-8", errors="replace")
     except (OSError, subprocess.TimeoutExpired) as e:
         info.error = f"`{os.path.basename(info.path)} --version` failed: {e}"
         return info
@@ -118,7 +123,7 @@ def claude_login_status(thorough: bool = False, timeout: float = 120) -> tuple[b
 
     exe = find_cli("claude")
     if not thorough:
-        r = subprocess.run([exe, "auth", "status"], capture_output=True, text=True, env=_env(), timeout=30, encoding="utf-8", stdin=subprocess.DEVNULL)
+        r = subprocess.run([exe, "auth", "status"], capture_output=True, text=True, env=_env(), timeout=30, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
         try:
             status = json.loads(r.stdout)
         except ValueError:
@@ -136,12 +141,12 @@ def claude_login_status(thorough: bool = False, timeout: float = 120) -> tuple[b
 
 
 def codex_login_status(thorough: bool = False, timeout: float = 30) -> tuple[bool, str]:
-    r = subprocess.run([find_cli("codex"), "login", "status"], capture_output=True, text=True, timeout=timeout, encoding="utf-8")
+    r = subprocess.run([find_cli("codex"), "login", "status"], capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
     return r.returncode == 0, _short(r.stdout or r.stderr) or ("authenticated" if r.returncode == 0 else "")
 
 
 def grok_login_status(thorough: bool = False, timeout: float = 30) -> tuple[bool, str]:
-    r = subprocess.run([find_cli("grok"), "models"], capture_output=True, text=True, timeout=timeout, encoding="utf-8")
+    r = subprocess.run([find_cli("grok"), "models"], capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
     if r.returncode == 0:
         return True, (r.stdout.strip().splitlines()[0] if r.stdout.strip() else "authenticated")
     return False, _short(r.stderr or r.stdout)
@@ -289,7 +294,7 @@ def latest_version(provider: str, timeout: float = 15) -> str:
 
 def grok_latest_version(timeout: float = 15) -> str:
     """The Grok CLI asks its own update channel."""
-    r = subprocess.run([find_cli("grok"), "update", "--check", "--json"], capture_output=True, text=True, timeout=timeout, env=_env(), encoding="utf-8")
+    r = subprocess.run([find_cli("grok"), "update", "--check", "--json"], capture_output=True, text=True, timeout=timeout, env=_env(), encoding="utf-8", errors="replace")
     data = json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
     if data.get("error"):
         raise ValueError(data["error"])
@@ -504,7 +509,7 @@ def update_cli(provider: str, *, stream: bool = False, timeout: float = 600) -> 
         return UpdateResult(provider, None, None, 1, error=before.error)
     cmd = [before.path, *_registry.get(provider).update_args]
     try:
-        r = subprocess.run(cmd, capture_output=not stream, text=True, timeout=timeout, env=_env(), stdin=subprocess.DEVNULL, encoding="utf-8")
+        r = subprocess.run(cmd, capture_output=not stream, text=True, timeout=timeout, env=_env(), stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired:
         return UpdateResult(provider, before.version, before.version, 1, error=f"`{os.path.basename(cmd[0])} update` did not finish in {timeout:.0f}s")
     except OSError as e:

@@ -27,7 +27,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 case "$(uname -s)" in
     Linux | Darwin) ;;
-    *) die "Vision runs on Linux and macOS. On Windows, install it inside WSL." ;;
+    *) die "This installer is for Linux and macOS. On Windows, use install.ps1 (see the README)." ;;
 esac
 have curl || die "curl is needed to download Vision."
 have tar || die "tar is needed to unpack Vision."

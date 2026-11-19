@@ -1,7 +1,7 @@
 name: desktop release
 
 # A `desktop-v<version>` tag builds the desktop app for macOS (one universal app for Apple Silicon and
-# Intel) and Linux (deb, rpm, AppImage) into a draft GitHub Release, with the updater's latest.json and
+# Intel), Linux (deb, rpm, AppImage) and Windows (NSIS, MSI; not code signed) into a draft GitHub Release, with the updater's latest.json and
 # signatures. Publishing the draft is what ships it: installed apps see it on their next check.
 #
 # Updates are signed with the updater key, and the Mac app with a Developer ID and notarized, when their
@@ -20,12 +20,16 @@ jobs:
   build:
     name: build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash  # Windows' default is PowerShell, and these steps are sh
     strategy:
       fail-fast: false
       matrix:
         include:
           - { os: macos-latest, name: macos, args: "--target universal-apple-darwin", targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
           - { os: ubuntu-24.04, name: linux, args: "", targets: "" }
+          - { os: windows-latest, name: windows, args: "", targets: "" }
     steps:
       - uses: actions/checkout@v7
       - name: The tag matches the app's version
@@ -97,6 +101,7 @@ jobs:
           releaseBody: |
             **macOS** (Apple Silicon and Intel): the .dmg.
             **Linux**: the .AppImage (updates itself), or the .rpm (Fedora) / .deb (Ubuntu, Debian).
+            **Windows**: the -setup.exe. It isn't code signed yet, so SmartScreen asks before the first run.
             Vision runs on a computer with `vision serve`; the app sets it up if this computer doesn't have it.
           releaseDraft: true
           args: ${{ matrix.args }} ${{ env.UPDATER_ARGS }}

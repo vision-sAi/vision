@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from vision import cli, clis
+from vision import cli, clis, providers
 
 
 def _plain(output: str) -> str:
@@ -53,7 +53,7 @@ class DoctorFixTests(unittest.TestCase):
         self.assertEqual(r.exit_code, 0, r.output)
         text = _plain(r.output)
         self.assertIn("fixing: install Claude Code", text)
-        self.assertIn("curl -fsSL https://claude.ai/install.sh | bash", runs)
+        self.assertIn(providers.REGISTRY["claude"].install_cmd, runs)  # curl on Linux and macOS, PowerShell on Windows
         self.assertIn("fixing: install Codex", text)
         self.assertNotIn("fixing: install Grok", text)  # no installer, only a page: left as a hint
         self.assertIn("Grok CLI: not installed", text)

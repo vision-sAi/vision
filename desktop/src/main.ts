@@ -828,7 +828,7 @@ function drawAppUpdate() {
   const row = $("app-update");
   row.hidden = !appUpdate;
   if (!appUpdate) return;
-  const selfUpdates = installKind === "app" || installKind === "appimage";
+  const selfUpdates = installKind === "app" || installKind === "appimage" || installKind === "installer";
   row.replaceChildren(icon("Sparkles", 15), el("span", "app-update-text", `Vision ${appUpdate.version} is out`),
     el("span", "app-update-act", selfUpdates ? "Restart to update" : "Download"));
   row.onclick = async () => {

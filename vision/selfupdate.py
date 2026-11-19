@@ -53,7 +53,10 @@ def how() -> str:
     an installed Vision, a pull where it lives for a working checkout."""
     if installed():
         return "vision upgrade"
-    return f"git -C {str(ROOT).replace(str(Path.home()), '~', 1)} pull && vision restart"
+    from vision.procs import WINDOWS, quote
+
+    where = quote(str(ROOT)) if WINDOWS else str(ROOT).replace(str(Path.home()), "~", 1)  # Windows' shells don't expand ~
+    return f"git -C {where} pull && vision restart"
 
 
 def _git(*args: str, timeout: float = 15) -> subprocess.CompletedProcess:

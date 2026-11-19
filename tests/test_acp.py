@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import tempfile
 import threading
 import time
@@ -11,6 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from fake_exe import python_command
 from vision import config, providers
 from vision.brain import create_brain
 
@@ -20,14 +20,12 @@ SID = "acp-session-0001"
 
 class AcpProviderTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)  # Windows: a kept fake agent may still hold its .exe
         tmp = Path(self.tmp.name)
         self.log = tmp / "log.jsonl"
         bindir = tmp / "bin"
         bindir.mkdir()
-        exe = bindir / "gem"
-        exe.write_text(f"#!/bin/sh\nexec {sys.executable} {FAKE} \"$@\"\n")
-        exe.chmod(0o755)
+        python_command(bindir / "gem", f"import runpy\nrunpy.run_path({str(FAKE)!r}, run_name='__main__')\n")
         (tmp / "config.toml").write_text(
             "[providers.gem]\ntype = \"acp\"\ncommand = [\"gem\", \"--acp\"]\nlabel = \"Gem\"\nmodel_flag = \"--model\"\n"
             "models = [\"default\", \"flash\"]\n[providers.gem.env]\nFAKE_ACP_MARK = \"yes\"\n", encoding="utf-8")
@@ -60,7 +58,7 @@ class AcpProviderTests(unittest.TestCase):
         self.assertEqual(models.provider_for("gem/flash"), "gem")
         self.assertIn(("Gem", [("gem/default", "default", "Gem's own default model"), ("gem/flash", "flash", "one of Gem's models")], "via `gem --acp` · an ACP agent"),
                       models.MODEL_TABS)
-        self.assertEqual(clis.find_cli("gem").split(os.sep)[-1], "gem")
+        self.assertEqual(Path(clis.find_cli("gem")).stem, "gem")
         self.assertIn("gem", providers.REGISTRY["gem"].describe(self.cfg)["setup"])
 
     def test_a_turn_streams_text_and_tools_with_the_persona_first(self):

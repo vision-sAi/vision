@@ -16,7 +16,7 @@ class FolderPromptTests(unittest.TestCase):
         self.sub = self.repo / "pkg" / "deep"
         self.sub.mkdir(parents=True)
         (self.repo / ".git").mkdir()
-        self.patch = mock.patch.dict(os.environ, {"HOME": str(self.home)})
+        self.patch = mock.patch.dict(os.environ, {"HOME": str(self.home), "USERPROFILE": str(self.home)})  # Windows reads the second
         self.patch.start()
 
     def tearDown(self):

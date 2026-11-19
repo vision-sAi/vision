@@ -122,7 +122,9 @@ class RunTests(unittest.TestCase):
     def test_stderr_and_the_exit_code_come_back(self):
         from vision import shellmode
 
-        self.assertEqual(shellmode.run("echo out; echo err >&2; exit 3", None), ("out\nerr\n", 3))
+        # Windows' shell is PowerShell, which has no `>&2`
+        command = "echo out; [Console]::Error.WriteLine('err'); exit 3" if shellmode.WINDOWS else "echo out; echo err >&2; exit 3"
+        self.assertEqual(shellmode.run(command, None), ("out\nerr\n", 3))
 
     def test_a_character_split_across_reads_comes_out_whole(self):
         from vision import shellmode
@@ -130,15 +132,29 @@ class RunTests(unittest.TestCase):
         output, code = shellmode.run("printf 'caf\\303'; sleep 0.2; printf '\\251\\n'", None)
         self.assertEqual((output, code), ("café\n", 0))
 
+    def test_windows_line_ends_come_out_plain_even_split_across_reads(self):
+        from unittest.mock import patch
+
+        from vision import shellmode
+
+        with patch.object(shellmode, "WINDOWS", True):
+            decoder = shellmode._Decoder()
+            pieces = [decoder.decode(b"one\r"), decoder.decode(b"\ntwo\r\n50%\r"), decoder.decode(b"", final=True)]
+        self.assertEqual("".join(pieces), "one\ntwo\n50%\r")
+
     def test_something_left_running_in_the_background_doesnt_hold_it_up(self):
+        import sys
         import time
         from unittest.mock import patch
 
         from vision import shellmode
 
+        # PowerShell's `&` makes a job (and prints its table); a process it starts holds the pipe as `&` does
+        command = (f"Start-Process -NoNewWindow '{sys.executable}' -ArgumentList '-c \"import time; time.sleep(20)\"'; echo started"
+                   if shellmode.WINDOWS else "sleep 20 & echo started")
         began = time.monotonic()
         with patch.object(shellmode, "DRAIN_S", 0.3):
-            output, code = shellmode.run("sleep 20 & echo started", None)
+            output, code = shellmode.run(command, None)
         self.assertEqual((output, code), ("started\n", 0))
         self.assertLess(time.monotonic() - began, 3, "the sleep keeps the pipe open; the command itself is done")
 

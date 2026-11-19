@@ -194,7 +194,8 @@ class CdTargetTests(unittest.TestCase):
 
     def test_home_and_previous(self):
         self.assertEqual(_cd_target("~", self.root, None), os.path.expanduser("~"))
-        self.assertEqual(_cd_target("-", self.root, "/"), "/")
+        root = os.path.abspath(os.sep)  # the top of this system's tree: / or D:\
+        self.assertEqual(_cd_target("-", self.root, root), root)
         with self.assertRaisesRegex(ValueError, "no previous directory"):
             _cd_target("-", self.root, None)
 
@@ -217,7 +218,7 @@ class CdTargetTests(unittest.TestCase):
         self.assertEqual(rows("/cd .hi"), ["/cd .hidden/"])
         self.assertEqual(rows(f"/cd {self.root}/s"), [f"/cd {self.root}/sub/"])
         self.assertEqual(rows("/cd nope/"), [])
-        with patch.dict(os.environ, {"HOME": self.root}):
+        with patch.dict(os.environ, {"HOME": self.root, "USERPROFILE": self.root}):  # Windows reads the second
             self.assertEqual(rows("/cd ~"), ["/cd ~/", "/cd ~/sub/"])
 
 
@@ -416,7 +417,9 @@ class InstallHintTests(unittest.TestCase):
         from vision import install
 
         with patch.object(install.Path, "home", return_value=install.ROOT.parent):
-            self.assertEqual(install.setup_hint("cpu"), f"~/{install.ROOT.name}/scripts/setup.sh --voice --cpu")
+            # Windows' shells don't expand ~, so there the hint carries the whole path
+            home_form = install.quote(str(install.SETUP)) if install.WINDOWS else f"~/{install.ROOT.name}/scripts/setup.sh"
+            self.assertEqual(install.setup_hint("cpu"), f"{home_form} --voice --cpu")
         with patch.object(install.Path, "home", return_value=Path("/nowhere")):
             self.assertEqual(install.setup_hint("nvidia"), f"{install.SETUP} --voice --nvidia")
             self.assertEqual(install.setup_hint("mac"), f"{install.SETUP} --voice --mac")
@@ -434,7 +437,8 @@ class InstallHintTests(unittest.TestCase):
 
         for extra in ("serve", "weather"):
             self.assertNotIn("all", install.extra_hint(extra))
-        self.assertTrue(install.extra_hint("serve").endswith("setup.sh --serve"))
+        # setup.sh is a POSIX script: on Windows the serve extra goes in with uv sync like the others
+        self.assertTrue(install.extra_hint("serve").endswith("--extra serve" if install.WINDOWS else "setup.sh --serve"))
         self.assertIn("--extra weather", install.extra_hint("weather"))
 
 
@@ -474,4 +478,53 @@ class ServiceStatusTests(unittest.TestCase):
         result = self.status(999, None)
         self.assertEqual(result.exit_code, 1)
         self.assertIn("not answering", result.output)
+
+    def test_the_services_own_server_is_running_whatever_pid_was_saved(self):
+        # Windows: the supervisor saves the venv launcher's pid (999); the server is its child (4242)
+        result = self.status(999, {**self.SERVER, "service": True})
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("running", result.output)
+        self.assertNotIn("waiting", result.output)
+
+    def test_a_server_the_service_didnt_start_is_waited_behind(self):
+        result = self.status(4242, {**self.SERVER, "service": False})
+        self.assertIn("waiting", result.output)
+        self.assertNotIn("✓", result.output)
+
+    def test_the_descriptor_says_whether_the_service_started_it(self):
+        import json
+        import tempfile
+
+        from vision import remote, service
+
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            with patch.object(remote, "STATE_DIR", state), patch.object(remote, "SERVE_FILE", state / "serve.json"):
+                for env, expected in (({service.ENV: "1"}, True), ({}, False)):
+                    with patch.dict(os.environ, env, clear=False):
+                        if not env:
+                            os.environ.pop(service.ENV, None)
+                        remote.write_serve_descriptor("127.0.0.1", 8765)
+                    self.assertIs(json.loads((state / "serve.json").read_text(encoding="utf-8"))["service"], expected)
+
+    def test_the_services_flag_survives_running_server(self):
+        # What `vision service status` really reads: serve.json through running_server, not a dict made up here
+        import json
+        import tempfile
+
+        from vision import remote, server, service
+
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)
+            (state / "token").write_text("t", encoding="utf-8")
+            with patch.object(remote, "STATE_DIR", state), patch.object(remote, "SERVE_FILE", state / "serve.json"), \
+                    patch.object(server, "TOKEN_FILE", state / "token"), patch.object(remote, "boot_time", return_value=None), \
+                    patch("vision.link.pid_alive", return_value=True), patch.dict(os.environ, {service.ENV: "1"}):
+                remote.write_serve_descriptor("127.0.0.1", 8765)
+                found = remote.running_server()
+                self.assertIs(found["service"], True)
+                (state / "serve.json").write_text(json.dumps({"pid": 4242, "url": "http://127.0.0.1:8765"}), encoding="utf-8")
+                self.assertIsNone(remote.running_server()["service"], "a descriptor from before the flag")
+            with patch.object(service, "running", return_value=True), patch.object(service, "pid", return_value=999):
+                self.assertFalse(service.waiting(found), "the service's own server, whatever pid the supervisor saved")
 

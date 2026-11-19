@@ -33,7 +33,8 @@ class DeviceTests(unittest.TestCase):
         push.register({"token": "AB12", "key": first, "name": "phone"}, self.path)
         push.register({"token": "ab12", "key": second, "sandbox": True}, self.path)
         self.assertEqual([(d["token"], d["sandbox"], d["key"]) for d in push.devices(self.path)], [("ab12", True, second)])
-        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)  # it holds the sealing keys
+        if os.name != "nt":  # Windows has no mode bits
+            self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)  # it holds the sealing keys
         for bad in ({"token": "zz", "key": first}, {"token": "", "key": first}, {"token": "ab"},
                     {"token": "ab", "key": "c2hvcnQ="}, {"token": "ab", "key": "not base64!"}):
             with self.assertRaises(ValueError):

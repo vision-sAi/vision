@@ -203,7 +203,7 @@ class WizardTests(WizardCase):
         with patch("vision.brain.find_claude", side_effect=find), patch("shutil.which", side_effect=lambda n: "/usr/local/bin/claude" if n == "claude" else None), \
                 patch.object(providers, "model_tabs", return_value=[("Claude", [("opus", "Opus", ""), ("sonnet", "Sonnet", "")], "")]):
             ready = self.wizard(io).run()
-        self.assertEqual(io.ran, ["curl -fsSL https://claude.ai/install.sh | bash", ["/usr/local/bin/claude", "auth", "login"]])
+        self.assertEqual(io.ran, [providers.REGISTRY["claude"].install_cmd, ["/usr/local/bin/claude", "auth", "login"]])
         self.assertIn("Claude Code is installed", self.text(io))
         self.assertIn("Claude is ready", self.text(io))
         self.assertEqual(ready, ["claude"])
@@ -251,7 +251,8 @@ class WizardTests(WizardCase):
         text = self.path.read_text()
         self.assertIn('api_key = "sk-or-123"', text)
         self.assertIn('models = ["m/1", "m/2"]', text)
-        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":  # Windows has no mode bits; the profile folder's ACL keeps it private there
+            self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         self.assertIn("OpenRouter added · 2 models: m/1, m/2", self.text(io))
 
     def test_a_key_already_in_the_environment_is_used_by_name(self):

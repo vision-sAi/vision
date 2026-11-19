@@ -85,6 +85,9 @@ def _path_matches(path: str, spec: str, workdir: str) -> bool:
     specs = {spec, os.path.expanduser(spec)}
     if "**" in spec:  # `docs/**` also means the directory's direct files, as Claude Code reads it
         specs.add(spec.replace("/**", "/*"))
+    if os.sep != "/":  # rules are written with `/`, as Claude Code's are; Windows paths come with `\`
+        candidates = {c.replace(os.sep, "/") for c in candidates}
+        specs = {s.replace(os.sep, "/") for s in specs}
     return any(fnmatch.fnmatchcase(c, s) for c in candidates for s in specs)
 
 

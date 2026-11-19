@@ -1,7 +1,7 @@
 """Live link: a terminal chat announces itself so `vision serve` can list it on the phone and drive it.
 
-Each `vision` chat process (LinkHost) listens on a Unix socket under ~/.local/state/vision/live/ and
-drops a small JSON descriptor beside it. The server (Hub._watch_links in server.py) scans that
+Each `vision` chat process (LinkHost) listens on a Unix socket under ~/.local/state/vision/live/ (on
+Windows, whose Python has none, a loopback port that wants a key) and drops a small JSON descriptor beside it. The server (Hub._watch_links in server.py) scans that
 directory, connects to every socket it finds and shows each one as a chat marked `terminal`. The
 terminal process stays the only owner of the agent session: a message from the phone is typed into
 it, its reply streams back over the socket, and whatever is typed at the keyboard streams to the
@@ -19,8 +19,10 @@ this the ones already finished never reached it.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
+import secrets
 import socket
 import threading
 import time
@@ -28,8 +30,10 @@ from pathlib import Path
 from typing import Callable
 
 from vision.config import STATE_DIR
+from vision.procs import WINDOWS, windows_pid_alive
 
 LIVE_DIR = STATE_DIR / "live"
+KEY_WAIT_S = 2.0  # how long a loopback connection gets to give the key
 
 
 def descriptor_path(pid: int) -> Path:
@@ -45,6 +49,8 @@ def pid_alive(pid: int) -> bool:
     descriptor's pid reused as some other program's thread passed for the old process: ask /proc."""
     if pid <= 0:
         return False
+    if WINDOWS:
+        return windows_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -87,6 +93,19 @@ def list_links() -> list[dict]:
     return out
 
 
+def dial(info: dict, timeout: float = 2.0) -> socket.socket:
+    """A connection to the terminal chat a list_links() entry describes."""
+    if "port" in info:
+        s = socket.create_connection(("127.0.0.1", int(info["port"])), timeout)
+        s.sendall(str(info["key"]).encode() + b"\n")
+    else:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect(info["sock"])
+    s.settimeout(None)
+    return s
+
+
 def _sweep(desc: Path) -> None:
     for p in (desc, desc.with_suffix(".sock")):
         try:
@@ -109,6 +128,8 @@ class LinkHost:
         self.log = log or (lambda _msg: None)
         self.pid = os.getpid()
         self._server: socket.socket | None = None
+        self._key = ""  # what a loopback connection must open with; a Unix socket's mode does this job
+        self._address: dict = {}  # how the descriptor says to reach a loopback listener
         self._clients: list[socket.socket] = []
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -123,6 +144,14 @@ class LinkHost:
             os.chmod(LIVE_DIR, 0o700)
         except OSError:
             pass
+        srv = self._bind_loopback() if WINDOWS else self._bind_unix()
+        srv.listen(4)
+        self._server = srv
+        self._write_descriptor()
+        threading.Thread(target=self._accept, daemon=True, name="link-accept").start()
+        threading.Thread(target=self._watch, daemon=True, name="link-watch").start()
+
+    def _bind_unix(self) -> socket.socket:
         sock_path = socket_path(self.pid)
         try:
             sock_path.unlink()
@@ -131,11 +160,16 @@ class LinkHost:
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         srv.bind(str(sock_path))
         os.chmod(sock_path, 0o600)
-        srv.listen(4)
-        self._server = srv
-        self._write_descriptor()
-        threading.Thread(target=self._accept, daemon=True, name="link-accept").start()
-        threading.Thread(target=self._watch, daemon=True, name="link-watch").start()
+        return srv
+
+    def _bind_loopback(self) -> socket.socket:
+        """Any local program can reach a loopback port, so the key, kept in the descriptor in the user's
+        own profile, stands in for the Unix socket's 0600."""
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.bind(("127.0.0.1", 0))
+        self._key = secrets.token_hex(32)
+        self._address = {"port": srv.getsockname()[1], "key": self._key}
+        return srv
 
     def stop(self) -> None:
         self._stop.set()
@@ -159,7 +193,7 @@ class LinkHost:
             return bool(self._clients)
 
     def _write_descriptor(self) -> None:
-        info = {"pid": self.pid, "started": time.time(), "cwd": os.getcwd()}
+        info = {"pid": self.pid, "started": time.time(), "cwd": os.getcwd(), **self._address}
         tmp = descriptor_path(self.pid).with_suffix(".tmp")
         tmp.write_text(json.dumps(info), encoding="utf-8")
         os.replace(tmp, descriptor_path(self.pid))
@@ -220,19 +254,32 @@ class LinkHost:
                 conn, _ = self._server.accept()
             except OSError:
                 return
-            with self._lock:
-                self._clients.append(conn)
             threading.Thread(target=self._serve, args=(conn,), daemon=True, name="link-client").start()
 
-    def _serve(self, conn: socket.socket) -> None:
+    def _admit(self, conn: socket.socket) -> bytes | None:
+        """Whatever followed the key on a new connection, None if it did not give the right one."""
+        if not self._key:
+            return b""
         buf = b""
+        conn.settimeout(KEY_WAIT_S)
+        while b"\n" not in buf:
+            chunk = conn.recv(4096)
+            if not chunk or len(buf) > 4096:
+                return None
+            buf += chunk
+        conn.settimeout(None)
+        line, rest = buf.split(b"\n", 1)
+        return rest if hmac.compare_digest(line.strip(), self._key.encode()) else None
+
+    def _serve(self, conn: socket.socket) -> None:
         try:
+            buf = self._admit(conn)
+            if buf is None:
+                return
+            with self._lock:
+                self._clients.append(conn)  # only now: post() sends every client the chat
             while not self._stop.is_set():
-                chunk = conn.recv(65536)
-                if not chunk:
-                    break
-                buf += chunk
-                while b"\n" in buf:
+                while b"\n" in buf:  # first, as what came along with the key is already here
                     line, buf = buf.split(b"\n", 1)
                     if not line.strip():
                         continue
@@ -252,6 +299,10 @@ class LinkHost:
                         self.on_frame(frame)
                     except Exception as e:  # noqa: BLE001
                         self.log(f"link: {e}")
+                chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
         except OSError:
             pass
         finally:
@@ -283,11 +334,7 @@ class LinkClient:
         self._closed = False
 
     def connect(self) -> None:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(2.0)
-        s.connect(self.info["sock"])
-        s.settimeout(None)
-        self._sock = s
+        self._sock = dial(self.info)
         threading.Thread(target=self._read, daemon=True, name=f"link-{self.pid}").start()
         self.send({"type": "hello"})
 

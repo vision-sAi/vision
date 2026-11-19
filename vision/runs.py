@@ -145,7 +145,8 @@ def git_root(path: str) -> str:
         head = _git("rev-parse", "--verify", "HEAD", cwd=path)
     except (OSError, subprocess.SubprocessError):
         return ""
-    return top.stdout.strip() if top.returncode == 0 and head.returncode == 0 else ""
+    # normpath: git on Windows writes C:/..., where every other path Vision holds is C:\...
+    return os.path.normpath(top.stdout.strip()) if top.returncode == 0 and head.returncode == 0 else ""
 
 
 def add_worktree(workdir: str, dest: Path, branch: str) -> tuple[str, str]:

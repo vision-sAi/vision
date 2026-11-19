@@ -1214,7 +1214,7 @@ def pipewire_nodes(kind: str) -> list[tuple[str, str]]:
     import subprocess
 
     try:
-        out = subprocess.run(["pw-dump"], capture_output=True, text=True, timeout=5, check=True, encoding="utf-8").stdout
+        out = subprocess.run(["pw-dump"], capture_output=True, text=True, timeout=5, check=True, encoding="utf-8", errors="replace").stdout
         objects = json.loads(out)
     except (OSError, subprocess.SubprocessError, ValueError):
         return []

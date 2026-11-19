@@ -113,10 +113,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from vision import __version__
 from vision import agentlog
 from vision import selfupdate
+from vision import service
 from vision.brain import agent_frame, context_figure, tool_frame, warm_soon
 from vision.config import CONFIG_DIR, MODES, STATE_DIR, Config, save_brain_defaults, save_config_value, saved_brain_defaults
 from vision.sessions import claude_history
 from vision.planvoice import plan_answer, plan_question, plan_summary
+from vision.procs import WINDOWS, hidden
 from vision.projects import APPROVAL_PREFIX, CHECKIN_PREFIX, REPORT_PREFIX
 from vision.reply import status_label
 from vision.tts import SAMPLE_RATE, Speaker, StreamingSpeaker, log_voice_line
@@ -141,7 +143,7 @@ def desktop_env() -> dict[str, str]:
     if not exe:
         return env
     try:
-        r = subprocess.run([exe, "--user", "show-environment"], capture_output=True, text=True, timeout=3, encoding="utf-8")
+        r = subprocess.run([exe, "--user", "show-environment"], capture_output=True, text=True, timeout=3, encoding="utf-8", errors="replace")
     except (OSError, subprocess.TimeoutExpired):
         return env
     for line in r.stdout.splitlines() if r.returncode == 0 else []:
@@ -158,6 +160,8 @@ def open_terminal(chat_id: str, workdir: str) -> str:
     vision = shutil.which("vision") or "vision"
     cmd = f"{vision} --join {chat_id}"
     cwd = workdir if workdir and os.path.isdir(workdir) else os.path.expanduser("~")
+    if WINDOWS:
+        return _open_windows_terminal(vision, chat_id, cwd)
     if sys.platform == "darwin":
         return _open_mac_terminal(f"cd {shlex.quote(cwd)} && {cmd}")
     env = desktop_env()
@@ -180,6 +184,18 @@ def open_terminal(chat_id: str, workdir: str) -> str:
         subprocess.Popen(argv(path), cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         return os.path.basename(name)
     raise RuntimeError("no terminal emulator found (set $TERMINAL)")
+
+
+def _open_windows_terminal(vision: str, chat_id: str, cwd: str) -> str:
+    """Windows Terminal when it is here, a console window otherwise. `vision` is a batch file, so the id
+    has to be something cmd.exe has no opinion on."""
+    if not re.fullmatch(r"[\w-]+", chat_id):
+        raise RuntimeError(f"not a chat id: {chat_id!r}")
+    if wt := shutil.which("wt"):
+        subprocess.Popen([wt, "-d", cwd, vision, "--join", chat_id], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "Windows Terminal"
+    subprocess.Popen([vision, "--join", chat_id], cwd=cwd, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    return "a console window"
 
 
 # The command comes in as argv, so nothing in it needs AppleScript quoting.
@@ -224,7 +240,7 @@ def focus_terminal(pid: int) -> bool:
     if not exe or not env.get("HYPRLAND_INSTANCE_SIGNATURE"):
         return False
     try:
-        r = subprocess.run([exe, "clients", "-j"], capture_output=True, text=True, timeout=3, encoding="utf-8", env=env)
+        r = subprocess.run([exe, "clients", "-j"], capture_output=True, text=True, timeout=3, encoding="utf-8", errors="replace", env=env)
         clients = json.loads(r.stdout)
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return False
@@ -491,7 +507,7 @@ def list_folder(path: str) -> dict:
         with os.scandir(target) as entries:
             for entry in entries:
                 try:
-                    if not entry.name.startswith(".") and entry.is_dir():
+                    if not hidden(entry) and entry.is_dir():
                         names.append(entry.name)
                 except OSError:  # a dangling link, a mount that went away
                     continue
@@ -2605,7 +2621,7 @@ class Hub:
         load = memory = uptime = None
         try:
             load = round(100 * os.getloadavg()[0] / (os.cpu_count() or 1))
-        except OSError:
+        except (OSError, AttributeError):  # Windows has no load average
             pass
         try:
             info = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines() if ":" in line)
@@ -4735,9 +4751,9 @@ def tailscale_url(port: int) -> str | None:
     if not exe:
         return None
     try:
-        r = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=5, encoding="utf-8")
+        r = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
         name = json.loads(r.stdout).get("Self", {}).get("DNSName", "").rstrip(".")
-        r = subprocess.run([exe, "serve", "status", "--json"], capture_output=True, text=True, timeout=5, encoding="utf-8")
+        r = subprocess.run([exe, "serve", "status", "--json"], capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
         published = f":{port}" in r.stdout  # a proxy handler like "http://127.0.0.1:8765"
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
@@ -4876,23 +4892,36 @@ def watch_keys(hub: "Hub", on_clear, on_pair=lambda: None):
     puts the terminal back as it was (a no-op when stdin is not a terminal)."""
     if not sys.stdin.isatty():
         return lambda: None
-    import termios
-    import tty
+    if WINDOWS:
+        import msvcrt
 
-    fd = sys.stdin.fileno()
-    saved = termios.tcgetattr(fd)
-    tty.setcbreak(fd)  # keys arrive one at a time and are not echoed; Ctrl-C still stops the server
+        def read_key() -> str:
+            while not msvcrt.kbhit():  # first: Ctrl-C reaches getwch as a key instead of stopping the server
+                time.sleep(0.1)
+            return msvcrt.getwch().lower()
 
-    def restore() -> None:
-        try:
-            termios.tcsetattr(fd, termios.TCSADRAIN, saved)
-        except termios.error:
-            pass
+        restore = lambda: None  # noqa: E731 - getwch leaves the console as it found it
+    else:
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+        tty.setcbreak(fd)  # keys arrive one at a time and are not echoed; Ctrl-C still stops the server
+
+        def read_key() -> str:
+            return os.read(fd, 1).decode(errors="ignore").lower()
+
+        def restore() -> None:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+            except termios.error:
+                pass
 
     def loop() -> None:
         while True:
             try:
-                key = os.read(fd, 1).decode(errors="ignore").lower()
+                key = read_key()
             except OSError:
                 return
             if not key:
@@ -4930,6 +4959,11 @@ def serve(cfg: Config, brain, info: dict, log=print, follow_defaults: bool = Tru
         remove_serve_descriptor()
         sys.stdout.flush()
         sys.stderr.flush()
+        if WINDOWS:  # exec would leave this process's port open under the new one
+            if os.environ.get(service.ENV):
+                os._exit(service.RESTART)  # the supervisor starts it again
+            subprocess.Popen(restart_argv(sys.argv))
+            os._exit(0)
         os.execv(sys.executable, restart_argv(sys.argv))
 
     hub.exec_restart = exec_restart

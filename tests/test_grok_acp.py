@@ -19,7 +19,7 @@ SID = "01a0e2cd-0000-7000-8000-000000000001"
 
 class GrokAgentModeTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)  # Windows: a kept fake agent may still hold its .exe
         tmp = Path(self.tmp.name)
         self.log = tmp / "log.jsonl"
         exe = python_command(tmp / "grok", f"import runpy\nrunpy.run_path({str(FAKE)!r}, run_name='__main__')\n")

@@ -26,6 +26,7 @@ from vision.buddy import Buddy
 from vision.warmup import WarmupProgress, warm_voice
 from vision import usage as usage_ui
 from vision import clis
+from vision.procs import WINDOWS, hidden, replace_process
 from vision.config import (
     CONFIG_PATH,
     LLAMA_DIR,
@@ -309,7 +310,7 @@ def _cd_choices(arg: str, current: str) -> list[tuple[str, str]]:
         rows = [(base, "this folder")]
     try:
         names = sorted(
-            (e.name for e in os.scandir(folder) if e.is_dir() and (stem.startswith(".") or not e.name.startswith("."))),
+            (e.name for e in os.scandir(folder) if e.is_dir() and (stem.startswith(".") or not hidden(e))),
             key=str.lower,
         )
     except OSError:
@@ -4576,7 +4577,8 @@ def upgrade():
                           f"and it couldn't be moved to the main one:[/err] {e}")
             raise typer.Exit(1)
         console.print(f"`{gone}`, the branch this Vision was installed from, is gone from its remote: now following `{now}`.")
-    done = subprocess.run(["sh", str(selfupdate.ROOT / "install.sh")])
+    done = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(selfupdate.ROOT / "install.ps1")]
+                          if WINDOWS else ["sh", str(selfupdate.ROOT / "install.sh")])
     if done.returncode != 0:
         console.print("[err]The installer failed[/err]; the running Vision is unchanged.")
         raise typer.Exit(done.returncode)
@@ -4955,7 +4957,7 @@ def _next_checkin(checkin: dict) -> Text:
     at = time.localtime(schedule["next_run"])
     days = (datetime.date(*at[:3]) - datetime.date.today()).days
     clock = time.strftime("%I:%M %p", at).lstrip("0")
-    day = "today" if days == 0 else "tomorrow" if days == 1 else time.strftime("%a" if days < 7 else "%b %-d", at)
+    day = "today" if days == 0 else "tomorrow" if days == 1 else (time.strftime("%a", at) if days < 7 else f"{time.strftime('%b', at)} {at.tm_mday}")
     return Text(f"{day} {clock}", style="dim")
 
 
@@ -4986,7 +4988,7 @@ def project_open(ref: str = typer.Argument(..., help="The project's id, or the s
     """Open the project's chat here (it runs in `vision serve`, so the phone has it too)."""
     chat = _project_call(f"{ref}/open", {})
     sys.stdout.flush()
-    os.execv(sys.executable, [sys.executable, "-m", "vision", "--join", chat["chat"]])
+    replace_process([sys.executable, "-m", "vision", "--join", chat["chat"]])
 
 
 @project_app.command("archive")
@@ -5209,7 +5211,7 @@ def thread_open(ref: str = typer.Argument(..., help="The thread's id, or the sta
     if os.path.isdir(t.get("workdir") or ""):
         os.chdir(t["workdir"])
     sys.stdout.flush()
-    os.execvp(argv[0], argv)
+    replace_process(argv)
 
 
 @thread_app.command("stop")
@@ -5529,7 +5531,7 @@ def doctor(
     else:
         console.print("[dim]  no voice enrolled (optional: vision voice enrol, then only_me = true under \\[listen])[/dim]")
     try:
-        r = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.used,memory.total", "--format=csv,noheader"], capture_output=True, text=True, encoding="utf-8")
+        r = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.used,memory.total", "--format=csv,noheader"], capture_output=True, text=True, encoding="utf-8", errors="replace")
         gpu = r.returncode == 0
         console.print(f"{ok} GPU: {r.stdout.strip()}" if gpu else f"{warn} no NVIDIA GPU; Whisper will use CPU")
     except FileNotFoundError:

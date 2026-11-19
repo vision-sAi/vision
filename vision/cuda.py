@@ -6,10 +6,10 @@ on the dynamic loader path. Loading them globally once, before the consumers imp
 from __future__ import annotations
 
 import ctypes
-import fcntl
 import os
 import site
 from pathlib import Path
+from vision.procs import try_lock
 
 _LIBS = [
     "cuda_runtime/lib/libcudart.so.12",
@@ -71,9 +71,7 @@ class GpuClaim:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        if not try_lock(fd):
             try:
                 pid = int(os.read(fd, 32).decode().strip() or 0)
             except ValueError:
