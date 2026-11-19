@@ -272,6 +272,17 @@ class LocalBrainTests(unittest.TestCase):
         self.assertEqual(turn.error, "cancelled")
         self.assertLess(time.monotonic() - started, 10)
 
+    def test_cancel_is_not_held_by_a_process_the_kill_missed(self):
+        # the subshell exits at once, so its sleep has no parent left to find it by: on Windows the
+        # tree kill misses it, and it keeps the output pipe open for its 30 seconds
+        StubServer.script = [[("Bash", {"command": "(sleep 30 &); sleep 30"})], "never"]
+        brain = create_brain(self.cfg.brain)
+        started = time.monotonic()
+        threading.Timer(1.5, brain.cancel).start()
+        turn = brain.ask("wait")
+        self.assertEqual(turn.error, "cancelled")
+        self.assertLess(time.monotonic() - started, 10)
+
     def test_unreachable_server_is_a_turn_error_not_a_crash(self):
         self.cfg.local.base_url = "http://127.0.0.1:9/v1"
         turn = create_brain(self.cfg.brain).ask("hi")
