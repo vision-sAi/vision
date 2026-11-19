@@ -131,8 +131,13 @@ function picture(path: string, caption = "", cls = "picture"): HTMLElement {
   return img;
 }
 
-/** A local path rather than a web address: a picture on the Vision computer. */
-const isLocal = (src: string) => /^(\/|~\/)/.test(src);
+/** A local path rather than a web address: a picture on the Vision computer (`/x`, `~/x`, `C:\x`, `C:/x`). */
+const isLocal = (src: string) => /^(\/|~[\\/]|[A-Za-z]:[\\/])/.test(src);
+
+// DOMPurify reads `C:/x` as a URL with an unknown `c:` scheme and drops it: keep it on pictures only.
+DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
+  if (node.nodeName === "IMG" && data.attrName === "src" && /^[A-Za-z]:(\\|\/|%5C)/i.test(data.attrValue)) data.forceKeepAttr = true;
+});
 
 // ---------------------------------------------------------------- markdown
 
