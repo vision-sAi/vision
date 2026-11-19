@@ -91,7 +91,7 @@ class CodexConversation:
         from vision.codex import find_codex
         from vision.codex_app import AppServerTurn
 
-        self._cwd = tempfile.TemporaryDirectory(prefix="vision-conversation-")
+        self._cwd = tempfile.TemporaryDirectory(prefix="vision-conversation-", ignore_cleanup_errors=True)  # a moment-late exit holds it on Windows
         try:
             rpc = AppServerTurn(find_codex(), self._cwd.name, brain_env("codex"), stall_s=0)
             self._rpc = rpc

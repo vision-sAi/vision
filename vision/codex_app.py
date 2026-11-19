@@ -208,8 +208,11 @@ class AppServerTurn:
 
     def kill(self) -> None:
         if self.proc.poll() is None:
+            from vision.procs import WINDOWS, kill
+
             try:
-                self.proc.terminate()
+                # Windows: the whole tree, as a launcher .exe's own child (the real program) outlives it
+                kill(self.proc) if WINDOWS else self.proc.terminate()
                 self.proc.wait(timeout=2)
             except Exception:  # noqa: BLE001
                 try:
